@@ -83,3 +83,7 @@ npm test
 ## VPS 部署
 
 运行 `npm start`，再用 Nginx 或 Caddy 反向代理到 `PORT`。生产环境通过服务端环境变量注入密钥，不要上传 `config.local.js`。高德 JS Key 应设置域名白名单和调用配额。
+
+## License
+
+项目代码由 `1Beyond1` 版权所有，采用 MIT License。高德地图、第三方 API、模型服务和其他外部资源不包含在本许可证授权范围内。
