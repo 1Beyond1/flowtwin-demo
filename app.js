@@ -80,6 +80,8 @@
     departureMinutes: 17 * 60 + 40,
     deadlineMinutes: 19 * 60 + 30,
     energyPercent: 22,
+    minArrivalSoc: 20,
+    destinationName: "北京大兴国际机场",
     energyType: "electric",
     executionState: "before",
     operatorBefore: null,
@@ -185,7 +187,9 @@
 
   function localIntentFallback(value) {
     const timeMatch = value.match(/(\d{1,2})\s*[:：]\s*(\d{2})/);
-    const socMatch = value.match(/(\d{1,3})\s*%/);
+    const arrivalSocMatch = value.match(/(?:到达|抵达|终点|最后)[^%]{0,50}?(?:至少|要有|保持|保留|不低于|大于|超过|以上|剩余)[^%]{0,12}?(\d{1,3})\s*%/i);
+    const percentValues = Array.from(value.matchAll(/(\d{1,3})\s*%/g)).map((match) => Number(match[1])).filter((number) => number >= 5 && number <= 100);
+    const currentSoc = percentValues.length >= 2 ? percentValues[0] : arrivalSocMatch ? state.energyPercent : percentValues[0];
     const deadlineMatch = value.match(/(\d{1,2})\s*[:：]\s*(\d{2})\s*(?:前|之前|到达)/);
     const departureTime = timeMatch ? `${String(Number(timeMatch[1])).padStart(2, "0")}:${timeMatch[2]}` : formatClock(state.departureMinutes);
     const deadline = deadlineMatch ? `${String(Number(deadlineMatch[1])).padStart(2, "0")}:${deadlineMatch[2]}` : formatClock(state.deadlineMinutes);
@@ -193,7 +197,8 @@
       destination: value.includes("机场") ? "北京大兴国际机场" : "北京大兴国际机场",
       departureTime,
       arrivalDeadline: deadline,
-      soc: socMatch ? Math.max(5, Math.min(100, Number(socMatch[1]))) : state.energyPercent,
+      soc: Number.isFinite(currentSoc) ? currentSoc : state.energyPercent,
+      minArrivalSoc: arrivalSocMatch ? Math.max(5, Math.min(100, Number(arrivalSocMatch[1]))) : state.minArrivalSoc,
       energyType: value.includes("加油") || value.includes("燃油") || value.includes("油车") ? "fuel" : state.energyType,
       priority: value.includes("便宜") || value.includes("省") ? "cost" : value.includes("快") ? "time" : "reliable",
       maxDetourKm: 8,
@@ -214,7 +219,8 @@
       `SOC · ${parsed.soc || state.energyPercent}%`,
       labels[parsed.priority] || "综合最优"
     ];
-    if (Number.isFinite(Number(parsed.maxDetourKm))) chips.push(`绕行≤${Number(parsed.maxDetourKm)}km`);
+    if (Number.isFinite(Number(parsed.minArrivalSoc))) chips.push(`到达≥${Number(parsed.minArrivalSoc)}%`);
+    if (parsed.maxDetourKm !== null && parsed.maxDetourKm !== undefined && Number.isFinite(Number(parsed.maxDetourKm))) chips.push(`绕行≤${Number(parsed.maxDetourKm)}km`);
     (parsed.services || []).slice(0, 2).forEach((service) => chips.push(`需要${service}`));
     const row = byId("parsedRow");
     if (row) row.innerHTML = chips.map((chip) => `<span class="parsed-chip"></span>`).join("");
@@ -273,6 +279,7 @@
     state.departureMinutes = clockToMinutes(parsed.departureTime, state.departureMinutes);
     state.deadlineMinutes = clockToMinutes(parsed.arrivalDeadline, state.deadlineMinutes);
     state.energyPercent = Math.max(5, Math.min(100, Number(parsed.soc) || state.energyPercent));
+    state.minArrivalSoc = Math.max(5, Math.min(100, Number(parsed.minArrivalSoc) || state.minArrivalSoc));
     if (["electric", "fuel"].includes(parsed.energyType)) state.energyType = parsed.energyType;
     const destinationLocation = payload.destinationLocation || parsed.destinationLocation;
     const normalizedDestination = parseLocation(destinationLocation);
@@ -281,7 +288,8 @@
     renderParsedIntent(parsed);
     updateEnergyControls();
     const destinationName = byId("destinationName");
-    if (destinationName && parsed.destination) destinationName.textContent = parsed.destination;
+    if (parsed.destination && normalizedDestination) state.destinationName = parsed.destination;
+    if (destinationName && parsed.destination) destinationName.textContent = state.destinationName;
     const destinationValue = document.querySelector(".route-field.destination-field .field-value");
     if (destinationValue && parsed.destination) destinationValue.textContent = parsed.destination;
     const departureValue = byId("departureValue");
@@ -521,7 +529,7 @@
       return marker;
     };
     state.stationOverlays.push(make(state.origin, "origin-marker", "circle-dot", "能链北京总部"));
-    state.stationOverlays.push(make(state.destination, "destination-marker", "plane-landing", "北京大兴国际机场"));
+    state.stationOverlays.push(make(state.destination, "destination-marker", "map-pin", state.destinationName));
   }
 
   function drawAmapRoutes() {
@@ -779,23 +787,38 @@
     const stationFast = plannedStation("fastest") || chooseStationForRoute("fastest") || simulateStation(FALLBACK.stations[0], 0);
     const stationReliable = plannedStation("reliable") || chooseStationForRoute("reliable") || simulateStation(FALLBACK.stations[1], 1);
     const stationCheap = plannedStation("cheapest") || chooseStationForRoute("cheapest") || simulateStation(FALLBACK.stations[2], 2);
-    const make = (key, record, station, waitExtra, chargeMinutes, costFactor) => {
+    const make = (key, record, station, waitExtra, costFactor) => {
       const wait = Math.max(3, station.wait + waitExtra);
-      const total = record.duration + wait + chargeMinutes;
+      const energyPlan = calculateEnergyPlan(record, key, isFuel);
+      const total = record.duration + wait + energyPlan.chargeMinutes;
       const arrival = state.departureMinutes + total;
       const lateMinutes = Math.max(0, Math.ceil(arrival - state.deadlineMinutes));
       const onTime = Math.max(55, Math.min(99, 98 - lateMinutes * 3 - station.p90 * 0.2));
-      const energyAmount = isFuel ? 35 : 18;
-      const energyCost = Number(station.price) * energyAmount;
+      const energyCost = Number(station.price) * energyPlan.amount;
       const routeCost = record.distance * 0.08 * costFactor;
-      const serviceCost = chargeMinutes * 0.15;
+      const serviceCost = energyPlan.chargeMinutes * 0.15;
       const cost = Math.max(20, energyCost + routeCost + serviceCost);
-      return Object.assign({}, record, { key, station, wait, total, arrival, lateMinutes, feasible: lateMinutes === 0, onTime, cost });
+      return Object.assign({}, record, {
+        key,
+        station,
+        wait,
+        total,
+        arrival,
+        lateMinutes,
+        feasible: lateMinutes === 0 && energyPlan.targetMet,
+        onTime,
+        cost,
+        energyAmount: Number(energyPlan.amount.toFixed(1)),
+        energyUnit: energyPlan.unit,
+        arrivalSoc: Number(energyPlan.arrivalSoc.toFixed(1)),
+        targetArrivalSoc: state.minArrivalSoc,
+        targetSocMet: energyPlan.targetMet
+      });
     };
     const isFuel = state.energyType === "fuel";
-    state.routeRecords.fastest = make("fastest", state.routeRecords.fastest || base, stationFast, 0, isFuel ? 4 : 7, isFuel ? 1.65 : 1.08);
-    state.routeRecords.reliable = make("reliable", state.routeRecords.reliable || base, stationReliable, 0, isFuel ? 5 : 10, isFuel ? 1.55 : 1.0);
-    state.routeRecords.cheapest = make("cheapest", state.routeRecords.cheapest || base, stationCheap, 0, isFuel ? 6 : 13, isFuel ? 1.4 : 0.82);
+    state.routeRecords.fastest = make("fastest", state.routeRecords.fastest || base, stationFast, 0, isFuel ? 1.65 : 1.08);
+    state.routeRecords.reliable = make("reliable", state.routeRecords.reliable || base, stationReliable, 0, isFuel ? 1.55 : 1.0);
+    state.routeRecords.cheapest = make("cheapest", state.routeRecords.cheapest || base, stationCheap, 0, isFuel ? 1.4 : 0.82);
   }
 
   function setOptionText(button, record) {
@@ -811,12 +834,13 @@
       metrics.innerHTML = `<span>用时 <b>${formatDuration(record.total)}</b></span><span>绕行 <b>${record.station.detour}km</b></span><span>P50 <b>${record.station.p50}分</b></span><span>P90 <b>${record.station.p90}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>准时 <b>${Math.round(record.onTime)}%</b></span>`;
     }
     if (tag) {
-      if (!record.feasible) tag.textContent = `超时 ${record.lateMinutes} 分钟`;
+      if (!record.targetSocMet) tag.textContent = "目标电量不可达";
+      else if (!record.feasible) tag.textContent = `超时 ${record.lateMinutes} 分钟`;
       else if (record.key === "reliable") tag.textContent = "推荐";
       else if (record.key === "fastest") tag.textContent = `少 ${Math.max(1, Math.round((state.routeRecords.reliable.arrival - record.arrival)))} 分钟`;
       else tag.textContent = `省 ¥${Math.max(1, Math.round(state.routeRecords.reliable.cost - record.cost))}`;
     }
-    if (stationLine) stationLine.textContent = `${state.energyType === "fuel" ? "加油" : "补能"} · ${record.station?.name || "未匹配站点"} · P90 ${record.station?.p90 || "-"} 分钟`;
+    if (stationLine) stationLine.textContent = `${state.energyType === "fuel" ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"} · 到达 ${record.arrivalSoc}%`;
     if (reason) {
       const reasons = {
         fastest: `最快抵达 · 额外 ${record.station.detour} km · ${record.station.riskLabel}`,
@@ -856,8 +880,10 @@
     selectStation(record.station, false);
     const reliable = state.routeRecords.reliable || record;
     const evidence = $$(".evidence-row span");
-    if (evidence[0]) evidence[0].textContent = `绕行约 ${record.station.detour} km，预计 ${formatClock(record.arrival)} 抵达机场`;
-    if (evidence[1]) evidence[1].textContent = `建议补能后保留 ${Math.max(28, 54 - Math.round(record.station.p90 / 3))}% 续航`;
+    if (evidence[0]) evidence[0].textContent = `绕行约 ${record.station.detour} km，预计 ${formatClock(record.arrival)} 抵达${state.destinationName}`;
+    if (evidence[1]) evidence[1].textContent = record.targetSocMet
+      ? `建议补能 ${record.energyAmount} ${record.energyUnit}，预计到达剩余 ${record.arrivalSoc}%（目标 ≥${record.targetArrivalSoc}%）`
+      : `当前单次补能无法满足到达 ≥${record.targetArrivalSoc}% 的目标，建议增加补能站`;
     if (evidence[2]) {
       const difference = Math.round(record.arrival - reliable.arrival);
       const fastest = state.routeRecords.fastest || record;
@@ -873,6 +899,38 @@
     state.executionState = "before";
     renderOperatorMetrics(state.operatorBefore, false);
     renderValidationMetrics(null);
+  }
+
+  function calculateEnergyPlan(record, key, isFuel) {
+    if (isFuel) {
+      const tankCapacity = 55;
+      const currentFuel = tankCapacity * state.energyPercent / 100;
+      const targetFuel = tankCapacity * state.minArrivalSoc / 100;
+      const consumption = record.distance * 0.075;
+      const requested = Math.max(0, (targetFuel + consumption - currentFuel) / 0.95);
+      const amount = Math.min(tankCapacity - currentFuel, Math.ceil(requested));
+      return {
+        amount,
+        unit: "L",
+        chargeMinutes: amount ? (key === "fastest" ? 4 : key === "reliable" ? 5 : 6) : 0,
+        arrivalSoc: Math.max(0, Math.min(100, ((currentFuel + amount * 0.95 - consumption) / tankCapacity) * 100)),
+        targetMet: currentFuel + amount * 0.95 - consumption >= targetFuel
+      };
+    }
+    const batteryCapacity = 82;
+    const currentEnergy = batteryCapacity * state.energyPercent / 100;
+    const targetEnergy = batteryCapacity * state.minArrivalSoc / 100;
+    const consumption = record.distance * 0.18;
+    const requested = Math.max(0, (targetEnergy + consumption - currentEnergy) / 0.92);
+    const amount = Math.min(batteryCapacity - currentEnergy, Math.ceil(requested));
+    const chargingPower = key === "fastest" ? 160 : key === "reliable" ? 120 : 90;
+    return {
+      amount,
+      unit: "kWh",
+      chargeMinutes: amount ? Math.max(4, Math.ceil(amount / chargingPower * 60 + 3)) : 0,
+      arrivalSoc: Math.max(0, Math.min(100, ((currentEnergy + amount * 0.92 - consumption) / batteryCapacity) * 100)),
+      targetMet: currentEnergy + amount * 0.92 - consumption >= targetEnergy
+    };
   }
 
   function selectStation(station, showPanel) {
@@ -893,7 +951,10 @@
       badge.classList.toggle("risk", station.status === "forecast-risk");
     }
     if (adviceLabel) adviceLabel.textContent = state.energyType === "fuel" ? "建议加油" : "建议补能";
-    if (adviceValue) adviceValue.innerHTML = state.energyType === "fuel" ? "25 <small>L</small>" : "18 <small>kWh</small>";
+    const stationRecord = Object.values(state.routeRecords).find((record) => record.station?.id === station.id);
+    if (adviceValue) adviceValue.innerHTML = stationRecord
+      ? `${stationRecord.energyAmount} <small>${stationRecord.energyUnit}</small>`
+      : state.energyType === "fuel" ? "— <small>L</small>" : "— <small>kWh</small>";
     requestForecast(station);
     refreshIcons();
     if (showPanel !== false) {
@@ -970,6 +1031,7 @@
           departureTime: formatClock(state.departureMinutes),
           arrivalDeadline: formatClock(state.deadlineMinutes),
           soc: state.energyPercent,
+          minArrivalSoc: state.minArrivalSoc,
           energyType: state.energyType
         }
       }, 60000);

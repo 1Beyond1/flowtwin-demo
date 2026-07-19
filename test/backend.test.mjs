@@ -29,7 +29,7 @@ test("plan parser uses strict AI JSON and returns locations without exposing sec
       if (url.includes("chat/completions")) {
         return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
           origin: "能链北京总部", destination: "大兴机场", departureTime: "18:30", arrivalDeadline: null,
-          soc: 22, energyType: "electric", priority: "on_time", maxDetourKm: 5, services: ["餐饮"],
+          soc: 22, minArrivalSoc: 60, energyType: "electric", priority: "on_time", maxDetourKm: 5, services: ["餐饮"],
           clarificationNeeded: false, assistantReply: "已识别"
         }) } }] }), { status: 200 });
       }
@@ -38,6 +38,7 @@ test("plan parser uses strict AI JSON and returns locations without exposing sec
   });
   assert.equal(result.aiUsed, true);
   assert.equal(result.destination, "大兴机场");
+  assert.equal(result.minArrivalSoc, 60);
   assert.deepEqual(result.locations.origin.coordinate, [116.491, 39.951]);
   assert.deepEqual(result.locations.destination.coordinate, [116.41, 39.509]);
   assert.equal(calls[0].options.headers.Authorization, "Bearer test-secret");
@@ -54,6 +55,17 @@ test("plan parser falls back locally when AI fails", async () => {
   assert.equal(result.destination, "大兴机场");
   assert.equal(result.departureTime, "18:30");
   assert.equal(result.soc, 22);
+});
+
+test("plan parser distinguishes current SOC from arrival SOC target", async () => {
+  const result = await parseTripIntent({
+    message: "现在电量22%，去北京南站，到达目的地时电量要有80%以上",
+    context: { destination: "北京南站", soc: 22, minArrivalSoc: 20 },
+    config: {},
+    fetchImpl: async () => { throw new Error("offline"); }
+  });
+  assert.equal(result.soc, 22);
+  assert.equal(result.minArrivalSoc, 80);
 });
 
 test("plan response exposes parsed and destinationLocation contract", () => {
