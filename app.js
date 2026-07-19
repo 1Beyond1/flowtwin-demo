@@ -104,6 +104,23 @@
     }
   }
 
+  function initDemoNotice() {
+    const backdrop = byId("demoNoticeBackdrop");
+    const confirm = byId("demoNoticeConfirm");
+    if (!backdrop || !confirm) return;
+    const close = () => {
+      backdrop.classList.add("hidden");
+      confirm.blur();
+    };
+    confirm.addEventListener("click", close);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) close();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !backdrop.classList.contains("hidden")) close();
+    });
+  }
+
   function setMapStatus(message, type) {
     const status = byId("mapStatus");
     if (!status) return;
@@ -1403,6 +1420,7 @@
 
   function begin() {
     refreshIcons();
+    initDemoNotice();
     initFallback();
     if (window.innerWidth <= 760) byId("insightPanel").classList.add("hidden");
     $$("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));

@@ -1938,6 +1938,112 @@
         flex: 0 0 auto;
       }
 
+      .demo-notice-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1400;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: rgba(30, 38, 42, 0.28);
+        backdrop-filter: blur(3px);
+      }
+
+      .demo-notice-backdrop.hidden {
+        display: none;
+      }
+
+      .demo-notice {
+        width: min(440px, calc(100vw - 32px));
+        padding: 22px;
+        border: 1px solid rgba(215, 221, 218, 0.96);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.98);
+        box-shadow: 0 20px 70px rgba(34, 44, 48, 0.2);
+      }
+
+      .demo-notice-mark {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        margin-bottom: 14px;
+        border-radius: 8px;
+        background: #e8f4f0;
+        color: var(--teal);
+      }
+
+      .demo-notice-mark svg {
+        width: 17px;
+        height: 17px;
+      }
+
+      .demo-notice h2 {
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .demo-notice p {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.65;
+      }
+
+      .demo-notice-boundary {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-top: 14px;
+        padding: 10px 11px;
+        border: 1px solid #dce9e4;
+        border-radius: 7px;
+        background: #f5faf8;
+        color: #176e60;
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .demo-notice-boundary svg {
+        width: 15px;
+        height: 15px;
+        flex: 0 0 auto;
+        margin-top: 1px;
+      }
+
+      .demo-notice-action {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 18px;
+      }
+
+      .demo-notice-action button {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 36px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 6px;
+        background: var(--blue);
+        color: white;
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .demo-notice-action button:hover {
+        background: #3c6fe5;
+      }
+
+      .demo-notice-action svg {
+        width: 15px;
+        height: 15px;
+      }
+
       .amap-logo,
       .amap-copyright {
         bottom: 232px !important;
@@ -2478,6 +2584,16 @@
         </div>
       </section>
       <div class="toast" id="toast"><i data-lucide="check-circle-2"></i><span id="toastText">操作已完成</span></div>
+    </div>
+
+    <div class="demo-notice-backdrop" id="demoNoticeBackdrop">
+      <section class="demo-notice" role="dialog" aria-modal="true" aria-labelledby="demoNoticeTitle" aria-describedby="demoNoticeDescription">
+        <span class="demo-notice-mark"><i data-lucide="map"></i></span>
+        <h2 id="demoNoticeTitle">当前 Demo 仅支持北京市内目的地</h2>
+        <p id="demoNoticeDescription">这是能流智枢的演示范围。地图路线和沿线站点会根据高德数据动态查询；站点价格、占用率和等待时间目前使用演示仿真数据。</p>
+        <div class="demo-notice-boundary"><i data-lucide="info"></i><span>建议体验：北京南站、首都机场、大兴机场、北京西站等北京市内地点。</span></div>
+        <div class="demo-notice-action"><button id="demoNoticeConfirm" type="button"><span>知道了，开始体验</span><i data-lucide="arrow-right"></i></button></div>
+      </section>
     </div>
 
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.js"></script>
