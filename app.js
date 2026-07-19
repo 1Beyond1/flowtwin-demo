@@ -85,7 +85,13 @@
     operatorBefore: null,
     operatorAfter: null,
     operatorOriginalStations: [],
-    routeErrors: {}
+    routeErrors: {},
+    aiContext: null,
+    aiActive: false,
+    forecastRequestVersion: 0,
+    validationLoaded: false,
+    pendingOperatorPayload: null,
+    pendingOperatorSnapshot: null
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -120,6 +126,153 @@
     toast.classList.add("visible");
     window.clearTimeout(showToast.timer);
     showToast.timer = window.setTimeout(() => toast.classList.remove("visible"), duration || 2800);
+  }
+
+  async function postJson(path, body, timeoutMs) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs || 45000);
+    try {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body || {}),
+        signal: controller.signal
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `HTTP_${response.status}`);
+      return payload;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  function setAiStatus(label, stateName) {
+    const status = byId("aiStatus");
+    if (!status) return;
+    const text = byId("aiStatusText");
+    if (text) text.textContent = label;
+    status.dataset.status = stateName || "idle";
+    const thinking = byId("aiThinking");
+    if (thinking) thinking.hidden = stateName !== "loading";
+  }
+
+  function setAiReply(message) {
+    const reply = byId("aiReply");
+    if (!reply) return;
+    const text = byId("aiReplyText");
+    if (text) text.textContent = message || "已理解你的出行约束。";
+    const meta = byId("aiReplyMeta");
+    if (meta) meta.textContent = state.aiActive ? "正在调用规划工具" : "约束已结构化";
+    reply.classList.toggle("visible", Boolean(message));
+  }
+
+  function localIntentFallback(value) {
+    const timeMatch = value.match(/(\d{1,2})\s*[:：]\s*(\d{2})/);
+    const socMatch = value.match(/(\d{1,3})\s*%/);
+    const deadlineMatch = value.match(/(\d{1,2})\s*[:：]\s*(\d{2})\s*(?:前|之前|到达)/);
+    const departureTime = timeMatch ? `${String(Number(timeMatch[1])).padStart(2, "0")}:${timeMatch[2]}` : formatClock(state.departureMinutes);
+    const deadline = deadlineMatch ? `${String(Number(deadlineMatch[1])).padStart(2, "0")}:${deadlineMatch[2]}` : formatClock(state.deadlineMinutes);
+    return {
+      destination: value.includes("机场") ? "北京大兴国际机场" : "北京大兴国际机场",
+      departureTime,
+      arrivalDeadline: deadline,
+      soc: socMatch ? Math.max(5, Math.min(100, Number(socMatch[1]))) : state.energyPercent,
+      energyType: value.includes("加油") || value.includes("燃油") || value.includes("油车") ? "fuel" : state.energyType,
+      priority: value.includes("便宜") || value.includes("省") ? "cost" : value.includes("快") ? "time" : "reliable",
+      maxDetourKm: 8,
+      services: ["餐饮", "休息"].filter((service) => value.includes(service))
+    };
+  }
+
+  function clockToMinutes(value, fallback) {
+    const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
+    return match ? Number(match[1]) * 60 + Number(match[2]) : fallback;
+  }
+
+  function renderParsedIntent(parsed) {
+    const labels = { time: "时间优先", cost: "成本优先", reliable: "准时优先", balanced: "综合最优", fastest: "时间优先", cheapest: "成本优先", on_time: "准时优先", wait: "少等待" };
+    const chips = [
+      `目的地 · ${parsed.destination || "已识别"}`,
+      `出发 · ${parsed.departureTime || formatClock(state.departureMinutes)}`,
+      `SOC · ${parsed.soc || state.energyPercent}%`,
+      labels[parsed.priority] || "综合最优"
+    ];
+    if (Number.isFinite(Number(parsed.maxDetourKm))) chips.push(`绕行≤${Number(parsed.maxDetourKm)}km`);
+    (parsed.services || []).slice(0, 2).forEach((service) => chips.push(`需要${service}`));
+    const row = byId("parsedRow");
+    if (row) row.innerHTML = chips.map((chip) => `<span class="parsed-chip"></span>`).join("");
+    if (row) Array.from(row.children).forEach((child, index) => { child.textContent = chips[index]; });
+  }
+
+  function renderForecast(station, payload) {
+    const entry = payload?.stations?.find((item) => item.id === station.id) || payload?.station || payload;
+    const points = Array.isArray(entry?.forecast) ? entry.forecast : [];
+    const p50 = points.map((point) => Number(point.p50 ?? point.wait ?? 0));
+    const p90 = points.map((point) => Number(point.p90 ?? point.wait ?? 0));
+    if (!points.length) return;
+    const all = p50.concat(p90).filter(Number.isFinite);
+    const maxValue = Math.max(20, ...all, 1);
+    const makePoints = (values) => values.map((value, index) => {
+      const x = 24 + (240 * index / Math.max(1, values.length - 1));
+      const y = 98 - (76 * Math.min(maxValue, Math.max(0, value)) / maxValue);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    const p50Line = byId("forecastP50Line");
+    const p90Line = byId("forecastP90Line");
+    if (p50Line) p50Line.setAttribute("points", makePoints(p50));
+    if (p90Line) p90Line.setAttribute("points", makePoints(p90));
+    const pointsGroup = byId("forecastPoints");
+    if (pointsGroup) pointsGroup.innerHTML = p90.map((value, index) => {
+      const x = 24 + (240 * index / Math.max(1, p90.length - 1));
+      const y = 98 - (76 * Math.min(maxValue, Math.max(0, value)) / maxValue);
+      return `<circle class="forecast-point" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3"><title>+${points[index].minute || 0} 分钟 · P90 ${value.toFixed(1)} 分钟</title></circle>`;
+    }).join("");
+    const status = byId("forecastStatus");
+    if (status) status.textContent = `模型预测 · ${points.length * 5 - 5} 分钟`;
+    const meta = byId("forecastMeta");
+    if (meta) {
+      const text = meta.querySelector("span") || meta;
+      text.textContent = `${entry.model || payload?.model || "可解释队列近似"} · ${entry.explanation || "基于当前负载和到达/服务率估计"}`;
+    }
+  }
+
+  async function requestForecast(station) {
+    if (!station) return;
+    const requestId = ++state.forecastRequestVersion;
+    const status = byId("forecastStatus");
+    if (status) status.textContent = "正在计算…";
+    try {
+      const payload = await postJson("/api/forecast", {
+        stations: [station],
+        scenario: { departureMinutes: state.departureMinutes, energyType: state.energyType }
+      }, 20000);
+      if (requestId === state.forecastRequestVersion && state.selectedStation?.id === station.id) renderForecast(station, payload);
+    } catch (error) {
+      if (status) status.textContent = "本地演示预测";
+    }
+  }
+
+  function applyParsedIntent(parsed, payload) {
+    state.departureMinutes = clockToMinutes(parsed.departureTime, state.departureMinutes);
+    state.deadlineMinutes = clockToMinutes(parsed.arrivalDeadline, state.deadlineMinutes);
+    state.energyPercent = Math.max(5, Math.min(100, Number(parsed.soc) || state.energyPercent));
+    if (["electric", "fuel"].includes(parsed.energyType)) state.energyType = parsed.energyType;
+    const destinationLocation = payload.destinationLocation || parsed.destinationLocation;
+    const normalizedDestination = parseLocation(destinationLocation);
+    if (normalizedDestination) state.destination = normalizedDestination;
+    state.aiContext = Object.assign({}, state.aiContext || {}, parsed);
+    renderParsedIntent(parsed);
+    updateEnergyControls();
+    const destinationName = byId("destinationName");
+    if (destinationName && parsed.destination) destinationName.textContent = parsed.destination;
+    const destinationValue = document.querySelector(".route-field.destination-field .field-value");
+    if (destinationValue && parsed.destination) destinationValue.textContent = parsed.destination;
+    const departureValue = byId("departureValue");
+    if (departureValue) departureValue.textContent = formatClock(state.departureMinutes);
+    const arrivalValue = byId("arrivalValue");
+    if (arrivalValue) arrivalValue.textContent = formatClock(state.deadlineMinutes);
+    const deadlineValue = document.querySelector(".constraint-arrival .constraint-value");
+    if (deadlineValue) deadlineValue.textContent = formatClock(state.deadlineMinutes);
   }
 
   function stableHash(value) {
@@ -724,6 +877,7 @@
     }
     if (adviceLabel) adviceLabel.textContent = state.energyType === "fuel" ? "建议加油" : "建议补能";
     if (adviceValue) adviceValue.innerHTML = state.energyType === "fuel" ? "25 <small>L</small>" : "18 <small>kWh</small>";
+    requestForecast(station);
     refreshIcons();
     if (showPanel !== false) {
       const panel = byId("insightPanel");
@@ -778,26 +932,47 @@
       if (state.map && state.stations.length) state.map.setFitView(state.stationOverlays, false, [90, 380, 220, 330], 11);
     }
     if (mode === "validation") byId("mapAttribution").textContent = "高德地图 · 验证场景底图";
+    if (mode === "validation" && !state.validationLoaded) loadValidation();
   }
 
-  function parseIntent() {
+  async function parseIntent() {
     const input = byId("intentInput");
     const value = input ? input.value.trim() : "";
-    const timeMatch = value.match(/(\d{1,2})\s*[:：]\s*(\d{2})/);
-    const socMatch = value.match(/(\d{1,3})\s*%/);
-    if (timeMatch) state.departureMinutes = Number(timeMatch[1]) * 60 + Number(timeMatch[2]);
-    if (socMatch) state.energyPercent = Math.max(5, Math.min(100, Number(socMatch[1])));
-    if (value.includes("加油") || value.includes("燃油") || value.includes("油车")) state.energyType = "fuel";
-    const chips = [];
-    chips.push(`目的地 · ${value.includes("机场") ? "大兴机场" : "已识别"}`);
-    chips.push(`出发 · ${formatClock(state.departureMinutes)}`);
-    chips.push(`SOC · ${state.energyPercent}%`);
-    chips.push(value.includes("便宜") || value.includes("省") ? "成本优先" : value.includes("快") ? "时间优先" : "准时优先");
-    const row = byId("parsedRow");
-    if (row) row.innerHTML = chips.map((chip) => `<span class="parsed-chip">${chip}</span>`).join("");
-    renderRouteCards();
-    updateEnergyControls();
-    showToast("已将自然语言约束转成路线筛选条件（本地演示适配器）");
+    if (!value || state.aiActive) return;
+    state.aiActive = true;
+    const button = byId("parseIntent");
+    if (button) button.disabled = true;
+    setAiStatus("AI 正在理解", "loading");
+    setAiReply("正在把你的自然语言要求拆解为路线约束……");
+    try {
+      const payload = await postJson("/api/plan", {
+        message: value,
+        context: state.aiContext || {
+          origin: "能链北京总部",
+          destination: "北京大兴国际机场",
+          departureTime: formatClock(state.departureMinutes),
+          arrivalDeadline: formatClock(state.deadlineMinutes),
+          soc: state.energyPercent,
+          energyType: state.energyType
+        }
+      }, 60000);
+      const parsed = payload.parsed || payload.intent || payload.plan || localIntentFallback(value);
+      applyParsedIntent(parsed, payload);
+      setAiStatus(payload.aiUsed === false ? "规则降级已完成" : "豆包 AI 已完成", payload.aiUsed === false ? "fallback" : "ready");
+      setAiReply(payload.assistantReply || parsed.assistantReply || "已识别出行约束，正在计算真实路线和补能站。 ");
+      await recomputePlan();
+      showToast(payload.aiUsed === false ? "AI 暂不可用，已用本地规则完成规划" : "AI 已理解需求并生成补能方案");
+    } catch (error) {
+      const parsed = localIntentFallback(value);
+      applyParsedIntent(parsed, {});
+      setAiStatus("本地降级", "fallback");
+      setAiReply("模型连接暂时不可用，已按本地规则保留核心规划能力。");
+      await recomputePlan();
+      showToast("模型连接失败，已切换本地规则", 3600);
+    } finally {
+      state.aiActive = false;
+      if (button) button.disabled = false;
+    }
   }
 
   function computeOperatorSnapshot(stations) {
@@ -835,7 +1010,17 @@
     if (roi) roi.textContent = `${snapshot.roi.toFixed(1)}x`;
     if (queueNote) queueNote.textContent = executed ? `执行后峰值减少 ${Math.max(1, state.operatorBefore.peakQueue - snapshot.peakQueue)} 人` : `${snapshot.riskCount} 个站点出现集中到达风险`;
     if (roiNote) roiNote.textContent = executed ? "订单回流已写入本次演示复盘" : "演示模拟：新增订单毛利 / 优惠成本";
-    if (action) action.innerHTML = executed ? `<strong>执行结果：</strong>高峰站点已分流，P90 从 ${state.operatorBefore.p90.toFixed(1)} 分钟降至 ${snapshot.p90.toFixed(1)} 分钟。` : `<strong>建议动作：</strong>将 12% 预计到达量引导至低负载站，目标 P90 下降 20%。`;
+    if (action && executed) {
+      const improved = snapshot.p90 <= state.operatorBefore.p90;
+      const p90Message = snapshot.p90 < state.operatorBefore.p90
+        ? `P90 从 ${state.operatorBefore.p90.toFixed(1)} 分钟降至 ${snapshot.p90.toFixed(1)} 分钟`
+        : `P90 保持 ${snapshot.p90.toFixed(1)} 分钟`;
+      action.innerHTML = improved
+        ? `<strong>执行结果：</strong>高峰站点已分流，${p90Message}。`
+        : `<strong>执行复盘：</strong>P90 从 ${state.operatorBefore.p90.toFixed(1)} 分钟升至 ${snapshot.p90.toFixed(1)} 分钟，本策略应撤回并降低优惠强度。`;
+    } else if (action) {
+      action.innerHTML = `<strong>建议动作：</strong>根据目标站点承载力和用户敏感度动态计算分流优惠。`;
+    }
   }
 
   function renderValidationMetrics(snapshot) {
@@ -860,7 +1045,133 @@
     if (row) row.innerHTML = `<td>FlowTwin · 本次执行</td><td>${snapshot.averageWait.toFixed(1)} 分钟</td><td>${snapshot.p90.toFixed(1)} 分钟</td><td>${snapshot.onTime.toFixed(1)}%</td><td>${snapshot.dispersion.toFixed(2)}</td><td>${snapshot.roi.toFixed(1)}x</td>`;
   }
 
+  function setText(id, value) {
+    const element = byId(id);
+    if (element) element.textContent = value;
+  }
+
+  function renderOperatorSimulation(payload) {
+    if (!payload?.before || !payload?.after || !payload?.impact) return;
+    const before = payload.before;
+    const after = payload.after;
+    const impact = payload.impact;
+    setText("beforeQueueValue", `${Math.round(before.peakQueue)} 人`);
+    setText("afterQueueValue", `${Math.round(after.peakQueue)} 人`);
+    setText("beforeP90Value", `${before.p90Wait.toFixed(1)}m`);
+    setText("afterP90Value", `${after.p90Wait.toFixed(1)}m`);
+    setText("divertedUsersValue", `${Math.round(impact.divertedVehicles)} 人`);
+    setText("strategyRoiValue", `${impact.roi.toFixed(2)}x`);
+    const snapshot = {
+      averageWait: after.averageWait,
+      p90: after.p90Wait,
+      dispersion: after.occupancyDispersion,
+      peakQueue: Math.round(after.peakQueue),
+      discount: payload.discountAmount,
+      roi: impact.roi,
+      riskCount: payload.stations.filter((station) => station.status === "forecast-risk").length,
+      onTime: state.operatorBefore?.onTime || 89
+    };
+    renderOperatorMetrics(snapshot, false);
+    const action = byId("operatorAction");
+    if (action) {
+      const risk = payload.recommendation === "risk";
+      action.innerHTML = risk
+        ? `<strong>策略风险：</strong>当前优惠会增加目标站点尾部等待，建议降低优惠或更换目标站点。ROI ${impact.roi.toFixed(2)}x。`
+        : `<strong>本次策略：</strong>向${payload.targetUser || "目标用户"}发放 ¥${payload.discountAmount} 优惠，预计分流 ${Math.round(impact.divertedVehicles)} 人，新增 ${Math.round(impact.incrementalOrders)} 单，ROI ${impact.roi.toFixed(2)}x。`;
+      action.classList.toggle("strategy-risk", risk);
+    }
+    return snapshot;
+  }
+
+  async function simulateOperatorStrategy() {
+    const button = byId("operatorSimulate");
+    const discount = Number(byId("discountSlider")?.value || 0);
+    const targetUser = byId("targetSegment")?.selectedOptions?.[0]?.textContent || "全部可触达用户";
+    if (button) button.disabled = true;
+    try {
+      const payload = await postJson("/api/operator/simulate", {
+        stations: state.stations,
+        discountAmount: discount,
+        targetUser
+      }, 20000);
+      const snapshot = renderOperatorSimulation(payload);
+      state.pendingOperatorPayload = payload;
+      state.pendingOperatorSnapshot = snapshot;
+      showToast("已根据优惠和目标人群重新计算供需响应");
+    } catch (error) {
+      showToast("策略计算失败，请稍后重试", 3600);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  function renderValidationPayload(payload) {
+    const strategies = payload?.strategies || {};
+    const order = ["nearest", "cheapest", "realtime", "flowtwin"];
+    const labels = { nearest: "最近站", cheapest: "最低价", realtime: "仅实时状态", flowtwin: "FlowTwin" };
+    const body = byId("validationTableBody");
+    if (body) body.innerHTML = order.map((key) => {
+      const row = strategies[key] || {};
+      return `<tr class="${key === "flowtwin" ? "highlight" : ""}"><td>${labels[key]}</td><td>${Number(row.averageWait || 0).toFixed(1)} 分钟</td><td>${Number(row.p90Wait || 0).toFixed(1)} 分钟</td><td>${Number(row.onTimeRate || 0).toFixed(1)}%</td><td>${Number(row.loadDispersion || 0).toFixed(2)}</td><td>${key === "flowtwin" ? `${Number(row.roi || 0).toFixed(2)}x` : "—"}</td></tr>`;
+    }).join("");
+    const baseline = strategies.realtime || {};
+    const flowtwin = strategies.flowtwin || {};
+    const averageImprovement = baseline.averageWait ? (1 - flowtwin.averageWait / baseline.averageWait) * 100 : 0;
+    const p90Improvement = baseline.p90Wait ? (1 - flowtwin.p90Wait / baseline.p90Wait) * 100 : 0;
+    const onTimeImprovement = Number(flowtwin.onTimeRate || 0) - Number(baseline.onTimeRate || 0);
+    setText("validationAverage", `${averageImprovement >= 0 ? "−" : "+"}${Math.abs(averageImprovement).toFixed(1)}%`);
+    setText("validationP90", `${p90Improvement >= 0 ? "−" : "+"}${Math.abs(p90Improvement).toFixed(1)}%`);
+    setText("validationOnTime", `${onTimeImprovement >= 0 ? "+" : ""}${onTimeImprovement.toFixed(1)}pp`);
+    setText("validationStatusText", "本次仿真计算完成");
+    setText("validationStatusMeta", `${payload.trips?.toLocaleString?.() || payload.trips} / ${payload.trips?.toLocaleString?.() || payload.trips} 次行程 · ${payload.stationCount || 0} 个合成节点 · 种子 ${payload.seed}`);
+    const progress = byId("validationProgress");
+    if (progress) progress.style.width = "100%";
+    state.validationLoaded = true;
+  }
+
+  async function loadValidation() {
+    setText("validationStatusText", "正在运行策略仿真…");
+    setText("validationStatusMeta", "固定随机种子 · 真实计算 1,000 次合成行程");
+    const progress = byId("validationProgress");
+    if (progress) progress.style.width = "34%";
+    try {
+      const payload = await postJson("/api/validate", { trips: 1000, seed: 20260719 }, 30000);
+      renderValidationPayload(payload);
+    } catch (error) {
+      setText("validationStatusText", "仿真服务暂不可用");
+      setText("validationStatusMeta", "当前保留示例结果，不作为真实经营结论");
+      if (progress) progress.style.width = "0%";
+    }
+  }
+
   function applyStrategy() {
+    if (state.pendingOperatorPayload?.stations?.length) {
+      const payload = state.pendingOperatorPayload;
+      const before = state.operatorBefore || computeOperatorSnapshot(state.stations);
+      const byStation = new Map(payload.stations.map((station) => [station.id, station]));
+      state.stations = state.stations.map((station) => Object.assign({}, station, byStation.get(station.id) || {}));
+      const after = payload.after || {};
+      state.operatorAfter = {
+        averageWait: Number(after.averageWait || before.averageWait),
+        p90: Number(after.p90Wait || before.p90),
+        dispersion: Number(after.occupancyDispersion || before.dispersion),
+        peakQueue: Number(after.peakQueue || before.peakQueue),
+        onTime: before.onTime,
+        roi: Number(payload.impact?.roi || 0),
+        discount: Number(payload.discountAmount || 0),
+        riskCount: state.stations.filter((station) => station.status === "forecast-risk").length
+      };
+      Object.values(state.routeRecords).forEach((record) => {
+        const updatedStation = state.stations.find((station) => station.id === record.station?.id);
+        if (updatedStation) record.station = Object.assign({}, updatedStation, { detour: record.station.detour });
+      });
+      calculateRouteRecords();
+      renderRouteCards();
+      if (state.live) renderLiveStationMarkers();
+      renderOperatorMetrics(state.operatorAfter, true);
+      renderValidationMetrics(state.operatorAfter);
+      return;
+    }
     const before = state.operatorBefore || computeOperatorSnapshot(state.stations);
     const ranked = state.stations.slice().sort((a, b) => b.p90 - a.p90);
     const affectedIds = new Set(ranked.slice(0, Math.max(1, Math.ceil(ranked.length / 3))).map((station) => station.id));
@@ -904,6 +1215,8 @@
       if (originalStation) record.station = Object.assign({}, originalStation, { detour: record.station.detour });
     });
     state.operatorAfter = null;
+    state.pendingOperatorPayload = null;
+    state.pendingOperatorSnapshot = null;
     $$(".execution-step").forEach((step) => step.classList.remove("done"));
     const button = byId("approveButton");
     const reset = byId("resetExecution");
@@ -922,13 +1235,27 @@
     refreshIcons();
   }
 
-  function runExecutionLoop() {
+  async function runExecutionLoop() {
     if (state.executionState === "running") return;
     if (state.executionState === "after") {
       setMode("validation");
       return;
     }
+    if (!state.pendingOperatorPayload) await simulateOperatorStrategy();
+    if (!state.pendingOperatorPayload) return;
     state.executionState = "running";
+    const executionPayload = state.pendingOperatorPayload;
+    const executionResult = await postJson("/api/execution", {
+      targetStation: executionPayload.targetStation?.name,
+      targetUser: executionPayload.targetUser,
+      discountAmount: executionPayload.discountAmount,
+      divertedVehicles: executionPayload.impact?.divertedVehicles,
+      roi: executionPayload.impact?.roi
+    }, 12000).catch(() => ({ mode: "local-demo", message: "本地执行演示" }));
+    state.executionResult = executionResult;
+    const approvalStep = byId("stepApprove");
+    if (approvalStep) approvalStep.innerHTML = executionResult.used ? "创建飞书任务<br />已发送" : "创建审批任务<br />本地演示";
+    showToast(executionResult.message || "执行任务已创建");
     const button = byId("approveButton");
     const steps = [byId("stepAlert"), byId("stepApprove"), byId("stepPush"), byId("stepReview")];
     steps[0].classList.add("done");
@@ -1114,6 +1441,17 @@
     });
     byId("approveButton").addEventListener("click", runExecutionLoop);
     byId("resetExecution").addEventListener("click", resetExecution);
+    const discountSlider = byId("discountSlider");
+    if (discountSlider) discountSlider.addEventListener("input", () => setText("discountValue", `¥${discountSlider.value}`));
+    const operatorSimulate = byId("operatorSimulate");
+    if (operatorSimulate) operatorSimulate.addEventListener("click", simulateOperatorStrategy);
+    const serviceFeedbackButton = byId("serviceFeedbackButton");
+    if (serviceFeedbackButton) serviceFeedbackButton.addEventListener("click", () => {
+      ["serviceArrival", "servicePayment", "serviceRecommend", "serviceFeedback"].forEach((id) => byId(id)?.classList.add("active"));
+      setText("serviceStatus", "订单已完成 · 反馈已进入下一轮策略");
+      serviceFeedbackButton.disabled = true;
+      showToast("订单反馈已回流运营策略（概念演示）");
+    });
 
     if (config.mapMode !== "live" || !config.amapKey || !window.AMapLoader || typeof window.AMapLoader.load !== "function") {
       return;

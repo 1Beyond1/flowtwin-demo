@@ -289,6 +289,9 @@
         top: 84px;
         left: 24px;
         width: 354px;
+        max-height: calc(100vh - 300px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
         padding: 20px;
       }
 
@@ -515,6 +518,9 @@
         top: 84px;
         right: 24px;
         width: 302px;
+        max-height: calc(100vh - 300px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
         padding: 18px;
       }
 
@@ -838,7 +844,10 @@
         left: 24px;
         z-index: 850;
         display: none;
-        width: min(760px, calc(100vw - 48px));
+        width: min(860px, calc(100vw - 48px));
+        max-height: calc(100vh - 116px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
         padding: 20px;
         border: 1px solid rgba(216, 220, 215, 0.94);
         border-radius: var(--radius);
@@ -1142,6 +1151,583 @@
         color: var(--muted);
         font-size: 9px;
         font-weight: 600;
+      }
+
+      .trip-panel::-webkit-scrollbar,
+      .insight-panel::-webkit-scrollbar,
+      .operator-panel::-webkit-scrollbar,
+      .validation-panel::-webkit-scrollbar {
+        width: 5px;
+      }
+
+      .trip-panel::-webkit-scrollbar-thumb,
+      .insight-panel::-webkit-scrollbar-thumb,
+      .operator-panel::-webkit-scrollbar-thumb,
+      .validation-panel::-webkit-scrollbar-thumb {
+        border-radius: 9999px;
+        background: #cdd2ce;
+      }
+
+      .ai-runtime-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        min-height: 34px;
+        margin: -5px 0 12px;
+        padding: 7px 9px;
+        border: 1px solid #b8ddd4;
+        border-radius: 6px;
+        background: #f3faf8;
+        color: #176e60;
+        font-size: 10px;
+      }
+
+      .ai-runtime-main,
+      .ai-runtime-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .ai-runtime-main {
+        font-weight: 700;
+      }
+
+      .ai-runtime-main::before {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: var(--teal);
+        box-shadow: 0 0 0 4px rgba(22, 143, 126, 0.12);
+        content: "";
+      }
+
+      .ai-runtime-status[data-status="thinking"] .ai-runtime-main::before,
+      .ai-runtime-status[data-status="loading"] .ai-runtime-main::before {
+        background: var(--blue);
+        animation: ai-pulse 1.1s ease-in-out infinite;
+      }
+
+      .ai-runtime-status[data-status="fallback"] {
+        border-color: #ead0aa;
+        background: #fff9ef;
+        color: #895615;
+      }
+
+      .ai-runtime-status[data-status="fallback"] .ai-runtime-main::before {
+        background: var(--amber);
+      }
+
+      .ai-runtime-meta {
+        overflow: hidden;
+        color: var(--muted);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .ai-feedback {
+        margin: -3px 0 12px;
+        padding: 9px 10px;
+        border-left: 3px solid var(--blue);
+        border-radius: 0 6px 6px 0;
+        background: #f7f9ff;
+      }
+
+      .ai-feedback-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 5px;
+      }
+
+      .ai-feedback-head span {
+        color: #315bb8;
+        font-size: 9px;
+        font-weight: 700;
+      }
+
+      .ai-feedback-head small {
+        color: var(--quiet);
+        font-size: 8px;
+      }
+
+      .ai-feedback-message {
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.45;
+      }
+
+      .ai-thinking {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        margin-top: 6px;
+        color: var(--blue);
+        font-size: 9px;
+      }
+
+      .ai-thinking[hidden] {
+        display: none;
+      }
+
+      .ai-thinking::before {
+        width: 8px;
+        height: 8px;
+        border: 2px solid #b7c8f6;
+        border-top-color: var(--blue);
+        border-radius: 50%;
+        content: "";
+        animation: ai-spin 0.8s linear infinite;
+      }
+
+      .parsed-section-head,
+      .forecast-head,
+      .arrival-head,
+      .strategy-lab-head,
+      .strategy-control-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .parsed-section-head {
+        margin: -3px 0 8px;
+        color: var(--quiet);
+        font-size: 9px;
+      }
+
+      .parsed-section-head strong {
+        color: var(--text);
+        font-size: 10px;
+      }
+
+      .forecast-card,
+      .arrival-loop,
+      .strategy-lab {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid var(--line);
+      }
+
+      .forecast-head strong,
+      .arrival-head strong,
+      .strategy-lab-head strong {
+        font-size: 11px;
+      }
+
+      .forecast-status,
+      .concept-badge,
+      .simulation-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-height: 22px;
+        padding: 0 7px;
+        border-radius: 9999px;
+        background: var(--blue-soft);
+        color: #315bb8;
+        font-size: 8px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .forecast-chart {
+        display: block;
+        width: 100%;
+        height: 116px;
+        margin-top: 8px;
+        overflow: visible;
+      }
+
+      .forecast-chart .grid-line {
+        stroke: #e4e7e3;
+        stroke-width: 1;
+      }
+
+      .forecast-chart .axis-label {
+        fill: var(--quiet);
+        font-family: var(--sans);
+        font-size: 8px;
+      }
+
+      .forecast-chart .forecast-p50 {
+        fill: none;
+        stroke: var(--teal);
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2.5;
+      }
+
+      .forecast-chart .forecast-p90 {
+        fill: none;
+        stroke: var(--blue);
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2.5;
+      }
+
+      .forecast-chart .forecast-point {
+        fill: var(--surface-solid);
+        stroke: var(--blue);
+        stroke-width: 2;
+      }
+
+      .forecast-legend,
+      .forecast-source {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 8px;
+      }
+
+      .forecast-legend {
+        margin-top: 3px;
+      }
+
+      .forecast-legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .forecast-legend i {
+        width: 12px;
+        height: 2px;
+        border-radius: 99px;
+        background: var(--teal);
+      }
+
+      .forecast-legend span:last-child i {
+        background: var(--blue);
+      }
+
+      .forecast-source {
+        align-items: flex-start;
+        margin-top: 7px;
+        line-height: 1.4;
+      }
+
+      .forecast-source svg {
+        width: 12px;
+        height: 12px;
+        flex: 0 0 auto;
+      }
+
+      .arrival-steps {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 5px;
+        margin-top: 9px;
+      }
+
+      .arrival-step {
+        position: relative;
+        min-width: 0;
+        padding: 7px 4px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--surface-soft);
+        color: var(--muted);
+        font-size: 8px;
+        line-height: 1.35;
+        text-align: center;
+      }
+
+      .arrival-step.active {
+        border-color: #b8ddd4;
+        background: #f3faf8;
+        color: #176e60;
+      }
+
+      .arrival-step svg {
+        display: block;
+        width: 13px;
+        height: 13px;
+        margin: 0 auto 4px;
+      }
+
+      .service-recommendations {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 8px;
+      }
+
+      .service-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        min-height: 25px;
+        padding: 0 7px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--surface-solid);
+        color: var(--muted);
+        font-size: 8px;
+      }
+
+      .service-chip svg {
+        width: 12px;
+        height: 12px;
+        color: var(--teal);
+      }
+
+      .arrival-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 8px;
+        color: var(--quiet);
+        font-size: 8px;
+      }
+
+      .arrival-feedback-button {
+        min-height: 26px;
+        padding: 0 8px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--surface-solid);
+        color: var(--text);
+        font-size: 8px;
+        font-weight: 650;
+      }
+
+      .strategy-lab-head {
+        margin-bottom: 10px;
+      }
+
+      .strategy-lab-head span {
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .strategy-controls {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr auto;
+        gap: 9px;
+        align-items: end;
+      }
+
+      .strategy-control {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface-soft);
+      }
+
+      .strategy-control label,
+      .strategy-control-head label {
+        color: var(--quiet);
+        font-size: 9px;
+        font-weight: 650;
+      }
+
+      .strategy-control output {
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .strategy-control input[type="range"] {
+        width: 100%;
+        height: 4px;
+        margin-top: 11px;
+        accent-color: var(--blue);
+        cursor: pointer;
+      }
+
+      .strategy-control select {
+        width: 100%;
+        height: 30px;
+        margin-top: 7px;
+        padding: 0 8px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        outline: 0;
+        background: var(--surface-solid);
+        color: var(--text);
+        font-size: 10px;
+      }
+
+      .strategy-preview-button {
+        min-height: 58px;
+        padding: 0 13px;
+        border-radius: 6px;
+        background: var(--blue);
+        color: white;
+        font-size: 10px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .strategy-comparison {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 7px;
+        margin-top: 9px;
+      }
+
+      .comparison-metric {
+        min-width: 0;
+        padding: 9px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface-solid);
+      }
+
+      .comparison-metric.snapshot {
+        background: var(--surface-soft);
+      }
+
+      .comparison-metric span {
+        display: block;
+        overflow: hidden;
+        color: var(--quiet);
+        font-size: 8px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .comparison-values {
+        display: flex;
+        align-items: baseline;
+        gap: 5px;
+        margin-top: 5px;
+        font-family: var(--mono);
+      }
+
+      .comparison-values del {
+        color: var(--quiet);
+        font-size: 10px;
+        text-decoration: none;
+      }
+
+      .comparison-values i {
+        color: var(--quiet);
+        font-size: 9px;
+        font-style: normal;
+      }
+
+      .comparison-values strong {
+        color: var(--teal);
+        font-size: 14px;
+      }
+
+      .snapshot-values {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 5px;
+      }
+
+      .snapshot-values strong {
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+
+      .comparison-metric.snapshot.after {
+        border-color: #b8ddd4;
+        background: #f3faf8;
+      }
+
+      .comparison-metric.snapshot.after .snapshot-values strong {
+        color: var(--teal);
+      }
+
+      .simulation-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 44px;
+        margin-bottom: 14px;
+        padding: 9px 11px;
+        border: 1px solid #b8ddd4;
+        border-radius: 6px;
+        background: #f3faf8;
+      }
+
+      .simulation-status-main {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-width: 0;
+      }
+
+      .simulation-status-main svg {
+        width: 16px;
+        height: 16px;
+        flex: 0 0 auto;
+        color: var(--teal);
+      }
+
+      .simulation-status-main strong {
+        display: block;
+        font-size: 10px;
+      }
+
+      .simulation-status-main span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .simulation-status[data-state="idle"] {
+        border-color: var(--line);
+        background: var(--surface-soft);
+      }
+
+      .simulation-status[data-state="idle"] .simulation-status-main svg {
+        color: var(--blue);
+      }
+
+      .simulation-status[data-state="loading"] {
+        border-color: #c8d6f6;
+        background: #f7f9ff;
+      }
+
+      .simulation-status[data-state="loading"] .simulation-status-main svg {
+        color: var(--blue);
+        animation: ai-spin 0.8s linear infinite;
+      }
+
+      .simulation-progress {
+        width: min(210px, 28vw);
+        height: 4px;
+        overflow: hidden;
+        border-radius: 9999px;
+        background: #dce6e1;
+      }
+
+      .simulation-progress span {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--teal);
+        transition: width 240ms ease;
+      }
+
+      @keyframes ai-pulse {
+        0%, 100% { opacity: 0.55; transform: scale(0.86); }
+        50% { opacity: 1; transform: scale(1); }
+      }
+
+      @keyframes ai-spin {
+        to { transform: rotate(360deg); }
       }
 
       .validation-panel {
@@ -1469,6 +2055,10 @@
           height: 100svh;
         }
 
+        .map-status {
+          display: none;
+        }
+
         .brand {
           min-height: 42px;
           padding-right: 11px;
@@ -1555,10 +2145,38 @@
           right: 14px;
           left: 14px;
           width: auto;
+          max-height: calc(100svh - 86px);
+          padding: 16px;
         }
 
         .operator-grid {
           grid-template-columns: 1fr;
+        }
+
+        .strategy-controls {
+          grid-template-columns: 1fr;
+        }
+
+        .strategy-preview-button {
+          width: 100%;
+          min-height: 40px;
+        }
+
+        .strategy-comparison {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .ai-runtime-meta {
+          display: none;
+        }
+
+        .simulation-status {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .simulation-progress {
+          width: 100%;
         }
 
         .validation-panel {
@@ -1631,10 +2249,21 @@
           <span class="priority-badge"><i data-lucide="shield-check"></i>可靠优先</span>
         </div>
 
+        <div class="ai-runtime-status" id="aiStatus" data-status="ready" role="status" aria-live="polite">
+          <span class="ai-runtime-main" id="aiStatusText">真实 AI 接口待调用</span>
+          <span class="ai-runtime-meta" id="aiModelLabel">Doubao Seed 2.0 Lite · 服务端安全调用</span>
+        </div>
+
         <div class="ai-request" aria-label="自然语言出行约束">
           <input id="intentInput" value="周五 17:40 去大兴机场，电量 22%，优先准时" aria-label="用自然语言描述出行要求" />
           <button class="ai-parse-button" id="parseIntent" aria-label="解析出行要求"><i data-lucide="sparkles"></i></button>
         </div>
+        <div class="ai-feedback" id="aiReply" aria-live="polite">
+          <div class="ai-feedback-head"><span>AI 行程助理</span><small id="aiReplyMeta">已理解当前需求</small></div>
+          <div class="ai-feedback-message" id="aiReplyText">我会优先保证 19:30 前抵达，并在实际道路沿线筛选低排队风险的补能站。</div>
+          <div class="ai-thinking" id="aiThinking" hidden>正在理解约束并调用规划工具</div>
+        </div>
+        <div class="parsed-section-head"><strong>结构化约束</strong><span id="parsedConfidence">解析置信度 96%</span></div>
         <div class="parsed-row" id="parsedRow" aria-label="已解析约束">
           <span class="parsed-chip">目的地 · 大兴机场</span>
           <span class="parsed-chip">出发 · 17:40</span>
@@ -1655,8 +2284,8 @@
             <span class="route-dot destination"></span>
             <div>
               <div class="field-label">终点</div>
-              <div class="field-value">北京大兴国际机场</div>
-              <div class="field-note">航站楼出发层 · 19:30 前到达</div>
+              <div class="field-value" id="destinationName">北京大兴国际机场</div>
+              <div class="field-note">航站楼出发层 · <span id="arrivalValue">19:30</span> 前到达</div>
             </div>
           </div>
         </div>
@@ -1664,7 +2293,7 @@
         <div class="constraint-grid" aria-label="行程约束">
           <button class="constraint constraint-button" id="energyToggle" aria-label="切换电动或燃油模式" aria-pressed="true"><div class="constraint-label">动力类型</div><div class="constraint-value" id="energyTypeValue">纯电</div></button>
           <div class="constraint"><div class="constraint-label" id="energyStateLabel">当前电量</div><div class="constraint-value" id="energyStateValue">22%</div></div>
-          <div class="constraint"><div class="constraint-label">到达要求</div><div class="constraint-value">19:30</div></div>
+          <div class="constraint constraint-arrival"><div class="constraint-label">到达要求</div><div class="constraint-value" id="deadlineValue">19:30</div></div>
         </div>
 
         <button class="primary-action" id="planButton"><i data-lucide="sparkles"></i><span>生成补能方案</span></button>
@@ -1685,10 +2314,56 @@
           <div class="stat-block"><div class="stat-label">预计 P90 等待</div><div class="stat-value" id="waitValue">8 <small>分钟</small></div></div>
           <div class="stat-block"><div class="stat-label" id="energyAdviceLabel">建议补能</div><div class="stat-value" id="energyAdviceValue">18 <small>kWh</small></div></div>
         </div>
+        <div class="forecast-card">
+          <div class="forecast-head"><strong>未来 30 分钟站点预测</strong><span class="forecast-status" id="forecastStatus">5 分钟粒度</span></div>
+          <svg class="forecast-chart" id="forecastChart" viewBox="0 0 270 116" role="img" aria-label="未来三十分钟 P50 与 P90 排队时间预测折线图" preserveAspectRatio="none">
+            <g aria-hidden="true">
+              <line class="grid-line" x1="24" y1="16" x2="264" y2="16"></line>
+              <line class="grid-line" x1="24" y1="47" x2="264" y2="47"></line>
+              <line class="grid-line" x1="24" y1="78" x2="264" y2="78"></line>
+              <line class="grid-line" x1="24" y1="98" x2="264" y2="98"></line>
+              <text class="axis-label" x="1" y="19">20m</text>
+              <text class="axis-label" x="4" y="50">12m</text>
+              <text class="axis-label" x="8" y="81">4m</text>
+              <text class="axis-label" x="22" y="112">现在</text>
+              <text class="axis-label" x="97" y="112">+10</text>
+              <text class="axis-label" x="174" y="112">+20</text>
+              <text class="axis-label" x="246" y="112">+30</text>
+            </g>
+            <polyline class="forecast-p50" id="forecastP50Line" points="24,78 64,75 104,70 144,72 184,66 224,62 264,65"></polyline>
+            <polyline class="forecast-p90" id="forecastP90Line" points="24,62 64,56 104,47 144,50 184,39 224,31 264,35"></polyline>
+            <g id="forecastPoints" aria-hidden="true">
+              <circle class="forecast-point" cx="24" cy="62" r="3"></circle>
+              <circle class="forecast-point" cx="64" cy="56" r="3"></circle>
+              <circle class="forecast-point" cx="104" cy="47" r="3"></circle>
+              <circle class="forecast-point" cx="144" cy="50" r="3"></circle>
+              <circle class="forecast-point" cx="184" cy="39" r="3"></circle>
+              <circle class="forecast-point" cx="224" cy="31" r="3"></circle>
+              <circle class="forecast-point" cx="264" cy="35" r="3"></circle>
+            </g>
+          </svg>
+          <div class="forecast-legend" id="forecastLegend"><span><i></i>P50 典型等待</span><span><i></i>P90 尾部风险</span></div>
+          <div class="forecast-source" id="forecastMeta"><i data-lucide="database"></i><span>真实站点与路线 · 当前负载、价格及预测为本次仿真；入围后替换为能链脱敏数据。</span></div>
+        </div>
         <div class="evidence-list">
           <div class="evidence-row"><i data-lucide="check"></i><span>绕行较小，预计 19:08 抵达机场</span></div>
           <div class="evidence-row"><i data-lucide="check"></i><span>预计离站电量 54%，覆盖剩余行程</span></div>
           <div class="evidence-row"><i data-lucide="trending-down"></i><span>相较最快方案，等待尾部风险更低</span></div>
+        </div>
+        <div class="arrival-loop" id="serviceFlow" aria-label="到站服务闭环概念演示">
+          <div class="arrival-head"><strong>到站服务闭环</strong><span class="concept-badge">概念演示</span></div>
+          <div class="arrival-steps">
+            <div class="arrival-step active" id="serviceArrival"><i data-lucide="map-pin-check"></i>到站确认</div>
+            <div class="arrival-step" id="servicePayment"><i data-lucide="badge-check"></i>无感支付</div>
+            <div class="arrival-step" id="serviceRecommend"><i data-lucide="sparkles"></i>服务推荐</div>
+            <div class="arrival-step" id="serviceFeedback"><i data-lucide="message-square"></i>订单反馈</div>
+          </div>
+          <div class="service-recommendations" id="serviceRecommendations">
+            <span class="service-chip"><i data-lucide="utensils"></i>简餐 · 12 分钟</span>
+            <span class="service-chip"><i data-lucide="car-front"></i>洗车 · 有空位</span>
+            <span class="service-chip"><i data-lucide="armchair"></i>休息区 · 开放</span>
+          </div>
+          <div class="arrival-foot"><span id="serviceStatus">等待车辆到站后触发</span><button class="arrival-feedback-button" id="serviceFeedbackButton">模拟订单反馈</button></div>
         </div>
         <div class="demo-note" id="stationDataNote">等待、实时负载和价格为演示模拟数据；站点名称与位置来自地图 POI。</div>
       </section>
@@ -1698,7 +2373,7 @@
           <div>
             <div class="eyebrow">Operator intelligence</div>
             <h2>北京区域补能供需</h2>
-            <p>把车主侧的出行意图转成站点侧的引流与定价动作。<span class="source-badge">本地演示适配器 · 可替换 Aily</span></p>
+            <p>把车主侧的出行意图转成站点侧的引流与定价动作。<span class="source-badge">后端策略引擎 · 飞书执行可配置</span></p>
           </div>
           <button class="close-button" id="closeOperator" aria-label="关闭运营视图"><i data-lucide="x"></i></button>
         </div>
@@ -1707,10 +2382,35 @@
           <div class="operator-metric"><div class="stat-label">建议分流优惠</div><strong id="operatorDiscount">¥6<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span></strong><p>仅对高峰时段目标用户触发</p></div>
           <div class="operator-metric"><div class="stat-label">预测优惠 ROI</div><strong id="operatorRoi" style="color:var(--teal)">1.8x</strong><p id="operatorRoiNote">演示模拟：新增订单毛利 / 优惠成本</p></div>
         </div>
+        <div class="strategy-lab" id="operatorStrategyLab">
+          <div class="strategy-lab-head"><strong>定价与引流策略实验台</strong><span>调整参数后重新计算供需响应</span></div>
+          <div class="strategy-controls">
+            <div class="strategy-control">
+              <div class="strategy-control-head"><label for="discountSlider">单笔优惠金额</label><output id="discountValue" for="discountSlider">¥6</output></div>
+              <input id="discountSlider" type="range" min="0" max="15" step="1" value="6" aria-label="单笔优惠金额" />
+            </div>
+            <div class="strategy-control">
+              <label for="targetSegment">目标用户</label>
+              <select id="targetSegment" aria-label="目标用户">
+                <option value="time-sensitive">准时敏感 · 高峰出行</option>
+                <option value="price-sensitive">价格敏感 · 可接受绕行</option>
+                <option value="low-soc">低电量 · SOC 低于 25%</option>
+                <option value="all">全部可触达用户</option>
+              </select>
+            </div>
+            <button class="strategy-preview-button" id="operatorSimulate"><i data-lucide="calculator"></i> 重新计算</button>
+          </div>
+          <div class="strategy-comparison" aria-label="策略执行前后对比">
+            <div class="comparison-metric snapshot" id="operatorBeforeCompare"><span>执行前</span><div class="snapshot-values"><strong id="beforeQueueValue">18 人</strong><strong id="beforeP90Value">P90 23.0m</strong></div></div>
+            <div class="comparison-metric snapshot after" id="operatorAfterCompare"><span>策略预测</span><div class="snapshot-values"><strong id="afterQueueValue">14 人</strong><strong id="afterP90Value">P90 18.4m</strong></div></div>
+            <div class="comparison-metric"><span>预计分流人数</span><div class="comparison-values"><strong id="divertedUsersValue">4 人</strong></div></div>
+            <div class="comparison-metric"><span>优惠投入回报</span><div class="comparison-values"><strong id="strategyRoiValue">1.5x</strong></div></div>
+          </div>
+        </div>
         <div class="operator-actions"><p id="operatorAction"><strong>建议动作：</strong>将 12% 预计到达量引导至低负载站，等待 P90 预计下降 20%。</p><div class="operator-button-group"><button class="secondary-action subtle hidden" id="resetExecution"><i data-lucide="rotate-ccw"></i>重置</button><button class="secondary-action" id="approveButton"><i data-lucide="send"></i>提交执行审批</button></div></div>
         <div class="execution-steps" aria-label="执行闭环">
           <div class="execution-step" id="stepAlert" data-step="1">识别高峰站点<br />需求预警</div>
-          <div class="execution-step" id="stepApprove" data-step="2">创建审批任务<br />本地适配器</div>
+          <div class="execution-step" id="stepApprove" data-step="2">创建飞书任务<br />执行适配器</div>
           <div class="execution-step" id="stepPush" data-step="3">触达目标车主<br />执行分流</div>
           <div class="execution-step" id="stepReview" data-step="4">订单回流<br />复盘 ROI</div>
         </div>
@@ -1725,6 +2425,10 @@
           </div>
           <button class="close-button" id="closeValidation" aria-label="关闭验证视图"><i data-lucide="x"></i></button>
         </div>
+        <div class="simulation-status" id="validationStatus" data-state="idle" role="status" aria-live="polite">
+          <div class="simulation-status-main"><i data-lucide="flask-conical"></i><div><strong id="validationStatusText">等待运行本次仿真</strong><span id="validationStatusMeta">进入验证流程后由后端计算 1,000 次合成行程</span></div></div>
+          <div class="simulation-progress" aria-label="仿真进度"><span id="validationProgress" style="width:0%"></span></div>
+        </div>
         <div class="validation-summary">
           <div class="validation-kpi"><div class="stat-label">平均等待改善</div><strong class="good" id="validationAverage">−21.4%</strong></div>
           <div class="validation-kpi"><div class="stat-label">P90 等待改善</div><strong class="good" id="validationP90">−20.0%</strong></div>
@@ -1733,7 +2437,7 @@
         <div class="validation-table-wrap">
           <table class="validation-table">
             <thead><tr><th>策略</th><th>平均等待</th><th>P90 等待</th><th>准时率</th><th>利用率离散度</th><th>优惠 ROI</th></tr></thead>
-            <tbody>
+            <tbody id="validationTableBody">
               <tr><td>最近站</td><td>14.8 分钟</td><td>28.5 分钟</td><td>82.1%</td><td>0.31</td><td>—</td></tr>
               <tr><td>最低价</td><td>12.6 分钟</td><td>25.4 分钟</td><td>86.3%</td><td>0.27</td><td>—</td></tr>
               <tr><td>仅实时状态</td><td>11.7 分钟</td><td>22.9 分钟</td><td>89.0%</td><td>0.24</td><td>—</td></tr>

@@ -2,9 +2,17 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadConfig } from "./lib/config.mjs";
+import { parseTripIntent, formatPlanResponse, planLimits } from "./lib/plan.mjs";
+import { forecastStations } from "./lib/forecast.mjs";
+import { simulateOperator } from "./lib/operator.mjs";
+import { validateStrategies } from "./lib/validate.mjs";
+import { executeFeishu } from "./lib/feishu.mjs";
+import { API_CONTRACTS } from "./lib/contracts.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
-const port = Number(process.env.PORT || 4182);
+const config = await loadConfig({ root });
+const port = config.port;
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -15,19 +23,6 @@ const mimeTypes = {
   ".png": "image/png",
   ".svg": "image/svg+xml"
 };
-
-async function localConfig() {
-  let text = "";
-  try {
-    text = await readFile(join(root, "config.local.js"), "utf8");
-  } catch {}
-  const readValue = (name) => text.match(new RegExp(`${name}:\\s*["']([^"']+)["']`))?.[1] || "";
-  return {
-    amapKey: process.env.AMAP_JS_KEY || readValue("amapKey"),
-    securityJsCode: process.env.AMAP_SECURITY_JS_CODE || readValue("securityJsCode"),
-    webServiceKey: process.env.AMAP_WEB_SERVICE_KEY || readValue("webServiceKey")
-  };
-}
 
 function json(response, status, body) {
   response.writeHead(status, {
@@ -68,7 +63,7 @@ async function routeApi(requestUrl, response) {
   const strategies = { fastest: "38", reliable: "33", cheapest: "36" };
   if (!origin || !destination || !waypoint || !strategies[key]) return json(response, 400, { error: "INVALID_ROUTE_PARAMS" });
 
-  const { webServiceKey } = await localConfig();
+  const { webServiceKey } = config;
   if (!webServiceKey) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
   const params = new URLSearchParams({
     origin,
@@ -96,7 +91,7 @@ async function routeApi(requestUrl, response) {
 }
 
 async function runtimeConfig(response) {
-  const { amapKey, securityJsCode } = await localConfig();
+  const { amapKey, securityJsCode } = config;
   const body = `window.FLOWTWIN_CONFIG=${JSON.stringify({ amapKey, securityJsCode, mapMode: amapKey ? "live" : "fallback" })};`;
   response.writeHead(200, {
     "Content-Type": "text/javascript; charset=utf-8",
@@ -106,9 +101,65 @@ async function runtimeConfig(response) {
   response.end(body);
 }
 
+async function readJsonBody(request, maxBytes = 32768) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > maxBytes) throw Object.assign(new Error("REQUEST_TOO_LARGE"), { statusCode: 413 });
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  try {
+    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("INVALID_JSON_OBJECT");
+    return parsed;
+  } catch {
+    throw Object.assign(new Error("INVALID_JSON"), { statusCode: 400 });
+  }
+}
+
+async function planApi(request, response) {
+  const body = await readJsonBody(request, 32768);
+  const message = typeof body.message === "string" ? body.message.trim() : "";
+  if (!message || message.length > planLimits.MAX_MESSAGE_LENGTH) return json(response, 400, { error: "MESSAGE_REQUIRED_OR_TOO_LONG", maxLength: planLimits.MAX_MESSAGE_LENGTH });
+  const context = body.context && typeof body.context === "object" && !Array.isArray(body.context) ? body.context : {};
+  const result = await parseTripIntent({ message, context, config });
+  return json(response, 200, formatPlanResponse(result));
+}
+
+async function forecastApi(request, response) {
+  const body = await readJsonBody(request, 128000);
+  if (body.stations !== undefined && !Array.isArray(body.stations)) return json(response, 400, { error: "STATIONS_MUST_BE_ARRAY" });
+  return json(response, 200, forecastStations(body.stations || [], body.scenario || {}));
+}
+
+async function operatorApi(request, response) {
+  const body = await readJsonBody(request, 128000);
+  if (!Array.isArray(body.stations) || !body.stations.length) return json(response, 400, { error: "STATIONS_REQUIRED" });
+  try {
+    return json(response, 200, simulateOperator(body));
+  } catch (error) {
+    return json(response, 400, { error: error.message === "STATIONS_REQUIRED" ? error.message : "INVALID_OPERATOR_INPUT" });
+  }
+}
+
+async function validateApi(request, response) {
+  const body = await readJsonBody(request, 16000);
+  if (body.stations !== undefined && !Array.isArray(body.stations)) return json(response, 400, { error: "STATIONS_MUST_BE_ARRAY" });
+  return json(response, 200, validateStrategies({ seed: body.seed, trips: body.trips, stations: body.stations }));
+}
+
+async function executionApi(request, response) {
+  const body = await readJsonBody(request, 16000);
+  const result = await executeFeishu({ payload: body, config });
+  return json(response, 200, result);
+}
+
 async function staticFile(pathname, response) {
   const requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
-  if (requested === ".env" || requested === "config.local.js" || requested.startsWith(".git") || requested.includes("..")) {
+  const protectedNames = new Set([".env", ".env.example", "config.local.js", "server.mjs", "package.json", "package-lock.json"]);
+  if (protectedNames.has(requested) || requested.startsWith(".git") || requested.includes("..")) {
     response.writeHead(404).end();
     return;
   }
@@ -137,13 +188,21 @@ async function staticFile(pathname, response) {
 createServer(async (request, response) => {
   try {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+    if (request.method === "OPTIONS") return json(response, 204, {});
     if (requestUrl.pathname === "/api/health") return json(response, 200, { ok: true, service: "FlowTwin" });
+    if (request.method === "GET" && requestUrl.pathname === "/api/contracts") return json(response, 200, API_CONTRACTS);
     if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
+    if (request.method === "POST" && requestUrl.pathname === "/api/plan") return await planApi(request, response);
+    if (request.method === "POST" && requestUrl.pathname === "/api/forecast") return await forecastApi(request, response);
+    if (request.method === "POST" && requestUrl.pathname === "/api/operator/simulate") return await operatorApi(request, response);
+    if (request.method === "POST" && requestUrl.pathname === "/api/validate") return await validateApi(request, response);
+    if (request.method === "POST" && requestUrl.pathname === "/api/execution") return await executionApi(request, response);
     if (requestUrl.pathname === "/runtime-config.js") return await runtimeConfig(response);
     return await staticFile(requestUrl.pathname, response);
   } catch (error) {
-    console.error(error);
-    return json(response, 500, { error: "INTERNAL_SERVER_ERROR" });
+    const status = Number(error?.statusCode) || 500;
+    if (status >= 500) console.error("FlowTwin request failed without logging request data or credentials");
+    return json(response, status, { error: status === 413 ? "REQUEST_TOO_LARGE" : status === 400 ? "INVALID_JSON" : "INTERNAL_SERVER_ERROR" });
   }
 }).listen(port, "127.0.0.1", () => {
   console.log(`FlowTwin running at http://127.0.0.1:${port}`);
