@@ -6,4 +6,6 @@ server-*.log
 .playwright-cli/
 node_modules/
 dist/
+output/
+docs/*（待评审）.md
 .playwright-cli/
