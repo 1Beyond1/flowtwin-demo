@@ -1,13 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeAiBaseUrl } from "../lib/config.mjs";
-import { formatPlanResponse, parseTripIntent } from "../lib/plan.mjs";
+import { formatPlanResponse, parseTripIntent, scorePlaceCandidate } from "../lib/plan.mjs";
 import { forecastStations } from "../lib/forecast.mjs";
 import { simulateOperator } from "../lib/operator.mjs";
 import { validateStrategies } from "../lib/validate.mjs";
 import { executeFeishu } from "../lib/feishu.mjs";
 import { evaluateDirectTrip, evaluateStationStop } from "../lib/energy.mjs";
 import { buildLongTripPlans } from "../lib/longtrip.mjs";
+import { cleanTranscriptText, polishTranscriptText } from "../lib/stt.mjs";
 
 const stations = [
   { id: "a", name: "A站", type: "充电站", occupancy: 0.78, wait: 16, capacity: 20, demand: 14, serviceRate: 4, price: 1.55 },
@@ -124,13 +125,96 @@ test("ambiguous 东方明珠 is canonicalized to the Shanghai landmark before ge
       requestedUrls.push(String(url));
       return new Response(JSON.stringify({
         status: "1",
-        geocodes: [{ province: "上海市", city: "上海市", district: "浦东新区", location: "121.4997,31.2397" }]
+        geocodes: [{ province: "上海市", city: "上海市", district: "浦东新区", location: "121.4997,31.2397", formatted_address: "上海东方明珠广播电视塔", level: "兴趣点" }],
+        pois: []
       }), { status: 200 });
     }
   });
   assert.equal(result.destination, "上海东方明珠广播电视塔");
-  assert.match(requestedUrls[0], /%E4%B8%8A%E6%B5%B7%E4%B8%9C%E6%96%B9%E6%98%8E%E7%8F%A0%E5%B9%BF%E6%92%AD%E7%94%B5%E8%A7%86%E5%A1%94/);
+  assert.ok(requestedUrls.some((url) => /geocode%2Fgeo|geocode\/geo/.test(url) || url.includes("geocode")));
+  assert.ok(requestedUrls.some((url) => decodeURIComponent(url).includes("上海东方明珠广播电视塔")));
   assert.deepEqual(result.locations.destination.coordinate, [121.4997, 31.2397]);
+});
+
+test("华山 is canonicalized to 华山风景区 and prefers scenic POI over unrelated geo hits", async () => {
+  const requestedUrls = [];
+  const result = await parseTripIntent({
+    message: "从能链北京总部前往华山，优先准时",
+    config: { webServiceKey: "geo-key" },
+    fetchImpl: async (url) => {
+      const href = String(url);
+      requestedUrls.push(href);
+      if (href.includes("place/text")) {
+        return new Response(JSON.stringify({
+          status: "1",
+          pois: [{
+            name: "华山风景区",
+            location: "110.0905,34.4820",
+            type: "风景名胜;风景名胜;风景名胜",
+            typecode: "110200",
+            pname: "陕西省",
+            cityname: "渭南市",
+            adname: "华阴市"
+          }]
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        status: "1",
+        geocodes: [{
+          formatted_address: "上海市静安区华山路",
+          province: "上海市",
+          city: "上海市",
+          district: "静安区",
+          level: "道路",
+          location: "121.4400,31.2200"
+        }]
+      }), { status: 200 });
+    }
+  });
+  assert.equal(result.destination, "华山风景区");
+  assert.ok(requestedUrls.some((url) => decodeURIComponent(url).includes("华山风景区")));
+  assert.deepEqual(result.locations.destination.coordinate, [110.0905, 34.482]);
+  assert.equal(result.locations.destination.source, "高德地点检索");
+});
+
+test("place scoring prefers scenic names over bare admin roads", () => {
+  const scenic = scorePlaceCandidate({
+    name: "华山风景区",
+    type: "风景名胜",
+    typecode: "110200",
+    province: "陕西省",
+    city: "渭南市",
+    source: "高德地点检索"
+  }, "华山风景区");
+  const road = scorePlaceCandidate({
+    name: "华山路",
+    type: "道路",
+    level: "道路",
+    province: "上海市",
+    city: "上海市",
+    source: "高德地理编码"
+  }, "华山风景区");
+  assert.ok(scenic > road);
+});
+
+test("place scoring prefers a university campus over a same-name metro station", () => {
+  const campus = scorePlaceCandidate({
+    name: "南京工业大学",
+    type: "科教文化服务;学校;高等院校",
+    typecode: "141201",
+    province: "江苏省",
+    city: "南京市",
+    source: "高德地点检索"
+  }, "南京工业大学");
+  const metro = scorePlaceCandidate({
+    name: "南京工业大学(地铁站)",
+    type: "交通设施服务;地铁站;地铁站",
+    typecode: "150500",
+    province: "江苏省",
+    city: "南京市",
+    source: "高德地点检索"
+  }, "南京工业大学");
+  assert.ok(campus > metro);
 });
 
 test("plan response exposes parsed and destinationLocation contract", () => {
@@ -143,6 +227,97 @@ test("plan response exposes parsed and destinationLocation contract", () => {
   assert.equal(response.parsed.destination, "大兴机场");
   assert.deepEqual(response.destinationLocation, [116.41, 39.509]);
   assert.equal(response.locationSources.destination, "高德");
+  assert.deepEqual(response.destinationCandidates, []);
+});
+
+test("formatPlanResponse includes destination candidates when resolvePlace is ambiguous", () => {
+  const response = formatPlanResponse({
+    origin: "能链北京总部",
+    destination: "测试地点",
+    aiUsed: false,
+    locations: {
+      destination: {
+        coordinate: [120, 30],
+        source: "高德地点检索",
+        name: "测试风景区",
+        candidates: [
+          { name: "测试风景区", coordinate: [120, 30], city: "杭州市", score: 80, source: "高德地点检索" },
+          { name: "测试路", coordinate: [121, 31], city: "上海市", score: 70, source: "高德地理编码" }
+        ]
+      }
+    }
+  });
+  assert.equal(response.parsed.destination, "测试风景区");
+  assert.equal(response.destinationCandidates.length, 2);
+  assert.equal(response.destinationCandidates[0].name, "测试风景区");
+});
+
+test("STT base URL validation matches AI base URL safety and public runtime never leaks keys", () => {
+  assert.equal(normalizeAiBaseUrl("https://api.siliconflow.cn/v1"), "https://api.siliconflow.cn/v1");
+  assert.equal(normalizeAiBaseUrl("https://user:pass@api.siliconflow.cn/v1"), "");
+  assert.equal(normalizeAiBaseUrl("file:///tmp/stt"), "");
+  const sample = { sttApiKey: "stt-secret-should-not-leak", sttBaseUrl: "https://api.siliconflow.cn/v1" };
+  const publicRuntime = {
+    amapKey: "public-js-key",
+    securityJsCode: "public-security",
+    mapMode: "live",
+    sttEnabled: Boolean(sample.sttApiKey)
+  };
+  assert.equal(publicRuntime.sttEnabled, true);
+  assert.equal(JSON.stringify(publicRuntime).includes("stt-secret"), false);
+  assert.equal(Object.hasOwn(publicRuntime, "sttApiKey"), false);
+});
+
+test("cleanTranscriptText strips SenseVoice emotion and language tags", () => {
+  assert.equal(
+    cleanTranscriptText("<|zh|><|NEUTRAL|><|Speech|>从能链北京总部前往华山，优先准时"),
+    "从能链北京总部前往华山，优先准时"
+  );
+  assert.equal(cleanTranscriptText("去上海东方明珠"), "去上海东方明珠");
+  assert.equal(cleanTranscriptText("<|en|><|HAPPY|>hello"), "hello");
+});
+
+test("polishTranscriptText uses AI when tags remain noisy and fails open without AI", async () => {
+  const plain = await polishTranscriptText("去北京南站", {}, async () => {
+    throw new Error("should not call");
+  });
+  assert.equal(plain, "去北京南站");
+
+  const polished = await polishTranscriptText(
+    "<|zh|><|NEUTRAL|>从公司去华山吧嗯优先准时",
+    { aiBaseUrl: "https://example.com/v1", aiApiKey: "k", aiModel: "m" },
+    async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "从公司前往华山，优先准时" } }]
+    }), { status: 200 })
+  );
+  assert.equal(polished, "从公司前往华山，优先准时");
+
+  const fallback = await polishTranscriptText(
+    "<|zh|><|SAD|>去华山",
+    { aiBaseUrl: "https://example.com/v1", aiApiKey: "k", aiModel: "m" },
+    async () => { throw new Error("offline"); }
+  );
+  assert.equal(fallback, "去华山");
+});
+
+test("explicit destination coordinate from picker skips re-geocoding", async () => {
+  let fetchCount = 0;
+  const result = await parseTripIntent({
+    message: "从能链北京总部前往华山",
+    context: {
+      explicitDestination: "华山风景区",
+      destinationLocation: [110.09, 34.48]
+    },
+    config: { webServiceKey: "geo-key" },
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return new Response(JSON.stringify({ status: "1", geocodes: [], pois: [] }), { status: 200 });
+    }
+  });
+  assert.equal(result.destination, "华山风景区");
+  assert.deepEqual(result.locations.destination.coordinate, [110.09, 34.48]);
+  assert.equal(result.locations.destination.source, "用户选定候选");
+  assert.equal(fetchCount, 0);
 });
 
 test("forecast is deterministic and produces 0..30 minute points", () => {

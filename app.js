@@ -203,6 +203,229 @@
     showToast.timer = window.setTimeout(() => toast.classList.remove("visible"), duration || 2800);
   }
 
+  function fitIntentInput() {
+    const input = byId("intentInput");
+    if (!input || input.tagName !== "TEXTAREA") return;
+    const maxHeight = 64;
+    input.style.height = "auto";
+    const next = Math.min(Math.max(input.scrollHeight, 42), maxHeight);
+    input.style.height = `${next}px`;
+    input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
+  }
+
+  function revealServiceFlow(options = {}) {
+    const panel = byId("insightPanel");
+    const flow = byId("serviceFlow");
+    const expand = byId("expandInsight");
+    if (panel) {
+      panel.hidden = false;
+      panel.classList.remove("hidden", "collapsed");
+      if (window.innerWidth <= 760) {
+        state.mobileInsightOpen = true;
+        panel.classList.add("mobile-visible");
+        const sheet = byId("routeSheet");
+        if (sheet) sheet.style.display = "none";
+      }
+    }
+    if (expand) expand.hidden = false;
+    if (flow) {
+      try {
+        flow.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+      } catch (_) {
+        flow.scrollIntoView();
+      }
+      if (options.attention !== false) {
+        flow.classList.remove("attention");
+        // Force reflow so repeated pulses still animate.
+        void flow.offsetWidth;
+        flow.classList.add("attention");
+        window.clearTimeout(revealServiceFlow.timer);
+        revealServiceFlow.timer = window.setTimeout(() => flow.classList.remove("attention"), 1500);
+      }
+    }
+    if (options.toast) showToast(options.toast, options.toastDuration || 2600);
+  }
+
+  function clearDestinationCandidates() {
+    const box = byId("destinationCandidates");
+    if (!box) return;
+    box.innerHTML = "";
+    box.hidden = true;
+  }
+
+  function showDestinationCandidates(candidates) {
+    const box = byId("destinationCandidates");
+    const reply = byId("aiReply");
+    if (!box) return;
+    const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+    if (list.length < 2) {
+      clearDestinationCandidates();
+      return;
+    }
+    if (reply) {
+      reply.hidden = false;
+      reply.classList.add("visible");
+    }
+    box.hidden = false;
+    box.innerHTML = list.map((candidate, index) => {
+      const name = String(candidate.name || candidate.destination || candidate.label || `候选 ${index + 1}`).trim();
+      const city = String(candidate.city || "").trim();
+      const address = String(candidate.address || candidate.district || "").trim();
+      const meta = address || city;
+      const title = meta ? `${name} · ${meta}` : name;
+      const label = meta
+        ? `<strong>${escapeHtml(name)}</strong><small>${escapeHtml(meta)}</small>`
+        : `<strong>${escapeHtml(name)}</strong>`;
+      return `<button type="button" class="destination-candidate" data-candidate-index="${index}" title="${escapeHtml(title)}">${label}</button>`;
+    }).join("");
+    box.dataset.candidates = JSON.stringify(list.map((candidate) => {
+      const coordinate = candidate.coordinate || candidate.location || candidate.lnglat || null;
+      return {
+        name: candidate.name || candidate.destination || candidate.label || "",
+        address: candidate.address || candidate.district || candidate.city || "",
+        location: coordinate,
+        coordinate,
+        destination: candidate.destination || candidate.name || candidate.label || ""
+      };
+    }));
+  }
+
+  async function pickDestinationCandidate(index) {
+    const box = byId("destinationCandidates");
+    if (!box?.dataset.candidates) return;
+    let list = [];
+    try { list = JSON.parse(box.dataset.candidates || "[]"); } catch (_) { list = []; }
+    const candidate = list[Number(index)];
+    if (!candidate) return;
+    const name = String(candidate.name || candidate.destination || "").trim();
+    if (!name) return;
+    const location = candidate.location || candidate.coordinate || null;
+    const input = byId("intentInput");
+    const current = input ? input.value.trim() : "";
+    const nextMessage = current
+      ? (/前往|去|到/.test(current) ? current.replace(/(前往|去|到)\s*[^，,。；;]*?/, `$1${name}`) : `${current}，目的地定为${name}`)
+      : `从能链北京总部前往${name}`;
+    if (input) {
+      input.value = nextMessage.includes(name) ? nextMessage : `从能链北京总部前往${name}`;
+      fitIntentInput();
+    }
+    clearDestinationCandidates();
+    setAiReply(`已选择目的地「${name}」，继续规划…`);
+    setText("aiReplyMeta", "已选定候选目的地");
+    await parseIntent({ explicitDestination: name, destinationLocation: location });
+  }
+
+  const voiceIntent = {
+    recorder: null,
+    stream: null,
+    chunks: [],
+    active: false
+  };
+
+  function setVoiceRecordingState(active) {
+    voiceIntent.active = Boolean(active);
+    const button = byId("voiceIntentButton");
+    if (!button) return;
+    button.classList.toggle("recording", voiceIntent.active);
+    button.setAttribute("aria-pressed", voiceIntent.active ? "true" : "false");
+    button.title = voiceIntent.active ? "停止录音" : "语音输入";
+    const icon = button.querySelector("i, svg");
+    if (icon && icon.tagName === "I") icon.setAttribute("data-lucide", voiceIntent.active ? "square" : "mic");
+    refreshIcons();
+  }
+
+  async function stopVoiceIntent() {
+    if (voiceIntent.recorder && voiceIntent.recorder.state !== "inactive") {
+      try { voiceIntent.recorder.stop(); } catch (_) { /* ignore */ }
+    }
+    if (voiceIntent.stream) {
+      voiceIntent.stream.getTracks().forEach((track) => track.stop());
+      voiceIntent.stream = null;
+    }
+  }
+
+  async function submitVoiceIntent(blob) {
+    if (!blob || !blob.size) {
+      showToast("未采集到有效语音，请重试", 2800);
+      return;
+    }
+    const form = new FormData();
+    const extension = (blob.type || "").includes("ogg") ? "ogg" : (blob.type || "").includes("mp4") ? "m4a" : "webm";
+    form.append("file", blob, `intent.${extension}`);
+    form.append("audio", blob, `intent.${extension}`);
+    try {
+      const response = await fetch("/api/stt", { method: "POST", body: form, headers: { Accept: "application/json" } });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 503 || payload.error === "STT_NOT_CONFIGURED" || payload.code === "STT_NOT_CONFIGURED") {
+        showToast("未配置语音识别", 3200);
+        return;
+      }
+      if (!response.ok) throw new Error(payload.error || `HTTP_${response.status}`);
+      const text = String(payload.text || payload.transcript || payload.result || "").trim();
+      if (!text) {
+        showToast("未识别到有效文本，请重试", 2800);
+        return;
+      }
+      const input = byId("intentInput");
+      if (input) {
+        input.value = text;
+        fitIntentInput();
+        state.manualDeadlineOverride = null;
+        state.manualArrivalReserveOverride = null;
+      }
+      showToast("语音已写入输入框，请确认后点「开始 AI 智能规划」", 3400);
+    } catch (error) {
+      if (String(error?.message || "").includes("STT_NOT_CONFIGURED")) showToast("未配置语音识别", 3200);
+      else showToast("语音识别失败，请稍后重试", 3200);
+    }
+  }
+
+  async function toggleVoiceIntent() {
+    if (voiceIntent.active) {
+      await stopVoiceIntent();
+      return;
+    }
+    if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
+      showToast("当前环境不支持语音输入", 3200);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      voiceIntent.stream = stream;
+      voiceIntent.chunks = [];
+      const preferred = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+      const mimeType = preferred.find((type) => window.MediaRecorder.isTypeSupported?.(type)) || "";
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      voiceIntent.recorder = recorder;
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data && event.data.size) voiceIntent.chunks.push(event.data);
+      });
+      recorder.addEventListener("stop", async () => {
+        setVoiceRecordingState(false);
+        const blob = new Blob(voiceIntent.chunks, { type: recorder.mimeType || "audio/webm" });
+        voiceIntent.chunks = [];
+        if (voiceIntent.stream) {
+          voiceIntent.stream.getTracks().forEach((track) => track.stop());
+          voiceIntent.stream = null;
+        }
+        await submitVoiceIntent(blob);
+      });
+      recorder.start();
+      setVoiceRecordingState(true);
+      showToast("正在听写，再次点击结束", 2200);
+    } catch (error) {
+      setVoiceRecordingState(false);
+      if (voiceIntent.stream) {
+        voiceIntent.stream.getTracks().forEach((track) => track.stop());
+        voiceIntent.stream = null;
+      }
+      const name = String(error?.name || "");
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") showToast("未获得麦克风权限", 3200);
+      else if (name === "NotFoundError") showToast("未检测到可用麦克风", 3200);
+      else showToast("无法启动语音输入", 3200);
+    }
+  }
+
   async function postJson(path, body, timeoutMs) {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), timeoutMs || 45000);
@@ -249,6 +472,7 @@
     if (meta) meta.textContent = state.aiActive ? "正在理解并规划" : "规划已完成";
     reply.hidden = !message;
     reply.classList.toggle("visible", Boolean(message));
+    if (!message) clearDestinationCandidates();
   }
 
   function setPlanningVisibility(hasPlan) {
@@ -1769,18 +1993,20 @@
     button.classList.toggle("infeasible", !record.feasible);
     if (name) name.textContent = record.displayName || { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }[record.key];
     if (strong) strong.textContent = formatClock(record.arrival);
+    const serviceName = record.servicePlan?.name || "";
     if (metrics) {
       metrics.innerHTML = record.directTrip
         ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>直达 <b>无需补能</b></span><span>到达 <b>${record.arrivalSoc}%</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span>`
         : record.serviceOnly
-          ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>服务 <b>${record.servicePlan?.name || "已加入"}</b></span><span>到达 <b>${record.arrivalSoc}%</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
+          ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>服务 <b>${serviceName || "已加入"}</b></span><span>到达 <b>${record.arrivalSoc}%</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
         : record.multiStop
-            ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>补能 <b>${record.stopCount} 次</b></span><span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>P90 <b>${record.p90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
-            : `<span>用时 <b>${formatDuration(record.total)}</b></span><span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>P50 <b>${record.station?.p50 ?? "—"}分</b></span><span>P90 <b>${record.station?.p90 ?? "—"}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`;
+            ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>补能 <b>${record.stopCount} 次</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>P90 <b>${record.p90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
+            : `<span>用时 <b>${formatDuration(record.total)}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>P50 <b>${record.station?.p50 ?? "—"}分</b></span><span>P90 <b>${record.station?.p90 ?? "—"}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`;
     }
     if (tag) {
       if (record.directTrip) tag.textContent = "无需补能";
       else if (record.serviceOnly) tag.textContent = "服务已加入";
+      else if (record.servicePlan) tag.textContent = "含服务";
       else if (!record.canReachStation) tag.textContent = "无法安全到站";
       else if (!record.detourWithinLimit) tag.textContent = "绕行超限";
       else if (!record.targetSocMet) tag.textContent = "目标电量不可达";
@@ -1795,19 +2021,19 @@
     if (stationLine) stationLine.textContent = record.directTrip
       ? `无需${state.energyType === "fuel" ? "加油" : "补能"} · 直达 ${state.destinationName} · 到达 ${record.arrivalSoc}%`
       : record.serviceOnly
-        ? `服务停靠 · ${record.servicePlan?.name || "沿线服务"} · ETA 已按真实路线重算`
+        ? `服务停靠 · ${serviceName || "沿线服务"} · ETA 已按真实路线重算`
       : record.multiStop
-        ? `连续${state.energyType === "fuel" ? "加油" : "补能"} ${record.stopCount} 次 · ${record.stops.map((stop) => stop.name).join(" → ")} · 到达 ${record.arrivalSoc}%`
+        ? `连续${state.energyType === "fuel" ? "加油" : "补能"} ${record.stopCount} 次${serviceName ? ` · 含 ${serviceName}` : ""} · ${record.stops.map((stop) => stop.name).join(" → ")} · 到达 ${record.arrivalSoc}%`
       : !record.canReachStation
         ? (record.planningFailure || `当前余量不足以安全抵达候选${state.energyType === "fuel" ? "加油站" : "充电站"} · 不建议执行`)
-        : `${state.energyType === "fuel" ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"} · 到达 ${record.arrivalSoc}%`;
+        : `${state.energyType === "fuel" ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"}${serviceName ? ` · 含 ${serviceName}` : ""} · 到达 ${record.arrivalSoc}%`;
     if (reason) {
       if (record.directTrip) {
         reason.textContent = `当前${state.energyType === "fuel" ? "油量" : "电量"}可满足${arrivalReserveDescription(record)}，不引入额外补能停靠。`;
         return;
       }
       if (record.serviceOnly) {
-        reason.textContent = `已加入 ${record.servicePlan?.name || "沿线服务"} · 预计额外 ${record.servicePlan?.extraMinutes || 0} 分钟 · 到达余量 ${record.arrivalSoc}%。`;
+        reason.textContent = `已加入 ${serviceName || "沿线服务"} · 预计额外 ${record.servicePlan?.extraMinutes || 0} 分钟 · 到达余量 ${record.arrivalSoc}%。`;
         return;
       }
       if (record.multiStop) {
@@ -1824,7 +2050,8 @@
             ? `当前时限下保留同一安全道路走廊，补能采用低价时段/优惠价模拟；费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}。`
             : `费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}；优先在较低模拟站价处补能。`
         };
-        reason.textContent = summaries[record.key] || `已逐段核验 ${record.stopCount} 次${state.energyType === "fuel" ? "加油" : "补能"}：总等待 P90 ${record.p90Wait} 分钟。`;
+        const baseReason = summaries[record.key] || `已逐段核验 ${record.stopCount} 次${state.energyType === "fuel" ? "加油" : "补能"}：总等待 P90 ${record.p90Wait} 分钟。`;
+        reason.textContent = serviceName ? `${baseReason} 已含服务停靠 ${serviceName}。` : baseReason;
         return;
       }
       if (!record.canReachStation) {
@@ -1926,7 +2153,8 @@
       return;
     }
     if (record.multiStop) {
-      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>连续补能 ${record.stopCount} 次</strong><small>${formatClock(record.arrival)} 到达 · 余量 ${record.arrivalSoc}%</small>`;
+      const serviceNote = record.servicePlan?.name ? ` · 含 ${escapeHtml(record.servicePlan.name)}` : "";
+      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>连续补能 ${record.stopCount} 次${serviceNote}</strong><small>${formatClock(record.arrival)} 到达 · 余量 ${record.arrivalSoc}%</small>`;
       return;
     }
     if (!record.station) {
@@ -1935,7 +2163,8 @@
       summary.innerHTML = `<span>${record.displayName || "方案不可执行"}</span><strong>${title}</strong><small>${escapeHtml(hint)}</small>`;
       return;
     }
-    summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>途经 · ${record.station.name}</strong><small>${formatClock(record.arrival)} ${record.feasible ? "到达" : `· 超时 ${record.lateMinutes} 分`}</small>`;
+    const serviceNote = record.servicePlan?.name ? ` · 含 ${escapeHtml(record.servicePlan.name)}` : "";
+    summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>途经 · ${record.station.name}${serviceNote}</strong><small>${formatClock(record.arrival)} ${record.feasible ? "到达" : `· 超时 ${record.lateMinutes} 分`}</small>`;
   }
 
   function renderStopTimeline(record) {
@@ -2108,31 +2337,66 @@
   }
 
   function serviceTriggerForRecord(record) {
+    // Service prompts are rule-based demo UX, not a claim that total trip time is
+    // 2 hours. `record.duration` comes from the high-de driving route (minutes of
+    // pure driving). Rest/coffee triggers fire only on long corridors and point at
+    // an intermediate rest window, while the title must still show full trip time.
     if (!record || record.servicePlan || Number(record.duration || 0) < 75) return null;
     const departure = state.departureMinutes;
     const duration = Number(record.duration || 0);
+    const driveLabel = formatDuration(duration);
     const lunch = nextDailyMoment(departure, duration, 11 * 60 + 30, 13 * 60 + 30);
     const dinner = nextDailyMoment(departure, duration, 17 * 60 + 30, 20 * 60);
     const mealMoment = [lunch, dinner].filter(Number.isFinite).sort((a, b) => a - b)[0];
     if (Number.isFinite(mealMoment)) {
-      return { kind: "meal", icon: "utensils", title: `预计 ${formatClock(mealMoment)} 接近用餐时段`, text: "是否在路线附近安排简餐或咖啡？确认后会把服务停靠加入路线并重算 ETA。", targetMinute: mealMoment, progress: Math.max(0.08, Math.min(0.92, (mealMoment - departure) / Math.max(1, duration))) };
+      return {
+        kind: "meal",
+        icon: "utensils",
+        title: `预计 ${formatClock(mealMoment)} 接近用餐时段`,
+        text: `主路线纯驾驶约 ${driveLabel}。是否在该时刻附近安排简餐或咖啡？确认后会把服务停靠加入路线并重算 ETA。`,
+        targetMinute: mealMoment,
+        progress: Math.max(0.08, Math.min(0.92, (mealMoment - departure) / Math.max(1, duration)))
+      };
     }
     if (duration >= 130) {
-      const targetMinute = departure + 120;
-      return { kind: "rest", icon: "armchair", title: `预计 ${formatClock(targetMinute)} 连续驾驶约 2 小时`, text: "是否安排短暂休息或咖啡？系统会优先找顺路服务点。", targetMinute, progress: Math.max(0.08, Math.min(0.92, 120 / duration)) };
+      // Suggest resting after ~2h on-road, not “trip total = 2 hours”.
+      const restAfterMinutes = 120;
+      const targetMinute = departure + restAfterMinutes;
+      return {
+        kind: "rest",
+        icon: "armchair",
+        title: `全程约 ${driveLabel} · 建议 ${formatClock(targetMinute)} 途中休息`,
+        text: `这是高德主路线纯驾驶时长（约 ${driveLabel}），不是把北京到目的地算成 2 小时。系统建议在出发后约 2 小时处短暂休息或咖啡，并优先找顺路服务点。`,
+        targetMinute,
+        progress: Math.max(0.08, Math.min(0.92, restAfterMinutes / duration))
+      };
     }
     if (duration >= 90) {
-      const targetMinute = departure + 90;
-      return { kind: "coffee", icon: "coffee", title: `预计 ${formatClock(targetMinute)} 可安排短暂停靠`, text: "是否查看沿线咖啡或休息建议？", targetMinute, progress: Math.max(0.08, Math.min(0.92, 90 / duration)) };
+      const restAfterMinutes = 90;
+      const targetMinute = departure + restAfterMinutes;
+      return {
+        kind: "coffee",
+        icon: "coffee",
+        title: `全程约 ${driveLabel} · 建议 ${formatClock(targetMinute)} 短暂停靠`,
+        text: `主路线纯驾驶约 ${driveLabel}。是否在出发后约 1.5 小时查看沿线咖啡或休息建议？`,
+        targetMinute,
+        progress: Math.max(0.08, Math.min(0.92, restAfterMinutes / duration))
+      };
     }
     return null;
   }
 
   function updateServiceNudge(record) {
     const nudge = byId("serviceNudge");
+    const expand = byId("expandInsight");
     const trigger = serviceTriggerForRecord(record);
     if (!nudge || !trigger) {
       if (nudge) nudge.hidden = true;
+      if (expand && expand.dataset.nudgeLabel === "1") {
+        const label = expand.querySelector("span");
+        if (label) label.textContent = "站点详情";
+        delete expand.dataset.nudgeLabel;
+      }
       return;
     }
     const key = `${state.destinationName}|${record.key}|${trigger.kind}|${Math.round(trigger.targetMinute)}`;
@@ -2149,6 +2413,20 @@
     setText("serviceNudgeText", suggestion.text);
     const icon = byId("serviceNudgeIcon");
     if (icon) icon.setAttribute("data-lucide", suggestion.icon);
+    if (expand && !suggestion.accepted) {
+      const label = expand.querySelector("span");
+      if (label) {
+        // Right-panel strip: first-time users often miss the service block below.
+        label.textContent = "站点·服务";
+        expand.dataset.nudgeLabel = "1";
+        expand.setAttribute("aria-label", "展开站点详情与非油服务推荐");
+      }
+    } else if (expand && suggestion.accepted && expand.dataset.nudgeLabel === "1") {
+      const label = expand.querySelector("span");
+      if (label) label.textContent = "站点详情";
+      expand.setAttribute("aria-label", "展开站点详情");
+      delete expand.dataset.nudgeLabel;
+    }
     refreshIcons();
   }
 
@@ -2188,6 +2466,7 @@
     suggestion.loading = true;
     const requestId = ++state.serviceRequestVersion;
     byId("serviceNudge").hidden = true;
+    revealServiceFlow({ attention: true, toast: "请在右侧查看非油服务推荐" });
     renderServiceRecommendations(record);
     const center = pointAtPathProgress(record.path, suggestion.progress);
     if (!center) return;
@@ -2229,6 +2508,11 @@
     }));
     suggestion.loading = false;
     renderServiceRecommendations(record);
+    if (suggestion.options.length) {
+      revealServiceFlow({ attention: true, toast: `已在右侧生成 ${suggestion.options.length} 个可加入服务` });
+    } else {
+      revealServiceFlow({ attention: false });
+    }
   }
 
   function renderServiceRecommendations(record) {
@@ -2440,6 +2724,7 @@
     const estimateNote = estimatedServiceRoute ? "路线接口暂不可用，当前 ETA 为沿线绕行估算，待二次核验。" : "ETA 已按真实服务停靠重新计算。";
     setAiReply(`已将 ${service.name} 加入行程，${switchNote}${estimateNote}`);
     showToast(`已加入 ${service.name}${switchedToFastest ? "，已切换为最快到达" : ""}${estimatedServiceRoute ? "，等待路线二次核验" : "，ETA 已按真实路线重算"}`, 3400);
+    revealServiceFlow({ attention: true });
   }
 
   function renderStationSummary() {
@@ -2668,12 +2953,13 @@
     showToast(message, 4600);
   }
 
-  async function parseIntent() {
+  async function parseIntent(options = {}) {
     const input = byId("intentInput");
     const typedValue = input ? input.value.trim() : "";
     const value = typedValue || DEFAULT_DEMO_INTENT;
     if (state.aiActive) return;
     if (input && !typedValue) input.value = value;
+    clearDestinationCandidates();
     readManualControls();
     state.aiActive = true;
     const button = byId("planButton");
@@ -2695,15 +2981,46 @@
           energyType: state.energyType,
           priority: state.priority,
           maxDetourKm: state.maxDetourKm,
-          services: state.aiContext?.services || []
+          services: state.aiContext?.services || [],
+          explicitDestination: options.explicitDestination || null,
+          destinationLocation: options.destinationLocation || null
         }
       }, 60000);
       const parsed = payload.parsed || payload.intent || payload.plan || localIntentFallback(value);
+      if (options.explicitDestination) parsed.destination = options.explicitDestination;
+      if (options.destinationLocation) {
+        payload.destinationLocation = options.destinationLocation;
+        parsed.destinationLocation = options.destinationLocation;
+      }
+      const candidates = payload.destinationCandidates || parsed.destinationCandidates || [];
+      // Always pause for a short pick list when the backend flags ambiguity or
+      // when several named candidates exist without an exact committed location.
+      const needsPick = payload.destinationNeedsPick === true
+        || ((!payload.destinationLocation && !options.destinationLocation) && Array.isArray(candidates) && candidates.length >= 2);
+      if (needsPick && Array.isArray(candidates) && candidates.length >= 2) {
+        setPlanningVisibility(false);
+        setAiStatus("请选择目的地", "unresolved");
+        setAiReply(`“${parsed.destination || "该地点"}”找到 ${candidates.length} 个可能目的地，请点选一个继续规划。`);
+        setText("aiReplyMeta", "目的地待确认");
+        setText("planHint", "地点不完全吻合时，请先从列表选择准确目的地。");
+        showDestinationCandidates(candidates);
+        showToast("请先选择一个目的地", 3200);
+        return;
+      }
       const applied = applyParsedIntent(parsed, payload);
       if (!applied.ok) {
+        if (Array.isArray(candidates) && candidates.length >= 2) {
+          setAiStatus("请选择目的地", "unresolved");
+          setAiReply(payload.assistantReply || `“${applied.destination || "该地点"}”有多个匹配结果，请选择一个继续。`);
+          setText("aiReplyMeta", "目的地待确认");
+          showDestinationCandidates(candidates);
+          showToast("请先选择一个目的地候选", 3200);
+          return;
+        }
         showUnresolvedDestination(applied.destination);
         return;
       }
+      clearDestinationCandidates();
       setAiReply(payload.assistantReply || parsed.assistantReply || "已识别出行约束，正在计算真实路线和补能站。 ");
       if (label) label.textContent = "正在比较路线与站点…";
       await recomputePlan({ manageButton: false, silent: true });
@@ -2714,7 +3031,9 @@
       showToast(payload.aiUsed === false ? "AI 暂不可用，已用本地规则完成规划" : planningCompletionMessage());
     } catch (error) {
       const parsed = localIntentFallback(value);
-      const applied = applyParsedIntent(parsed, {});
+      if (options.explicitDestination) parsed.destination = options.explicitDestination;
+      if (options.destinationLocation) parsed.destinationLocation = options.destinationLocation;
+      const applied = applyParsedIntent(parsed, options.destinationLocation ? { destinationLocation: options.destinationLocation } : {});
       if (!applied.ok) {
         showUnresolvedDestination(applied.destination);
         return;
@@ -3347,6 +3666,7 @@
     initDemoNotice();
     initFallback();
     setPlanningVisibility(false);
+    fitIntentInput();
     if (window.innerWidth <= 760) byId("insightPanel").classList.add("hidden");
     $$("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
     $$(".route-option").forEach((button) => button.addEventListener("click", () => selectRoute(button.dataset.route)));
@@ -3372,10 +3692,22 @@
       await loadValidation(true);
       showToast("已按相同输入和随机种子重新运行验证");
     });
-    byId("intentInput").addEventListener("keydown", (event) => { if (event.key === "Enter") parseIntent(); });
+    byId("intentInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        parseIntent();
+      }
+    });
     byId("intentInput").addEventListener("input", () => {
       state.manualDeadlineOverride = null;
       state.manualArrivalReserveOverride = null;
+      fitIntentInput();
+    });
+    byId("voiceIntentButton")?.addEventListener("click", () => { toggleVoiceIntent(); });
+    byId("destinationCandidates")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-candidate-index]");
+      if (!button) return;
+      pickDestinationCandidate(button.dataset.candidateIndex);
     });
     byId("planButton").addEventListener("click", parseIntent);
     $$('[data-energy-type]').forEach((button) => button.addEventListener("click", () => setEnergyType(button.dataset.energyType)));

@@ -10,6 +10,7 @@ import { validateStrategies } from "./lib/validate.mjs";
 import { executeFeishu } from "./lib/feishu.mjs";
 import { buildLongTripPlans } from "./lib/longtrip.mjs";
 import { API_CONTRACTS } from "./lib/contracts.mjs";
+import { cleanTranscriptText, polishTranscriptText } from "./lib/stt.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const config = await loadConfig({ root });
@@ -166,14 +167,111 @@ async function poiApi(requestUrl, response) {
 }
 
 async function runtimeConfig(response) {
-  const { amapKey, securityJsCode } = config;
-  const body = `window.FLOWTWIN_CONFIG=${JSON.stringify({ amapKey, securityJsCode, mapMode: amapKey ? "live" : "fallback" })};`;
+  const { amapKey, securityJsCode, sttApiKey } = config;
+  // Only browser-safe map settings leave the server. STT keys stay server-side;
+  // expose a boolean so the mic button can show a clear "not configured" state.
+  const body = `window.FLOWTWIN_CONFIG=${JSON.stringify({
+    amapKey,
+    securityJsCode,
+    mapMode: amapKey ? "live" : "fallback",
+    sttEnabled: Boolean(sttApiKey)
+  })};`;
   response.writeHead(200, {
     "Content-Type": "text/javascript; charset=utf-8",
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff"
   });
   response.end(body);
+}
+
+async function readRawBody(request, maxBytes = 8_000_000) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > maxBytes) throw Object.assign(new Error("REQUEST_TOO_LARGE"), { statusCode: 413 });
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function extractMultipartFile(buffer, contentType) {
+  const boundaryMatch = String(contentType || "").match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return null;
+  const boundary = boundaryMatch[1] || boundaryMatch[2];
+  const parts = buffer.toString("binary").split(`--${boundary}`);
+  for (const part of parts) {
+    if (!/name="(?:file|audio)"/i.test(part) || !/Content-Disposition:/i.test(part)) continue;
+    const headerEnd = part.indexOf("\r\n\r\n");
+    if (headerEnd < 0) continue;
+    const headers = part.slice(0, headerEnd);
+    let body = part.slice(headerEnd + 4);
+    if (body.endsWith("\r\n")) body = body.slice(0, -2);
+    if (body.endsWith("--")) body = body.slice(0, -2);
+    if (body.endsWith("\r\n")) body = body.slice(0, -2);
+    const filename = headers.match(/filename="([^"]*)"/i)?.[1] || "audio.webm";
+    const mime = headers.match(/Content-Type:\s*([^\r\n]+)/i)?.[1]?.trim() || "application/octet-stream";
+    return {
+      filename,
+      mime,
+      data: Buffer.from(body, "binary")
+    };
+  }
+  return null;
+}
+
+async function sttApi(request, response) {
+  // Keys stay server-side; never log Authorization or audio payloads.
+  if (!config.sttApiKey || !config.sttBaseUrl) return json(response, 503, { error: "STT_NOT_CONFIGURED" });
+  const contentType = String(request.headers["content-type"] || "");
+  const raw = await readRawBody(request, 8_000_000);
+  if (!raw.length) return json(response, 400, { error: "STT_EMPTY_AUDIO" });
+
+  let fileBuffer = raw;
+  let filename = "audio.webm";
+  let mime = contentType.split(";")[0].trim() || "application/octet-stream";
+
+  if (contentType.toLowerCase().includes("multipart/form-data")) {
+    const file = extractMultipartFile(raw, contentType);
+    if (!file?.data?.length) return json(response, 400, { error: "AUDIO_FILE_REQUIRED" });
+    fileBuffer = file.data;
+    filename = file.filename || filename;
+    mime = file.mime || mime;
+  } else if (!contentType || contentType.toLowerCase().includes("application/json")) {
+    return json(response, 400, { error: "AUDIO_BODY_REQUIRED" });
+  }
+
+  const form = new FormData();
+  form.append("model", config.sttModel || "FunAudioLLM/SenseVoiceSmall");
+  form.append("file", new Blob([fileBuffer], { type: mime }), filename);
+
+  try {
+    const upstream = await fetch(`${config.sttBaseUrl}/audio/transcriptions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.sttApiKey}` },
+      body: form,
+      signal: AbortSignal.timeout(45000)
+    });
+    const payload = await upstream.json().catch(() => ({}));
+    if (!upstream.ok) {
+      return json(response, upstream.status === 429 ? 429 : 502, {
+        error: upstream.status === 429 ? "STT_RATE_LIMITED" : "STT_UPSTREAM_ERROR"
+      });
+    }
+    const rawText = String(payload.text || "").trim();
+    if (!rawText) return json(response, 502, { error: "STT_EMPTY_TRANSCRIPT" });
+    // SenseVoice embeds emotion/language tags; strip them, then optionally
+    // ask the plan model to polish into a clean travel sentence.
+    const stripped = cleanTranscriptText(rawText);
+    const text = await polishTranscriptText(stripped || rawText, config);
+    if (!text) return json(response, 502, { error: "STT_EMPTY_TRANSCRIPT" });
+    return json(response, 200, {
+      text,
+      rawText: rawText === text ? undefined : rawText
+    });
+  } catch {
+    return json(response, 502, { error: "STT_UPSTREAM_ERROR" });
+  }
 }
 
 async function readJsonBody(request, maxBytes = 32768) {
@@ -289,11 +387,12 @@ createServer(async (request, response) => {
     if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
     if (requestUrl.pathname === "/api/poi") return await poiApi(requestUrl, response);
   if (request.method === "POST" && requestUrl.pathname === "/api/plan") return await planApi(request, response);
-  if (request.method === "POST" && requestUrl.pathname === "/api/forecast") return await forecastApi(request, response);
-  if (request.method === "POST" && requestUrl.pathname === "/api/longtrip") return await longTripApi(request, response);
+    if (request.method === "POST" && requestUrl.pathname === "/api/forecast") return await forecastApi(request, response);
+    if (request.method === "POST" && requestUrl.pathname === "/api/longtrip") return await longTripApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/operator/simulate") return await operatorApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/validate") return await validateApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/execution") return await executionApi(request, response);
+    if (request.method === "POST" && requestUrl.pathname === "/api/stt") return await sttApi(request, response);
     if (requestUrl.pathname === "/runtime-config.js") return await runtimeConfig(response);
     return await staticFile(requestUrl.pathname, response);
   } catch (error) {

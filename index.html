@@ -1270,26 +1270,34 @@
       }
 
       .ai-request {
+        position: relative;
         display: grid;
         grid-template-columns: 1fr 38px;
         gap: 7px;
         margin-bottom: 12px;
       }
 
-      .ai-request input {
+      .ai-request textarea {
+        box-sizing: border-box;
         min-width: 0;
-        height: 42px;
-        padding: 0 11px;
+        width: 100%;
+        min-height: 42px;
+        max-height: 64px;
+        padding: 10px 34px 10px 11px;
         border: 1px solid var(--line);
         border-radius: 6px;
         outline: 0;
+        resize: none;
+        overflow-y: auto;
         background: var(--surface-soft);
         color: var(--text);
+        font: inherit;
         font-size: 11px;
+        line-height: 1.4;
         transition: border-color 160ms ease, background 160ms ease;
       }
 
-      .ai-request input:focus {
+      .ai-request textarea:focus {
         border-color: var(--blue);
         background: var(--surface-solid);
       }
@@ -1298,15 +1306,24 @@
         display: grid;
         width: 38px;
         height: 42px;
+        align-self: start;
         place-items: center;
         border: 1px solid #c8d6f6;
         border-radius: 6px;
         background: var(--blue-soft);
         color: #315bb8;
+        cursor: pointer;
       }
 
       .ai-parse-button:hover {
         background: #d5e0ff;
+      }
+
+      .ai-parse-button.recording {
+        border-color: #e7a0a0;
+        background: #fdecec;
+        color: #c0392b;
+        box-shadow: 0 0 0 2px rgba(192, 57, 43, 0.12);
       }
 
       .ai-parse-button svg {
@@ -1439,6 +1456,51 @@
         color: var(--muted);
         font-size: 10px;
         line-height: 1.45;
+      }
+
+      .destination-candidates {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .destination-candidates[hidden] {
+        display: none;
+      }
+
+      .destination-candidate {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1px;
+        min-height: 28px;
+        max-width: 100%;
+        padding: 5px 10px;
+        border: 1px solid #c8d6f6;
+        border-radius: 8px;
+        background: white;
+        color: #315bb8;
+        font-size: 10px;
+        font-weight: 650;
+        line-height: 1.25;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .destination-candidate strong {
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .destination-candidate small {
+        color: var(--muted);
+        font-size: 8px;
+        font-weight: 500;
+      }
+
+      .destination-candidate:hover {
+        background: var(--blue-soft);
       }
 
       .ai-thinking {
@@ -2719,20 +2781,10 @@
         height: 15px;
       }
 
-      .ai-request {
-        position: relative;
-        display: block;
-      }
-
-      .ai-request input {
-        width: 100%;
-        padding-right: 34px;
-      }
-
       .ai-request::after {
         position: absolute;
         top: 13px;
-        right: 12px;
+        right: 50px;
         width: 15px;
         height: 15px;
         border: 1px solid #aeb8c7;
@@ -2746,12 +2798,26 @@
         pointer-events: none;
       }
 
+      #serviceFlow.attention,
+      .arrival-loop.attention {
+        border-radius: 8px;
+        box-shadow: 0 0 0 1px rgba(22, 143, 126, 0.35), 0 0 0 6px rgba(22, 143, 126, 0.1);
+        animation: service-attention 1.5s ease-out 1;
+      }
+
+      @keyframes service-attention {
+        0% { box-shadow: 0 0 0 1px rgba(22, 143, 126, 0.55), 0 0 0 2px rgba(22, 143, 126, 0.18); }
+        70% { box-shadow: 0 0 0 1px rgba(22, 143, 126, 0.28), 0 0 0 8px rgba(22, 143, 126, 0.08); }
+        100% { box-shadow: 0 0 0 1px rgba(22, 143, 126, 0.12), 0 0 0 0 rgba(22, 143, 126, 0); }
+      }
+
       .ai-input-hint {
         position: absolute;
         z-index: 20;
         top: calc(100% + 7px);
         right: 0;
         left: 0;
+        grid-column: 1 / -1;
         display: none;
         padding: 9px 10px;
         border: 1px solid #c8d6f6;
@@ -3185,12 +3251,16 @@
         </div>
 
         <div class="ai-request" aria-label="自然语言出行约束">
-                <input id="intentInput" value="从能链北京总部前往上海东方明珠广播电视塔，优先准时" aria-label="用自然语言描述出行要求" aria-describedby="intentInputHint" />
+          <textarea id="intentInput" rows="1" aria-label="用自然语言描述出行要求" aria-describedby="intentInputHint">从能链北京总部前往上海东方明珠广播电视塔，优先准时</textarea>
+          <button type="button" class="ai-parse-button" id="voiceIntentButton" aria-label="语音输入" title="语音输入">
+            <i data-lucide="mic"></i>
+          </button>
           <div class="ai-input-hint" id="intentInputHint" role="tooltip"><strong>可直接体验或改写：</strong>去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时。</div>
         </div>
         <div class="ai-feedback" id="aiReply" aria-live="polite" hidden>
           <div class="ai-feedback-head"><span>AI 行程助理</span><small id="aiReplyMeta">已理解当前需求</small></div>
           <div class="ai-feedback-message" id="aiReplyText">我会优先保证 19:30 前抵达，并在实际道路沿线筛选低排队风险的补能站。</div>
+          <div class="destination-candidates" id="destinationCandidates" hidden></div>
           <div class="ai-thinking" id="aiThinking" hidden>正在理解约束并调用规划工具</div>
         </div>
         <section class="service-nudge" id="serviceNudge" aria-live="polite" hidden>

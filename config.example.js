@@ -5,6 +5,9 @@ window.FLOWTWIN_CONFIG = {
   aiBaseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
   aiApiKey: "YOUR_AI_API_KEY",
   aiModel: "YOUR_MODEL_NAME",
+  sttApiKey: "YOUR_SILICONFLOW_API_KEY",
+  sttBaseUrl: "https://api.siliconflow.cn/v1",
+  sttModel: "FunAudioLLM/SenseVoiceSmall",
   feishuWebhookUrl: "",
   mapMode: "live"
 };
