@@ -141,7 +141,11 @@
     paymentReceipt: null
   };
 
-  const DEFAULT_DEMO_INTENT = "从能链北京总部前往上海东方明珠广播电视塔，最晚23:15前到，到达至少保留20%，优先准时";
+  // The first-run example intentionally leaves arrival time and reserve open.
+  // Those are optional controls: pinning them in a static demo sentence makes
+  // the experience depend on the viewer's local clock and can turn a useful
+  // meal recommendation into an artificial "late" failure.
+  const DEFAULT_DEMO_INTENT = "从能链北京总部前往上海东方明珠广播电视塔，优先准时";
 
   const ENERGY_PROFILES = {
     electric: { capacity: 82, consumptionPerKm: 0.18, transferEfficiency: 0.92, safetyReservePercent: 2, unit: "kWh" },
@@ -2148,6 +2152,35 @@
     refreshIcons();
   }
 
+  function passesServiceRecommendationPrecheck(record, service) {
+    // A recommendation should not be a card that is very likely to fail as
+    // soon as the user clicks it. First reject a POI whose estimated road
+    // detour already exceeds the same long-trip allowance used by execution.
+    // When a hard arrival deadline is set, also keep a conservative time
+    // buffer. The definitive route/ETA is still computed after click.
+    if (!record || !service) return false;
+    const inline = Boolean(service.inlineStationId);
+    const estimatedRoadKm = inline ? 0 : Math.max(0.6, Number(service.detourKm || 0) * 2);
+    const base = state.baseRouteRecords[record.key] || state.baseRouteRecords.reliable || record;
+    const detourAllowanceKm = state.detourExplicit
+      ? Math.max(0, Number(state.maxDetourKm || 0))
+      : record.multiStop
+        ? Math.max(6, Math.min(16, Number(record.baseDistance || base.distance || 0) * 0.012))
+        : 0;
+    if (!inline && estimatedRoadKm > detourAllowanceKm + 1e-6) return false;
+    if (!hasArrivalDeadline()) return true;
+    const slackMinutes = Number(state.deadlineMinutes) - Number(record?.arrival);
+    if (!Number.isFinite(slackMinutes) || slackMinutes <= 0) return false;
+    const corridorKm = inline
+      ? 0
+      : Math.max(0.6, Number(service?.detourKm || 0) * 3);
+    const detourDriveMinutes = inline ? 0 : Math.max(2, Math.ceil(corridorKm / 0.72));
+    const dwellMinutes = inline ? Math.max(0, Number(service?.durationMinutes || 0) - 8) : Math.max(0, Number(service?.durationMinutes || 0));
+    const energyBufferMinutes = inline ? 0 : 3;
+    const conservativeExtraMinutes = detourDriveMinutes + dwellMinutes + energyBufferMinutes;
+    return conservativeExtraMinutes + 6 <= slackMinutes;
+  }
+
   async function loadServiceRecommendations(record) {
     const suggestion = state.serviceSuggestion;
     if (!record || !suggestion || suggestion.recordKey !== record.key || !state.AMap) return;
@@ -2168,7 +2201,7 @@
     const durationByType = { meal: 20, coffee: 12, rest: 15 };
     const iconByType = { meal: "utensils", coffee: "coffee", rest: "armchair" };
     const energyStops = record.stops?.length ? record.stops : record.station ? [record.station] : [];
-    suggestion.options = dedupePois(results.flat())
+    const candidates = dedupePois(results.flat())
       .map((poi) => {
         const type = poi.type === "meal" || poi.type === "coffee" ? poi.type : "rest";
         const nearestEnergyStop = energyStops.slice().sort((a, b) => distanceKm(a.location, poi.location) - distanceKm(b.location, poi.location))[0];
@@ -2186,7 +2219,14 @@
         });
       })
       .sort((a, b) => a.detourKm - b.detourKm)
-      .slice(0, 4);
+      .slice(0, 8);
+    const recommended = candidates.filter((service) => passesServiceRecommendationPrecheck(record, service));
+    suggestion.filteredOutCount = Math.max(0, candidates.length - recommended.length);
+    suggestion.options = recommended.slice(0, 4).map((service) => Object.assign({}, service, {
+      reason: hasArrivalDeadline()
+        ? `${service.reason} · 已通过到达时限预筛`
+        : service.reason
+    }));
     suggestion.loading = false;
     renderServiceRecommendations(record);
   }
@@ -2224,12 +2264,13 @@
       return;
     }
     const options = suggestion.options || [];
+    const excludedByDeadline = Number(suggestion.filteredOutCount || 0);
     if (dwellLabel) dwellLabel.textContent = `预计 ${formatClock(suggestion.targetMinute)} 经过 · 高德真实 POI`;
     container.innerHTML = options.length
       ? options.map((service) => `<button type="button" class="service-card ${state.selectedService === service.id ? "selected" : ""}" data-service="${escapeHtml(service.id)}"><i data-lucide="${service.icon}"></i><span><strong>${escapeHtml(service.name)}</strong><small>${escapeHtml(service.reason)}</small></span><span>约${service.durationMinutes}分</span></button>`).join("")
-      : '<div class="service-card"><i data-lucide="map-pin-off"></i><span><strong>附近未检索到合适服务</strong><small>可继续行驶，系统会在下一个时间窗口再次评估。</small></span></div>';
+      : `<div class="service-card"><i data-lucide="${excludedByDeadline ? "clock-alert" : "map-pin-off"}"></i><span><strong>${excludedByDeadline ? "当前约束下不建议增加服务停靠" : "附近未检索到合适服务"}</strong><small>${excludedByDeadline ? "候选服务会超出当前绕行或到达时间余量，已自动隐藏；可调整约束后重新查看。" : "可继续行驶，系统会在下一个时间窗口再次评估。"}</small></span></div>`;
     if (serviceButton) { serviceButton.disabled = true; serviceButton.textContent = "选择服务后继续"; }
-    setText("serviceStatus", options.length ? "选择服务后，系统将重新计算路线和 ETA" : "本次不增加服务停靠");
+    setText("serviceStatus", options.length ? `${excludedByDeadline ? "已按路线约束完成候选预筛；" : ""}选择服务后，系统将重新计算路线和 ETA` : excludedByDeadline ? "为满足当前路线约束，本次不增加服务停靠" : "本次不增加服务停靠");
     refreshIcons();
   }
 
