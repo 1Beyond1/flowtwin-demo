@@ -7,7 +7,7 @@ FlowTwin 面向能链命题，展示从车主自然语言需求到真实地图�
 ## 核心能力
 
 - AI 模型将中文需求解析为目的地、可选的最晚到达时间/到达余量、油电类型、绕行上限、优先级和服务偏好；不会把上一趟行程的默认值当作新用户的硬约束。
-- 支持可选语音输入：浏览器录音后由服务端转发语音识别（默认 SiliconFlow SenseVoice），并清理情感/语言标签；密钥不会下发到浏览器。
+- 支持可选语音输入：浏览器录音后由服务端转发到你配置的语音转写接口，并可清理常见情感/语言标签；密钥不会下发到浏览器。
 - 高德地图提供真实底图、全国地理编码/地点检索、沿线补能 POI 和驾车路线；短地名会优先规范化常见景区，不完全吻合时给出目的地候选列表供点选。
 - 支持长途连续补能，最多规划 6 次补能；当公开 POI 覆盖不足时，会给出明确标注“演示，需确认”的沿线候选，而不会伪装成真实充电设施。
 - 后端生成未来 0–30 分钟、每 5 分钟一档的站点占用率与 P50/P90 等待预测。
@@ -49,19 +49,32 @@ npm start
 
 ### 环境变量
 
+以下均为**占位示例**，请换成你自己的服务地址、Key 与模型名。AI 需兼容 OpenAI 风格的 `POST {AI_BASE_URL}/chat/completions`；语音转写需兼容 `POST {STT_BASE_URL}/audio/transcriptions`（multipart：`file` + `model`）。
+
 ```env
-AMAP_JS_KEY=高德Web端JS_API_Key
-AMAP_SECURITY_JS_CODE=高德安全密钥
-AMAP_WEB_SERVICE_KEY=高德Web服务Key
-AI_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3
-AI_API_KEY=模型服务Key
-AI_MODEL=your_model_name
-SILICONFLOW_API_KEY=可选的语音转写Key（也可用 STT_API_KEY）
-STT_BASE_URL=https://api.siliconflow.cn/v1
-STT_MODEL=FunAudioLLM/SenseVoiceSmall
-FEISHU_WEBHOOK_URL=可选的飞书机器人Webhook
+# 高德
+AMAP_JS_KEY=your_amap_web_js_key
+AMAP_SECURITY_JS_CODE=your_amap_security_js_code
+AMAP_WEB_SERVICE_KEY=your_amap_web_service_key
+
+# 意图解析（任意 OpenAI-compatible 接口）
+AI_BASE_URL=https://your-ai-gateway.example.com/v1
+AI_API_KEY=your_ai_api_key
+AI_MODEL=your_chat_model_name
+
+# 可选：语音转写（任意兼容 /audio/transcriptions 的网关）
+# 也可用 SILICONFLOW_API_KEY / SILICONFLOW_BASE_URL / SILICONFLOW_STT_MODEL 作为别名
+STT_API_KEY=your_stt_api_key
+STT_BASE_URL=https://your-stt-gateway.example.com/v1
+STT_MODEL=your_speech_to_text_model
+
+# 可选：飞书
+FEISHU_WEBHOOK_URL=
+
 PORT=4182
 ```
+
+`config.local.js` 中对应字段为 `aiBaseUrl` / `aiApiKey` / `aiModel`、`sttApiKey` / `sttBaseUrl` / `sttModel` 等，含义相同，仍用你自己的值覆盖示例。
 
 所有服务端密钥只从环境变量或被 Git 忽略的 `config.local.js` 读取，不会返回浏览器，也不会写入日志。`/runtime-config.js` 仅暴露 `amapKey`、`securityJsCode`、`mapMode` 以及可选的 `sttEnabled` 布尔值，从不下发 STT/AI/Web Service Key。
 
