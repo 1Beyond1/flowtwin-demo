@@ -1,4 +1,5 @@
 config.local.js
+config.local.js.bak-*
 runtime-config.js
 .env
 *.log

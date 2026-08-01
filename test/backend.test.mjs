@@ -2,11 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeAiBaseUrl } from "../lib/config.mjs";
 import { formatPlanResponse, parseTripIntent, scorePlaceCandidate } from "../lib/plan.mjs";
-import { forecastStations } from "../lib/forecast.mjs";
+import { forecastStations, waitToP90, p90ToWait } from "../lib/forecast.mjs";
 import { simulateOperator } from "../lib/operator.mjs";
-import { validateStrategies } from "../lib/validate.mjs";
+import { validateStrategies, createScenarios } from "../lib/validate.mjs";
 import { executeFeishu } from "../lib/feishu.mjs";
-import { evaluateDirectTrip, evaluateStationStop } from "../lib/energy.mjs";
+import { evaluateDirectTrip, evaluateStationStop, getEnergyProfile, isFuelEnergyType } from "../lib/energy.mjs";
 import { buildLongTripPlans } from "../lib/longtrip.mjs";
 import { cleanTranscriptText, polishTranscriptText } from "../lib/stt.mjs";
 
@@ -136,7 +136,7 @@ test("ambiguous 东方明珠 is canonicalized to the Shanghai landmark before ge
   assert.deepEqual(result.locations.destination.coordinate, [121.4997, 31.2397]);
 });
 
-test("华山 is canonicalized to 华山风景区 and prefers scenic POI over unrelated geo hits", async () => {
+test("华山 is canonicalized to 西岳华山风景区 (not the same-named Jinan park) and prefers scenic POI", async () => {
   const requestedUrls = [];
   const result = await parseTripIntent({
     message: "从能链北京总部前往华山，优先准时",
@@ -171,10 +171,55 @@ test("华山 is canonicalized to 华山风景区 and prefers scenic POI over unr
       }), { status: 200 });
     }
   });
-  assert.equal(result.destination, "华山风景区");
-  assert.ok(requestedUrls.some((url) => decodeURIComponent(url).includes("华山风景区")));
+  assert.equal(result.destination, "西岳华山风景区");
+  assert.ok(requestedUrls.some((url) => decodeURIComponent(url).includes("西岳华山风景区")));
   assert.deepEqual(result.locations.destination.coordinate, [110.0905, 34.482]);
   assert.equal(result.locations.destination.source, "高德地点检索");
+});
+
+test("a bare city query resolves to the city, not a same-prefix station", async () => {
+  const result = await parseTripIntent({
+    message: "从能链北京总部去天津",
+    config: { webServiceKey: "geo-key" },
+    fetchImpl: async (url) => {
+      const href = String(url);
+      if (href.includes("place/text")) {
+        return new Response(JSON.stringify({
+          status: "1",
+          pois: [
+            // Same place, same point as the geocode hit below. Scored low here,
+            // so dedupe must not let this copy shadow the administrative one.
+            { name: "天津市", location: "117.201509,39.085318", typecode: "190102", pname: "天津市", cityname: "天津市" },
+            { name: "天津站", location: "117.2200,39.1400", typecode: "150200", pname: "天津市", cityname: "天津市" },
+            { name: "天津西站", location: "117.1700,39.1700", typecode: "150200", pname: "天津市", cityname: "天津市" },
+            { name: "天津南站", location: "117.1000,39.0300", typecode: "150200", pname: "天津市", cityname: "天津市" }
+          ]
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        status: "1",
+        geocodes: [{ formatted_address: "天津市", province: "天津市", city: "天津市", level: "省", location: "117.201509,39.085318" }]
+      }), { status: 200 });
+    }
+  });
+  assert.equal(result.locations.destination.name, "天津市");
+  assert.equal(result.locations.destination.needsPick, false);
+});
+
+test("plan response reports why the model was skipped instead of failing silently", async () => {
+  const result = await parseTripIntent({
+    message: "去北京南站",
+    config: { webServiceKey: "geo-key", aiBaseUrl: "https://ai.example.com/v1", aiApiKey: "sk-test", aiModel: "m" },
+    fetchImpl: async (url) => {
+      if (String(url).includes("chat/completions")) {
+        return new Response(JSON.stringify({ error: { message: "quota exceeded" } }), { status: 429 });
+      }
+      return new Response(JSON.stringify({ status: "1", geocodes: [], pois: [] }), { status: 200 });
+    }
+  });
+  assert.equal(result.aiUsed, false);
+  assert.equal(result.aiFailureCode, "quota");
+  assert.equal(formatPlanResponse(result).aiFallbackReason, "AI 配额已用尽，已用本地规则解析");
 });
 
 test("place scoring prefers scenic names over bare admin roads", () => {
@@ -314,7 +359,7 @@ test("explicit destination coordinate from picker skips re-geocoding", async () 
       return new Response(JSON.stringify({ status: "1", geocodes: [], pois: [] }), { status: 200 });
     }
   });
-  assert.equal(result.destination, "华山风景区");
+  assert.equal(result.destination, "西岳华山风景区");
   assert.deepEqual(result.locations.destination.coordinate, [110.09, 34.48]);
   assert.equal(result.locations.destination.source, "用户选定候选");
   assert.equal(fetchCount, 0);
@@ -326,6 +371,43 @@ test("forecast is deterministic and produces 0..30 minute points", () => {
   assert.deepEqual(first, second);
   assert.deepEqual(first.stations[0].forecast.map((point) => point.minute), [0, 5, 10, 15, 20, 25, 30]);
   assert.ok(first.stations[0].forecast.every((point) => point.occupancy >= 0.05 && point.occupancy <= 0.99));
+});
+
+test("forecast weatherFactor raises wait monotonically and defaults to no effect", () => {
+  // weatherFactor 来自高德实况：雨雪天抬高到达率，P50/P90 应随之上升。
+  // 缺省为 1，不接天气时预测与原来完全一致。
+  const calm = forecastStations(stations, { weatherFactor: 1 });
+  const rainy = forecastStations(stations, { weatherFactor: 1.2 });
+  const calmP90 = calm.stations[0].forecast.map((p) => p.p90);
+  const rainyP90 = rainy.stations[0].forecast.map((p) => p.p90);
+  // 30 分钟末点：雨天必须明显高于晴天
+  assert.ok(rainyP90.at(-1) > calmP90.at(-1), `rain did not raise P90: ${calmP90.at(-1)} -> ${rainyP90.at(-1)}`);
+  // weatherFactor=1 时场景里也如实回显
+  assert.equal(calm.scenario.weatherFactor, 1);
+  assert.equal(rainy.scenario.weatherFactor, 1.2);
+});
+
+test("forecast and operator share one wait→P90 relationship", () => {
+  // 预测页按 p90 = wait*k + b 生成，运营页要把前端送回来的 p90 反解成 wait。
+  // 曾经预测端写 1.68、运营端写 1.65，于是运营模型拿 1.65 去解 1.68 生成的数，
+  // 同一个站点在两个页面上挂着两条不同的分布。这个往返必须是恒等的。
+  for (const wait of [0, 3.5, 12, 47.25]) {
+    assert.ok(Math.abs(p90ToWait(waitToP90(wait)) - wait) < 1e-9, `round-trip broke at ${wait}`);
+  }
+  // 预测端产出的 p90 必须能被运营端原样还原成它自己的 wait。容差 0.1 是
+  // 两处 toFixed(1) 的量化误差之和：wait 自身 ±0.05，p90 的 ±0.05 反解时
+  // 放大成 ±0.05/1.65。系数一旦再次分叉，误差是 5% 量级，远超这个门槛。
+  const [forecasted] = forecastStations(stations, {}).stations;
+  for (const point of forecasted.forecast) {
+    assert.ok(Math.abs(p90ToWait(point.p90) - point.wait) < 0.1, `forecast p90 ${point.p90} does not invert to wait ${point.wait}`);
+  }
+});
+
+test("forecast explanation only claims what the model actually computes", () => {
+  const [entry] = forecastStations(stations, {}).stations;
+  // "每 5 分钟到达率"曾经把画图的取样间隔当成速率单位，读数直接差 5 倍
+  assert.ok(!/每 ?5 ?分钟/.test(entry.explanation), entry.explanation);
+  assert.match(entry.explanation, /辆\/分钟/);
 });
 
 test("operator simulation changes with discount and calculates impact", () => {
@@ -356,9 +438,42 @@ test("validation runs at least 1000 seeded trips for all strategies", () => {
     assert.ok(Number.isFinite(summary.p90Wait));
     assert.ok(summary.onTimeRate >= 0 && summary.onTimeRate <= 100);
   }
-  assert.ok(result.strategies.flowtwin.averageWait <= result.strategies.realtime.averageWait);
-  assert.ok(result.strategies.flowtwin.p90Wait <= result.strategies.realtime.p90Wait);
+  // FlowTwin 的目标函数是准点率和负载均衡，不是最小化平均等待。以前这里断言
+  // 它在四项指标上全面碾压 realtime，能过是因为它能读到尾部风险的真值；改成
+  // 带误差的预测之后，3 站夹具上它会拿几秒钟平均等待去换准点率——这是策略的
+  // 真实取舍，断言应该盯着它真正承诺的东西。
+  assert.ok(result.strategies.flowtwin.onTimeRate >= result.strategies.realtime.onTimeRate);
   assert.ok(result.strategies.flowtwin.loadDispersion <= result.strategies.realtime.loadDispersion);
+  assert.ok(result.strategies.flowtwin.p90Wait <= result.strategies.nearest.p90Wait);
+  assert.ok(result.strategies.flowtwin.p90Wait <= result.strategies.cheapest.p90Wait);
+  // 让出去的平均等待必须是"几秒钟"量级，不能借着准点率把等待放飞
+  assert.ok(result.strategies.flowtwin.averageWait <= result.strategies.realtime.averageWait * 1.02);
+});
+
+test("validation load dispersion is scale-free and ROI responds to the scenario", () => {
+  // loadDispersion 曾经是利用率的标准差，随行程数线性放大：同一套站点跑 1000
+  // 次是 4.34，跑 8000 次是 34.6，用户改一下样本量就以为负载均衡崩了。
+  const dispersions = [1000, 4000, 10000].map((trips) => validateStrategies({ seed: 42, trips }).strategies.flowtwin.loadDispersion);
+  for (const value of dispersions) assert.ok(Math.abs(value - dispersions[0]) < 0.1, `dispersion drifted with sample size: ${dispersions.join(", ")}`);
+
+  // ROI 曾经恒等于 mean(margin)/4.5——券没进选站逻辑，毛利按每一单全额计，
+  // 换种子只在 3.1~3.3 之间晃。真实的 ROI 必须随场景变化，也必须能亏。
+  const rois = [1, 42, 777, 20260719].map((seed) => validateStrategies({ seed, trips: 1000 }).strategies.flowtwin.roi);
+  assert.ok(Math.max(...rois) - Math.min(...rois) > 0.3, `ROI barely moved across seeds: ${rois.join(", ")}`);
+  for (const strategy of ["nearest", "cheapest", "realtime"]) {
+    assert.equal(validateStrategies({ seed: 42, trips: 1000 }).strategies[strategy].roi, 0);
+  }
+});
+
+test("validation gives FlowTwin only a noisy tail forecast, not the realised value", () => {
+  const [scenario] = createScenarios(42, 1);
+  for (const station of scenario.stations) {
+    assert.ok(Number.isFinite(station.tail) && Number.isFinite(station.tailEstimate));
+    // 预测值必须落在真值的 0.7~1.3 倍内，且不能恒等于真值
+    assert.ok(station.tailEstimate >= station.tail * 0.7 - 1e-9);
+    assert.ok(station.tailEstimate <= station.tail * 1.3 + 1e-9);
+  }
+  assert.ok(scenario.stations.some((station) => Math.abs(station.tailEstimate - station.tail) > 1e-6));
 });
 
 test("Feishu execution stays local without a webhook", async () => {
@@ -438,10 +553,15 @@ test("long-trip planner exposes distinct fastest, reliable and cheapest objectiv
     maxStops: 3,
     maxDetourKm: 8,
     stations: [
-      { id: "fast-a", progressKm: 200, detourKm: 1, p50: 2, p90: 28, price: 1.9, estimatedChargePowerKw: 250 },
+      // 快充站的 p90 原本是 28：那是按"各站 P90 直接相加"设计的数字，两站
+      // 加起来 56 分钟足以盖过它 250kW 的充电优势。改成按独立性卷积之后，
+      // 两站 28 只合成 41 分钟，快充方案在 P90 上反而胜出，这一档就不再存在
+      // "快 vs 稳"的取舍了。把尾部风险提到 40 分钟，取舍才真实成立：
+      // 快充方案 P50 早到 41 分钟，P90 晚到 12 分钟。
+      { id: "fast-a", progressKm: 200, detourKm: 1, p50: 2, p90: 40, price: 1.9, estimatedChargePowerKw: 250 },
       { id: "safe-a", progressKm: 205, detourKm: 1, p50: 7, p90: 8, price: 1.6, estimatedChargePowerKw: 100 },
       { id: "cheap-a", progressKm: 210, detourKm: 1, p50: 10, p90: 12, price: 0.65, estimatedChargePowerKw: 75 },
-      { id: "fast-b", progressKm: 420, detourKm: 1, p50: 2, p90: 28, price: 1.9, estimatedChargePowerKw: 250 },
+      { id: "fast-b", progressKm: 420, detourKm: 1, p50: 2, p90: 40, price: 1.9, estimatedChargePowerKw: 250 },
       { id: "safe-b", progressKm: 425, detourKm: 1, p50: 7, p90: 8, price: 1.6, estimatedChargePowerKw: 100 },
       { id: "cheap-b", progressKm: 430, detourKm: 1, p50: 10, p90: 12, price: 0.65, estimatedChargePowerKw: 75 }
     ]
@@ -453,6 +573,14 @@ test("long-trip planner exposes distinct fastest, reliable and cheapest objectiv
   assert.ok(fastest.totalMinutesP50 < reliable.totalMinutesP50);
   assert.ok(reliable.totalMinutesP90 < fastest.totalMinutesP90);
   assert.ok(cheapest.energyCost < reliable.energyCost);
+  // 两个同样 P90=40 的站点合成的总等待，必须明显小于 80——分位数不可加
+  assert.ok(fastest.p90WaitMinutes < 70, `P90 waits were summed, not convolved: ${fastest.p90WaitMinutes}`);
+  // 只停一次时必须退化为该站自己的 P90，不能因为换了算法就漂移
+  const single = buildLongTripPlans({
+    distanceKm: 300, durationMinutes: 210, energyType: "electric", soc: 40, minArrivalSoc: 20, maxStops: 1, maxDetourKm: 8,
+    stations: [{ id: "only", progressKm: 150, detourKm: 1, p50: 9, p90: 31, price: 1.5, estimatedChargePowerKw: 120 }]
+  });
+  assert.equal(single.plansByObjective.fastest.p90WaitMinutes, 31);
 });
 
 test("long-trip planner keeps a short trip as a direct route", () => {
@@ -565,4 +693,57 @@ test("long-trip planner returns an explicit no-solution result when a corridor n
   assert.deepEqual(result.plans, []);
   assert.equal(result.reason, "NO_FEASIBLE_SEQUENCE");
   assert.equal(result.candidatesConsidered, 7);
+});
+
+test("a hybrid is planned as two independent single-tank problems, not as a BEV with a tank", () => {
+  assert.equal(isFuelEnergyType("hybridFuel"), true);
+  assert.equal(isFuelEnergyType("hybridElectric"), false);
+  const hybridElectric = getEnergyProfile("hybridElectric");
+  const bev = getEnergyProfile("electric");
+  // 插混的电池只有纯电车的四分之一左右。若沿用纯电 profile，首段安全里程会
+  // 被高估约四倍，规划器就会把够不到的站点当成可达站点。
+  assert.ok(hybridElectric.capacity < bev.capacity / 3);
+  assert.equal(hybridElectric.unit, "kWh");
+  assert.equal(getEnergyProfile("hybridFuel").unit, "L");
+});
+
+test("hybrid branches plan the same corridor on their own physics and refuelling units", () => {
+  const corridor = {
+    distanceKm: 300,
+    durationMinutes: 210,
+    minArrivalSoc: 20,
+    maxStops: 6,
+    maxDetourKm: 18,
+    stations: [60, 120, 180, 240].map((progressKm, index) => ({
+      id: `hybrid-${index + 1}`,
+      name: `第${index + 1}综合能源站`,
+      progressKm,
+      detourKm: 0.5,
+      p50: 4,
+      p90: 8,
+      price: 5
+    }))
+  };
+  // 两侧起始电量/油量不同是常态。这里刻意让油箱也不足以直达，
+  // 否则燃油分支停 0 次，补能速率的断言就变成空跑。
+  const fuel = buildLongTripPlans({ ...corridor, energyType: "hybridFuel", soc: 12 });
+  const electric = buildLongTripPlans({ ...corridor, energyType: "hybridElectric", soc: 60 });
+  const fuelPlan = fuel.plans[0];
+  const electricPlan = electric.plans[0];
+  assert.ok(fuelPlan && electricPlan, "both hybrid branches must produce a feasible plan on this corridor");
+  assert.equal(fuelPlan.unit, "L");
+  assert.equal(electricPlan.unit, "kWh");
+  // 20 kWh 的电池跑 900 km 必须比 50 L 的油箱停得更多，这正是油电对比的依据。
+  assert.ok(electricPlan.stopCount > fuelPlan.stopCount);
+  assert.ok(fuelPlan.arrivalSoc >= fuelPlan.targetArrivalSoc);
+  assert.ok(electricPlan.arrivalSoc >= electricPlan.targetArrivalSoc);
+  // 加油按 L/min，充电按 kW；两条分支不能共用同一个补能速率字段。
+  fuelPlan.stops.forEach((stop) => {
+    assert.equal(stop.estimatedChargePowerKw, null);
+    assert.ok(Number(stop.estimatedRefuelRateLpm) > 0);
+  });
+  electricPlan.stops.forEach((stop) => {
+    assert.equal(stop.estimatedRefuelRateLpm, null);
+    assert.ok(Number(stop.estimatedChargePowerKw) > 0);
+  });
 });

@@ -10,6 +10,13 @@
     window.FLOWTWIN_CONFIG || {}
   );
 
+  // 必须和 lib/config.mjs 的 DEFAULT_ORIGIN.name 一致：后端用这个名字判断
+  // "用户没说起点"，前端用它判断"这个起点是默认值，不是用户要求的"。
+  const DEFAULT_ORIGIN_NAME = "能链北京总部";
+  // 标准正态的 90 分位，用于在 p50/p90 和标准差之间换算。与 lib/longtrip.mjs
+  // 的同名常量保持一致，两边算的是同一条路线的同一个 P90。
+  const Z90 = 1.2816;
+
   const FALLBACK = {
     origin: [116.491, 39.951],
     destination: [116.410, 39.509],
@@ -115,8 +122,26 @@
     manualArrivalReserveOverride: null,
     maxDetourKm: 8,
     detourExplicit: false,
+    // 后端 formatPlanResponse 一直在返回 originLocation，但前端过去只取了
+    // destinationLocation。结果是"从上海去杭州"照样从北京总部起算——画出来的
+    // 折线是真的，却是另一趟行程的。起点必须和终点一样被解析、被显示、被校验。
+    originName: DEFAULT_ORIGIN_NAME,
+    originNote: "北京市朝阳区姚家园南路 1 号 · 演示默认起点",
     destinationName: "北京大兴国际机场",
     energyType: "electric",
+    // A hybrid carries two independent levels. `hybridLevels` is the source of
+    // truth for both; `energyPercent` mirrors whichever branch is being planned,
+    // so every existing single-level calculation keeps working unchanged.
+    hybridBranch: "electric",
+    hybridBranchTouched: false,
+    hybridLevels: { electric: 35, fuel: 60 },
+    // 记录本轮规划里已经实测失败过的混动分支。evaluateEnergyBranch 用直线距离
+    // 估可达性，会放过"直线够得着、路况够不着"的站，于是推荐电、规划器又判
+    // NO_FEASIBLE_SEQUENCE。把规划结果反馈回来：活动分支三条线全挂就记一笔，
+    // 之后的对比不再把它当可用，推荐才会落到另一分支。手动切换时清空，给用户
+    // 重新尝试的余地；新一轮规划也清空。
+    hybridFailedBranches: new Set(),
+    hybridComparison: null,
     priority: "on_time",
     selectedService: null,
     serviceSuggestion: null,
@@ -138,7 +163,8 @@
     hasPlannedRoute: false,
     vehiclePlate: "京A·FT2026",
     paymentState: "authorized",
-    paymentReceipt: null
+    paymentReceipt: null,
+    weather: null
   };
 
   // The first-run example intentionally leaves arrival time and reserve open.
@@ -149,8 +175,16 @@
 
   const ENERGY_PROFILES = {
     electric: { capacity: 82, consumptionPerKm: 0.18, transferEfficiency: 0.92, safetyReservePercent: 2, unit: "kWh" },
-    fuel: { capacity: 55, consumptionPerKm: 0.075, transferEfficiency: 0.95, safetyReservePercent: 3, unit: "L" }
+    fuel: { capacity: 55, consumptionPerKm: 0.075, transferEfficiency: 0.95, safetyReservePercent: 3, unit: "L" },
+    // A plug-in hybrid is not a BEV with a tank bolted on: its pack is roughly a
+    // quarter the size and its engine runs in a more efficient regime. Reusing
+    // the pure-EV profile would overstate its electric range about fourfold and
+    // make every 油电 comparison meaningless.
+    hybridElectric: { capacity: 20, consumptionPerKm: 0.165, transferEfficiency: 0.92, safetyReservePercent: 2, unit: "kWh" },
+    hybridFuel: { capacity: 50, consumptionPerKm: 0.056, transferEfficiency: 0.95, safetyReservePercent: 3, unit: "L" }
   };
+
+  const ENERGY_TYPES = ["electric", "fuel", "hybrid"];
 
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -177,6 +211,24 @@
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !backdrop.classList.contains("hidden")) close();
     });
+  }
+
+  // 首屏"本次更新"公告：打开页面时先展示一次更新内容，关掉即进入 demo。
+  function initUpdateNotice() {
+    const backdrop = byId("updateNoticeBackdrop");
+    const confirm = byId("updateNoticeConfirm");
+    if (!backdrop || !confirm) return;
+    const close = () => {
+      backdrop.classList.add("hidden");
+      confirm.blur();
+    };
+    confirm.addEventListener("click", close);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) close();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !backdrop.classList.contains("hidden")) close();
+    }, { once: false });
   }
 
   function setMapStatus(message, type) {
@@ -302,11 +354,14 @@
     const location = candidate.location || candidate.coordinate || null;
     const input = byId("intentInput");
     const current = input ? input.value.trim() : "";
+    // 起点用当前行程的实际起点，而不是写死"能链北京总部"--否则用户已经从上海出发
+    // 规划，点选目的地候选时输入框会突然跳回"从能链北京总部前往…"。
+    const originForSuggestion = state.originName || DEFAULT_ORIGIN_NAME;
     const nextMessage = current
       ? (/前往|去|到/.test(current) ? current.replace(/(前往|去|到)\s*[^，,。；;]*?/, `$1${name}`) : `${current}，目的地定为${name}`)
-      : `从能链北京总部前往${name}`;
+      : `从${originForSuggestion}前往${name}`;
     if (input) {
-      input.value = nextMessage.includes(name) ? nextMessage : `从能链北京总部前往${name}`;
+      input.value = nextMessage.includes(name) ? nextMessage : `从${originForSuggestion}前往${name}`;
       fitIntentInput();
     }
     clearDestinationCandidates();
@@ -535,7 +590,9 @@
       destination,
       arrivalDeadline: deadline,
       minArrivalSoc: arrivalSocMatch ? Math.max(5, Math.min(100, Number(arrivalSocMatch[1]))) : null,
-      energyType: value.includes("加油") || value.includes("燃油") || value.includes("油车") ? "fuel" : state.energyType,
+      energyType: /混动|插混|混合动力|油电/.test(value)
+        ? "hybrid"
+        : value.includes("加油") || value.includes("燃油") || value.includes("油车") ? "fuel" : state.energyType,
       priority: value.includes("便宜") || value.includes("省") ? "cost" : value.includes("快") ? "time" : "reliable",
       maxDetourKm: detourMatch ? Math.max(0, Math.min(50, Number(detourMatch[1]))) : null,
       services: ["餐饮", "休息"].filter((service) => value.includes(service)),
@@ -595,6 +652,51 @@
     }
   }
 
+  // 天气来自高德实况（按起点所在区县）。它只影响预测的方向--雨雪天抬高峰值等待，
+  // 不接天气时 weatherFactor 为 1，预测与原来完全一致。
+  function weatherIcon(condition) {
+    const text = String(condition || "");
+    if (/雪/.test(text)) return "snowflake";
+    if (/雷/.test(text)) return "cloud-lightning";
+    if (/雨/.test(text)) return "cloud-rain";
+    if (/雾|霾/.test(text)) return "cloud-fog";
+    if (/沙|尘/.test(text)) return "wind";
+    if (/阴/.test(text)) return "cloud";
+    if (/云/.test(text)) return "cloud-sun";
+    return "sun";
+  }
+
+  async function loadWeather() {
+    const origin = state.origin;
+    if (!Array.isArray(origin) || origin.length < 2 || !Number.isFinite(origin[0])) return;
+    const location = `${origin[0].toFixed(6)},${origin[1].toFixed(6)}`;
+    try {
+      const response = await fetch(`/api/weather?${new URLSearchParams({ location })}`, { headers: { Accept: "application/json" } });
+      const payload = await response.json().catch(() => ({}));
+      if (response.ok && payload && payload.condition) {
+        state.weather = payload;
+      } else {
+        state.weather = null;
+      }
+    } catch {
+      state.weather = null;
+    }
+    renderWeather();
+  }
+
+  function renderWeather() {
+    const host = byId("originWeather");
+    if (!host) return;
+    const w = state.weather;
+    if (!w || !w.condition) { host.hidden = true; host.textContent = ""; return; }
+    const temp = Number.isFinite(w.temperature) ? `${w.temperature}°` : "";
+    const label = `${w.city || ""} ${w.condition} ${temp}`.trim();
+    host.innerHTML = `<i data-lucide="${weatherIcon(w.condition)}"></i>${escapeHtml(label)}`;
+    host.classList.toggle("severe", Boolean(w.severe));
+    host.hidden = false;
+    refreshIcons();
+  }
+
   async function requestForecast(station) {
     if (!station) return;
     const requestId = ++state.forecastRequestVersion;
@@ -603,7 +705,11 @@
     try {
       const payload = await postJson("/api/forecast", {
         stations: [station],
-        scenario: { departureMinutes: state.departureMinutes, energyType: state.energyType }
+        scenario: {
+          departureMinutes: state.departureMinutes,
+          energyType: state.energyType,
+          weatherFactor: state.weather?.weatherFactor
+        }
       }, 20000);
       if (requestId === state.forecastRequestVersion && state.selectedStation?.id === station.id) renderForecast(station, payload);
     } catch (error) {
@@ -621,6 +727,20 @@
     if (!requestedDestination || !normalizedDestination) {
       return { ok: false, destination: requestedDestination };
     }
+    // 起点和终点同等对待：解析得到坐标就采用，用户点名了一个起点却定位不到，
+    // 就如实报错——绝不能默默地从北京总部出发去规划一趟上海出发的行程。
+    const requestedOrigin = String(parsed?.origin || "").trim();
+    const normalizedOrigin = parseLocation(payload.originLocation || parsed.originLocation);
+    const originIsDefault = !requestedOrigin || requestedOrigin === DEFAULT_ORIGIN_NAME;
+    if (normalizedOrigin) {
+      state.origin = normalizedOrigin;
+      state.originName = originIsDefault ? DEFAULT_ORIGIN_NAME : requestedOrigin;
+      state.originNote = originIsDefault
+        ? "北京市朝阳区姚家园南路 1 号 · 演示默认起点"
+        : `${payload.locationSources?.origin || "高德定位"} · 按你指定的出发地规划`;
+    } else if (!originIsDefault) {
+      return { ok: false, destination: requestedDestination, origin: requestedOrigin, originUnresolved: true };
+    }
     const parsedHasDeadline = Boolean(parsed.arrivalDeadline);
     const parsedReserve = Number(parsed.minArrivalSoc);
     const parsedHasReserve = parsed.minArrivalSoc !== null && parsed.minArrivalSoc !== undefined && parsed.minArrivalSoc !== "" && Number.isFinite(parsedReserve);
@@ -634,7 +754,12 @@
     } else {
       state.maxDetourKm = 8;
     }
-    if (["electric", "fuel"].includes(parsed.energyType)) state.energyType = parsed.energyType;
+    // The parser reports a dual-energy vehicle as "mixed"; that is exactly the
+    // hybrid case, and dropping it used to leave a 混动 user planned as a BEV.
+    const parsedEnergyType = parsed.energyType === "mixed" ? "hybrid" : parsed.energyType;
+    if (ENERGY_TYPES.includes(parsedEnergyType) && parsedEnergyType !== state.energyType) {
+      adoptEnergyType(parsedEnergyType);
+    }
     if (parsed.priority) state.priority = parsed.priority;
     state.destination = normalizedDestination;
     state.aiContext = Object.assign({}, state.aiContext || {}, parsed);
@@ -645,6 +770,8 @@
     if (destinationName) destinationName.textContent = state.destinationName;
     const destinationValue = document.querySelector(".route-field.destination-field .field-value");
     if (destinationValue) destinationValue.textContent = state.destinationName;
+    setText("originName", state.originName);
+    setText("originMeta", state.originNote);
     const departureValue = byId("departureValue");
     if (departureValue) departureValue.textContent = formatClock(state.departureMinutes);
     syncManualControls();
@@ -679,6 +806,8 @@
     const rawMinArrival = String(minArrivalInput?.value || "").trim();
     const minArrival = rawMinArrival ? Number(rawMinArrival) : Number.NaN;
     if (Number.isFinite(energy)) state.energyPercent = Math.max(5, Math.min(100, energy));
+    // 顶栏那一格在混动模式下编辑的是"当前分支"的能量，必须写回两级真值。
+    syncHybridLevels("percent");
     if (Number.isFinite(minArrival)) state.minArrivalSoc = Math.max(5, Math.min(100, minArrival));
     if (departureInput?.value) state.departureMinutes = clockToMinutes(departureInput.value, state.departureMinutes);
     if (deadlineInput?.value) state.deadlineMinutes = clockToMinutes(deadlineInput.value, state.deadlineMinutes);
@@ -781,8 +910,106 @@
     return Math.max(0, Math.min(1, projection.alongKm / projection.totalKm));
   }
 
+  // 把站点投影到"沿线进度/走廊偏离"时用的参考路线。实况模式下还没有真实路线
+  // 时返回空折线：投影到北京→大兴机场的演示折线上，会给任意行程编造出一组
+  // 看似合理的沿线里程。空折线会让 routeProgress 归 0、corridorKm 变成无穷，
+  // 下游据此判定"无参考路线"，不会当成真实数据展示。
+  function corridorReferenceRoute() {
+    return state.baseRouteRecords.reliable
+      || state.routeRecords.reliable
+      || { path: state.live ? [] : FALLBACK.routes.reliable };
+  }
+
+  // A hybrid can be planned on either energy path. Everything downstream stays
+  // single-branch; this is the one place that decides which branch is live.
+  function activeEnergyKind() {
+    if (state.energyType === "hybrid") return state.hybridBranch === "fuel" ? "fuel" : "electric";
+    // 这里必须直接读 state：isFuelActive() 反过来依赖本函数，会无限互相递归。
+    return state.energyType === "fuel" ? "fuel" : "electric";
+  }
+
+  function isFuelActive() {
+    return activeEnergyKind() === "fuel";
+  }
+
+  function isHybrid() {
+    return state.energyType === "hybrid";
+  }
+
   function getEnergyProfile(isFuel) {
+    if (state.energyType === "hybrid") return isFuel ? ENERGY_PROFILES.hybridFuel : ENERGY_PROFILES.hybridElectric;
     return isFuel ? ENERGY_PROFILES.fuel : ENERGY_PROFILES.electric;
+  }
+
+  function clampPercent(value, fallback) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(5, Math.min(100, parsed)) : fallback;
+  }
+
+  // `energyPercent` is what the whole planner reads. In hybrid mode it is a
+  // mirror of the active branch, so the two must be resynced on every change.
+  function syncHybridLevels(source = "levels") {
+    if (!isHybrid()) return;
+    const kind = activeEnergyKind();
+    const other = kind === "fuel" ? "electric" : "fuel";
+    state.hybridLevels[other] = clampPercent(state.hybridLevels[other], other === "fuel" ? 60 : 35);
+    if (source === "percent") state.hybridLevels[kind] = clampPercent(state.energyPercent, 35);
+    else state.energyPercent = clampPercent(state.hybridLevels[kind], 35);
+  }
+
+  function hybridBranchLevel(kind) {
+    if (!isHybrid()) return state.energyPercent;
+    return activeEnergyKind() === kind ? state.energyPercent : clampPercent(state.hybridLevels[kind], kind === "fuel" ? 60 : 35);
+  }
+
+  // The shared backend energy model keys hybrid branches separately so its
+  // physics match the profile the browser is planning with.
+  function backendEnergyTypeKey() {
+    if (isHybrid()) return isFuelActive() ? "hybridFuel" : "hybridElectric";
+    return isFuelActive() ? "fuel" : "electric";
+  }
+
+  function energyNoun(isFuel = isFuelActive()) {
+    return isFuel ? "油" : "电";
+  }
+
+  function activeStationType() {
+    return isFuelActive() ? "加油站" : "充电站";
+  }
+
+  // In hybrid mode `state.stations` holds both networks. Any planner that has
+  // already committed to one energy path must only see that path's stations.
+  function stationsForActiveBranch(pool = state.stations) {
+    if (!isHybrid()) return pool;
+    const desiredType = activeStationType();
+    return pool.filter((station) => station.type === desiredType);
+  }
+
+  function profileForStationType(stationType) {
+    const isFuel = stationType === "加油站";
+    if (isHybrid()) return isFuel ? ENERGY_PROFILES.hybridFuel : ENERGY_PROFILES.hybridElectric;
+    return isFuel ? ENERGY_PROFILES.fuel : ENERGY_PROFILES.electric;
+  }
+
+  // ¥ per driven kilometre — the only price basis that is comparable between a
+  // ¥/kWh charger and a ¥/L pump.
+  function stationCostPerKm(station) {
+    const profile = profileForStationType(station?.type);
+    return Math.max(0, Number(station?.price || 0)) * profile.consumptionPerKm;
+  }
+
+  // Energy burnt out of the tank the driver started with still costs money. Use
+  // the median price of the matching network along this route as its value, so
+  // a direct trip is not reported as a zero-cost trip.
+  function referenceEnergyPrice(isFuel = isFuelActive()) {
+    const desiredType = isFuel ? "加油站" : "充电站";
+    const prices = state.stations
+      .filter((station) => station.type === desiredType)
+      .map((station) => Number(station.price))
+      .filter((price) => Number.isFinite(price) && price > 0)
+      .sort((a, b) => a - b);
+    if (prices.length) return prices[Math.floor(prices.length / 2)];
+    return isFuel ? 7.65 : 1.45;
   }
 
   function effectiveArrivalReserveSoc(profile) {
@@ -842,19 +1069,34 @@
     return Math.max(0, (distanceKm(state.origin, station.location) + distanceKm(station.location, state.destination) - direct) * 1.25);
   }
 
+  // 电价与油价不是同一个量纲。快充按 ¥/kWh（电费+服务费），成品油按 ¥/L
+  // （92# 零售价区间）。此前两者共用一条公式，燃油成本被低估约 5 倍，
+  // 任何油电对比都不成立。价格仍为固定种子的演示值，不是实时挂牌价。
+  const ENERGY_PRICE_BANDS = {
+    充电站: { base: 1.15, spread: 60, unit: "kWh" },
+    加油站: { base: 7.25, spread: 80, unit: "L" }
+  };
+
+  function simulatedPrice(stationType, hash) {
+    const band = ENERGY_PRICE_BANDS[stationType] || ENERGY_PRICE_BANDS.充电站;
+    return Number((band.base + (hash % band.spread) / 100).toFixed(2));
+  }
+
   function simulateStation(poi, index) {
     const hash = stableHash(`${poi.id || poi.name}-${index}`);
     const occupancy = 0.42 + (hash % 44) / 100;
     const p50 = 4 + (hash % 10);
     const p90 = p50 + 5 + (hash % 11);
     const isRisk = p90 >= 20 || occupancy >= 0.82;
+    const priceUnit = poi.type === "加油站" ? "L" : "kWh";
     return Object.assign({}, poi, {
       source: poi.sourceLabel || (poi.id && !String(poi.id).startsWith("fallback-") ? "高德真实 POI" : "固定场景 POI"),
       occupancy,
       p50,
       p90,
       wait: Math.round((p50 + p90) / 2),
-      price: (1.18 + (hash % 58) / 100).toFixed(2),
+      price: simulatedPrice(poi.type, hash).toFixed(2),
+      priceUnit,
       // 高德 POI 不提供充电桩额定功率或油枪流速；以下是固定种子的
       // 演示估算，用于比较不同补能方案的时长，页面会明确标识其边界。
       estimatedChargePowerKw: 75 + (hash % 11) * 15,
@@ -865,14 +1107,41 @@
     });
   }
 
+  // 服务区兜底检索（keyword="服务区"）拿回来的是服务区里的各种子 POI，其中相当一部分
+  // 名字就叫"加油站"。它们随后被无条件打上 type:"充电站"，于是纯电车的方案里会出现
+  // 「加油站 · 补 3.2kWh」——名字本身就在说它是加油设施，却当成充电候选推给电车。
+  // "补能设施待确认"那句免责说的是"有没有桩"，不是"这其实是个加油站"。
+  // 一个自报家门叫加油站的点，是它没有充电桩的证据，不是中性信息，直接排除。
+  const FUEL_ONLY_NAME = /加油|加气|加氢|油站/;
+  const CHARGING_NAME = /充电|充换|换电|超充/;
+  // 而且 keyword="服务区" 是模糊匹配，还会捞回"北京顺丰速运有限公司安华里业务部
+  // 职工暖心驿站""并渡口驿站"这类根本不是服务区的点。兜底之所以站得住脚，理由
+  // 只有一条——真实高速服务区通常有桩；名字里连"服务区"都没有的 POI 不在这条
+  // 理由的覆盖范围内，把顺丰的员工休息室当成电车补能点纯属检索副作用。
+  const SERVICE_AREA_NAME = /服务区/;
+
   function normalizePoi(poi, index, type) {
     const location = parseLocation(poi.location);
     if (!location) return null;
     const serviceArea = type === "service-area";
+    const rawName = String(poi.name || "");
+    if (serviceArea) {
+      if (!SERVICE_AREA_NAME.test(rawName)) return null;
+      if (FUEL_ONLY_NAME.test(rawName) && !CHARGING_NAME.test(rawName)) return null;
+    }
+    const rawAddress = String(poi.address || "").trim();
+    // 高德对一部分服务区只返回"服务区"三个字，方案里就会出现「本次补能：服务区」——
+    // 司机没法知道是哪一个。地址只到区县（"十八里店""丰台区"），所以不能拼成
+    // "十八里店服务区"——那是在造一个可能并不存在的站名。放进括号里当位置限定，
+    // 和高德自己给全名的那些（"苏桥服务区(京德高速北京方向)"）是同一种写法。
+    const bareServiceArea = serviceArea && !rawName.replace(/服务区/g, "").trim();
+    const displayName = bareServiceArea && rawAddress
+      ? `服务区（${rawAddress.slice(0, 20)}）`
+      : poi.name || (type === "fuel" ? "综合能源站" : serviceArea ? "高速服务区" : "充电站");
     return {
       id: poi.id || `${type}-${index}-${location.join("-")}`,
-      name: poi.name || (type === "fuel" ? "综合能源站" : serviceArea ? "高速服务区" : "充电站"),
-      address: poi.address || poi.name || "沿线补能站点",
+      name: displayName,
+      address: rawAddress || poi.name || "沿线补能站点",
       location,
       type: type === "fuel" ? "加油站" : "充电站",
       tel: poi.tel || "",
@@ -945,14 +1214,33 @@
     };
   }
 
+  // 某个目标（最快/最稳/最省）的高德查询失败时，下游仍然需要三个 key 都在。
+  // 用同一次行程里另一条**真实**路线顶上，并留下 policyFallbackFrom 让卡片
+  // 如实说明"该策略未返回独立路线"；绝不用演示折线填这个洞。
+  function fillMissingObjectivesWithRealRoutes(liveRecords, keys) {
+    const donorKey = ["reliable", "fastest", "cheapest"].find((key) => liveRecords[key]) || Object.keys(liveRecords)[0];
+    const filled = Object.assign({}, liveRecords);
+    keys.forEach((key) => {
+      if (filled[key]) return;
+      filled[key] = Object.assign({}, liveRecords[donorKey], { key, policyFallbackFrom: donorKey });
+    });
+    return filled;
+  }
+
+  // FALLBACK.routes 是固定的北京→大兴机场演示折线。退化的高德响应绝不能用它
+  // 兜底：那样会在"高德已连接"的实况地图上画出一条与本次行程无关的路线，
+  // 并把它的里程/时长喂给能耗与费用模型。宁可返回 null 让上层报缺失。
   function extractDrivingRoute(route, key, policy) {
     const rawPath = route.path || (route.steps || []).flatMap((step) => step.path || []);
     const path = rawPath.map(parseLocation).filter(Boolean);
+    const distanceKm = Number(route.distance) / 1000;
+    const durationMinutes = Number(route.time) / 60;
+    if (path.length < 2 || !(distanceKm > 0) || !(durationMinutes > 0)) return null;
     return {
       key,
-      path: path.length > 1 ? path : FALLBACK.routes[key] || FALLBACK.routes.reliable,
-      distance: Number(route.distance) > 0 ? Number(route.distance) / 1000 : routeDistance(FALLBACK.routes[key] || FALLBACK.routes.reliable),
-      duration: Number(route.time) > 0 ? Number(route.time) / 60 : 80,
+      path,
+      distance: distanceKm,
+      duration: durationMinutes,
       tolls: Number(route.tolls) || 0,
       policy
     };
@@ -1014,7 +1302,7 @@
       return marker;
     };
     const hasResolvedTrip = state.hasPlannedRoute || Boolean(state.baseRouteRecords.reliable);
-    state.stationOverlays.push(make(state.origin, "origin-marker", "circle-dot", hasResolvedTrip ? "能链北京总部" : "起点"));
+    state.stationOverlays.push(make(state.origin, "origin-marker", "circle-dot", hasResolvedTrip ? (state.originName || DEFAULT_ORIGIN_NAME) : "起点"));
     if (hasResolvedTrip) state.stationOverlays.push(make(state.destination, "destination-marker", "map-pin", state.destinationName));
   }
 
@@ -1066,14 +1354,17 @@
       if (!state.AMap) return resolve(null);
       const driving = new state.AMap.Driving({ policy, ferry: 1, map: null, panel: false });
       const done = (status, result) => {
-        if (status === "complete" && result && result.routes && result.routes.length) {
-          const record = extractDrivingRoute(result.routes[0], key, policy);
+        const record = status === "complete" && result && result.routes && result.routes.length
+          ? extractDrivingRoute(result.routes[0], key, policy)
+          : null;
+        if (record) {
           if (station) record.station = station;
           delete state.routeErrors[`${key}:${station ? "waypoint" : "base"}`];
           resolve(record);
         } else {
           state.routeErrors[`${key}:${station ? "waypoint" : "base"}`] = {
-            status,
+            // status 为 complete 却没有 record，说明响应本身退化（无折线或零里程）。
+            status: status === "complete" ? "degenerate" : status,
             info: result && (result.info || result.message || result.type) || "unknown",
             result: result ? JSON.stringify(result).slice(0, 500) : null
           };
@@ -1091,24 +1382,74 @@
     return `${longitude.toFixed(6)},${latitude.toFixed(6)}`;
   }
 
+  // 高德的失败分两类：限流/引擎抖动（重试就能过）和密钥、配额、确实无路可走
+  // （重试多少次都一样）。以前两类都只重试一次就放弃，结果一次限流就能让整条
+  // 多站候选作废——上海→杭州这种 188 km 的常规行程会直接显示"未生成方案"。
+  const TERMINAL_ROUTE_INFOCODES = new Set([
+    "10001", "10002", "10003", "10009", "10012", // 密钥/权限/配额：重试无意义
+    "20000", "20001", "20800", "20801", "20802", "20803" // 参数错误 / 确实没有可行道路
+  ]);
+
+  async function fetchRouteOnce(params) {
+    const response = await fetch(`/api/route?${params}`, { headers: { Accept: "application/json" } });
+    if (!response.ok) {
+      // 服务端已经把高德的 info/infocode 透传出来了，不要再退化成一个光秃秃的
+      // HTTP_502："配额用尽"和"这一秒请求太密"需要完全不同的处置和话术。
+      const detail = await response.json().catch(() => ({}));
+      const error = new Error(detail.error || `HTTP_${response.status}`);
+      error.infocode = detail.infocode ? String(detail.infocode) : null;
+      throw error;
+    }
+    const payload = await response.json();
+    const route = payload.route;
+    if (!route || !Array.isArray(route.path) || route.path.length < 2) throw new Error("INVALID_ROUTE_RESPONSE");
+    return { route, payload };
+  }
+
+  async function fetchRouteWithRetry(params, attempts = 3) {
+    let lastError = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        return await fetchRouteOnce(params);
+      } catch (error) {
+        lastError = error;
+        if (error.infocode && TERMINAL_ROUTE_INFOCODES.has(error.infocode)) break;
+        if (attempt < attempts - 1) {
+          // 退避 + 抖动：多条腿是被同一波限流打回来的，等长重试会再撞在一起。
+          const backoff = 240 * Math.pow(2, attempt) + Math.floor(Math.random() * 160);
+          await new Promise((resolve) => window.setTimeout(resolve, backoff));
+        }
+      }
+    }
+    throw lastError || new Error("ROUTE_UNAVAILABLE");
+  }
+
+  function recordRouteError(errorKey, error) {
+    state.routeErrors[errorKey] = {
+      status: "error",
+      info: error?.message || "ROUTE_UNAVAILABLE",
+      infocode: error?.infocode || null,
+      // 区分"再试一次也许就好"和"这条路本来就不通"，失败文案才能说人话。
+      terminal: Boolean(error?.infocode && TERMINAL_ROUTE_INFOCODES.has(error.infocode))
+    };
+  }
+
   async function queryServerRoute(key, station) {
     const params = new URLSearchParams({
       origin: formatRouteCoordinate(state.origin),
       destination: formatRouteCoordinate(state.destination),
       waypoint: formatRouteCoordinate(station.location),
       plan: key,
-      cartype: state.energyType === "fuel" ? "0" : "1"
+      cartype: isFuelActive() ? "0" : "1"
     });
+    // 三条策略几乎同时发起带途经点的请求，同样会撞上高德的每秒限流。这里过去
+    // 完全没有重试，一次抖动就足以让这个站点被判定为"到不了"。
     try {
-      const response = await fetch(`/api/route?${params}`, { headers: { Accept: "application/json" } });
-      if (!response.ok) throw new Error(`HTTP_${response.status}`);
-      const payload = await response.json();
-      const route = payload.route;
-      if (!route || !Array.isArray(route.path) || route.path.length < 2) throw new Error("INVALID_ROUTE_RESPONSE");
+      const { route, payload } = await fetchRouteWithRetry(params);
       delete state.routeErrors[`${key}:waypoint`];
       return Object.assign({}, route, { key, station: Object.assign({}, station, { source: station.source }), routeSource: payload.source });
     } catch (error) {
-      state.routeErrors[`${key}:waypoint`] = { status: "error", info: error.message };
+      recordRouteError(`${key}:waypoint`, error);
       return null;
     }
   }
@@ -1171,7 +1512,7 @@
 
   function stationSearchCenters(path, totalDistanceKm) {
     if (!Array.isArray(path) || path.length < 2) return [];
-    const profile = getEnergyProfile(state.energyType === "fuel");
+    const profile = getEnergyProfile(isFuelActive());
     const fullRange = profile.capacity / profile.consumptionPerKm;
     const spacingKm = Math.max(55, Math.min(120, Math.round(fullRange * 0.45)));
     const routeDistanceKm = Math.max(0, Number(totalDistanceKm) || routeDistance(path));
@@ -1192,17 +1533,20 @@
   async function queryStations() {
     if (!state.AMap) return;
     state.provisionalCorridorActive = false;
-    const route = state.baseRouteRecords.reliable || state.routeRecords.reliable || { path: FALLBACK.routes.reliable };
+    const route = corridorReferenceRoute();
     const path = route.path;
     const centers = stationSearchCenters(path, route.distance);
-    const primaryKeyword = state.energyType === "fuel" ? "加油站" : "充电站";
-    const primaryType = state.energyType === "fuel" ? "fuel" : "electric";
+    // A hybrid can refuel or recharge, so both networks are searched and the
+    // per-branch filters downstream decide which candidates each plan may use.
+    const networks = isHybrid()
+      ? [{ keyword: "充电站", type: "electric" }, { keyword: "加油站", type: "fuel" }]
+      : [isFuelActive() ? { keyword: "加油站", type: "fuel" } : { keyword: "充电站", type: "electric" }];
     const stationTasks = centers.flatMap((center) => {
-      const tasks = [() => searchNearby(primaryKeyword, center, primaryType)];
+      const tasks = networks.map((network) => () => searchNearby(network.keyword, center, network.type));
       // Many cross-province motorway points have no POI explicitly named
       // “充电站”. A real 高德服务区 is a truthful fallback candidate; its
       // availability is explicitly labelled as needing on-site confirmation.
-      if (primaryType === "electric") tasks.push(() => searchNearby("服务区", center, "service-area"));
+      if (networks.some((network) => network.type === "electric")) tasks.push(() => searchNearby("服务区", center, "service-area"));
       return tasks;
     });
     const resultSets = await searchInBatches(stationTasks);
@@ -1213,7 +1557,9 @@
     const stagedPois = [];
     resultSets.forEach((set) => dedupePois(set).slice(0, 3).forEach((poi) => stagedPois.push(poi)));
     const corridorPois = dedupePois(stagedPois).filter((poi) => nearestPointDistance(poi.location, path) < 22);
-    const selected = dedupePois(corridorPois).slice(0, 36);
+    // 混动要同时保留油、电两张网。直接截断会让排在后面的那张网被整体切掉，
+    // 所以按站点类型交替取样，再统一放宽上限。
+    const selected = takeBalancedByType(dedupePois(corridorPois), isHybrid() ? 48 : 36);
     state.stations = selected.map((poi, index) => {
       const station = simulateStation(poi, index);
       const progress = routeProgress(station.location, path);
@@ -1271,12 +1617,32 @@
     return chooseStationForRouteExcluding(routeKey, new Set());
   }
 
+  // 按 type 轮转取样，保持各网络原有的沿线顺序。单一网络时等价于 slice(0, limit)。
+  function takeBalancedByType(pois, limit) {
+    const buckets = new Map();
+    pois.forEach((poi) => {
+      const key = poi.type || "unknown";
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(poi);
+    });
+    if (buckets.size <= 1) return pois.slice(0, limit);
+    const queues = Array.from(buckets.values());
+    const picked = [];
+    let cursor = 0;
+    while (picked.length < limit && queues.some((queue) => queue.length)) {
+      const queue = queues[cursor % queues.length];
+      if (queue.length) picked.push(queue.shift());
+      cursor += 1;
+    }
+    return picked;
+  }
+
   function chooseStationForRouteExcluding(routeKey, excludedIds) {
     const route = state.routeRecords[routeKey] || state.routeRecords.reliable;
     if (!route || !state.stations.length) return null;
-    const direct = directEnergyState(state.baseRouteRecords[routeKey] || route, state.energyType === "fuel");
+    const direct = directEnergyState(state.baseRouteRecords[routeKey] || route, isFuelActive());
     if (direct.canDirect) return null;
-    const desiredType = state.energyType === "fuel" ? "加油站" : "充电站";
+    const desiredType = isFuelActive() ? "加油站" : "充电站";
     const candidates = state.stations.filter((station) => {
       if (station.type !== desiredType || excludedIds.has(station.id)) return false;
       return estimateStationApproachKm(station) <= direct.maxSafeFirstLegKm + 0.5
@@ -1294,7 +1660,9 @@
         if (state.energyPercent <= 12) return approach * 100 + corridor * 4 + Number(station.p90 || 0) * 0.1 + progress;
         const rescueBias = approach * 0.15;
         if (routeKey === "fastest") return corridor * 1.7 + progress * 5 + station.p50 * 0.18 + rescueBias;
-        if (routeKey === "cheapest") return corridor * 0.8 + progress * 1.5 + Number(station.price) * 35 + station.p90 * 0.015 + rescueBias;
+        // ¥/L and ¥/kWh are different magnitudes. Score on cost per kilometre so
+        // the price term keeps the same weight on both energy paths.
+        if (routeKey === "cheapest") return corridor * 0.8 + progress * 1.5 + stationCostPerKm(station) * 190 + station.p90 * 0.015 + rescueBias;
         return corridor * 0.9 + station.p90 * 1.15 + station.occupancy * 5 + progress * 1.5 + rescueBias;
       };
       const scoreA = routeScore(a);
@@ -1324,28 +1692,19 @@
       origin: formatRouteCoordinate(origin),
       destination: formatRouteCoordinate(destination),
       plan: key,
-      cartype: state.energyType === "fuel" ? "0" : "1"
+      cartype: isFuelActive() ? "0" : "1"
     });
-    let lastError = null;
-    // Long trips require several independent road requests. AMap can return a
-    // transient 502 when several legs arrive at once, so retry once before
-    // treating a POI as unroutable. This never converts a failed request into
-    // a route; only a complete, valid response is accepted.
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const response = await fetch(`/api/route?${params}`, { headers: { Accept: "application/json" } });
-        if (!response.ok) throw new Error(`HTTP_${response.status}`);
-        const payload = await response.json();
-        const route = payload.route;
-        if (!route || !Array.isArray(route.path) || route.path.length < 2) throw new Error("INVALID_ROUTE_RESPONSE");
-        return route;
-      } catch (error) {
-        lastError = error;
-        if (attempt === 0) await new Promise((resolve) => window.setTimeout(resolve, 220));
-      }
+    // Long trips require several independent road requests, and AMap throttles
+    // per second, so a burst of legs can bounce with a transient 502. Retrying
+    // never converts a failed request into a route; only a complete, valid
+    // response is accepted, and a terminal infocode stops the retries at once.
+    try {
+      const { route } = await fetchRouteWithRetry(params);
+      return route;
+    } catch (error) {
+      recordRouteError(`${key}:long-trip`, error);
+      return null;
     }
-    state.routeErrors[`${key}:long-trip`] = { status: "error", info: lastError?.message || "ROUTE_UNAVAILABLE" };
-    return null;
   }
 
   async function queryRouteSequence(key, stops) {
@@ -1375,9 +1734,12 @@
     };
   }
 
-  function longTripChargeMinutes(amount, station) {
+  // The branch is passed explicitly because the 油电对比 has to price a path the
+  // planner is *not* currently on; defaulting to the live branch would make both
+  // sides of the comparison use the same refuelling physics.
+  function energyFillMinutes(amount, station, isFuel = isFuelActive()) {
     if (amount <= 1e-6) return 0;
-    if (state.energyType === "fuel") {
+    if (isFuel) {
       const rate = Math.max(3, Math.min(16, Number(station?.estimatedRefuelRateLpm) || 8));
       return Math.max(4, Math.ceil(amount / rate + 2));
     }
@@ -1385,18 +1747,34 @@
     return Math.max(4, Math.ceil(amount / power * 60 + 3));
   }
 
+  function longTripChargeMinutes(amount, station) {
+    return energyFillMinutes(amount, station, isFuelActive());
+  }
+
   function effectiveLongTripDetourLimit(baseRoute) {
     if (state.detourExplicit) return state.maxDetourKm;
     const baseDistanceKm = Math.max(0, Number(baseRoute?.distance || 0));
-    // Eight kilometres is appropriate for an urban or explicitly constrained
-    // trip. A cross-province route needs a small proportional allowance for
-    // joining motorway service areas; cap it at 30 km and surface the actual
-    // value in the route evidence.
-    return Math.max(state.maxDetourKm, Math.min(30, baseDistanceKm * 0.015));
+    // 8 km 适合市内行程，或用户明确要求了绕行上限的行程（detourExplicit）。
+    // 城际行程不一样：能停的地方几乎只有高速服务区，而服务区是分方向建的，
+    // 进出一次常常要多跑十几到二十几公里——得开到下一个互通才能掉头回来。
+    // 原来只有 1.5% 的比例项，要到 533 km 以上才够得着 8 km，等于在 190–530 km
+    // 这一整段把所有真实可用的服务区都判出局：上海→杭州 188 km 唯一能到的
+    // 南湖服务区实测绕行 23.5 km，于是三条策略全部"无方案"。
+    // 30 km 的上限本来就是这个函数认可的绕行天花板，这里只是让城际行程真的
+    // 够得到它。绕行公里数会原样显示在路线卡片和验证页，由用户自己判断值不值。
+    const intercityFloorKm = baseDistanceKm >= 120 ? 25 : 0;
+    return Math.max(state.maxDetourKm, Math.min(30, Math.max(intercityFloorKm, baseDistanceKm * 0.015)));
+  }
+
+  // 界面上凡是要说"绕行上限是多少"的地方，都必须说这条路线真正被校验时用的那个
+  // 数：城际行程放宽后仍然写 state.maxDetourKm，就是在用一个没生效的约束解释结果。
+  function activeDetourLimitKm(record) {
+    const limit = Number(record?.detourLimitKm);
+    return Number.isFinite(limit) ? Number(limit.toFixed(1)) : state.maxDetourKm;
   }
 
   function buildValidatedLongTripRecord(key, baseRoute, route, waypoints, servicePlan = null) {
-    const profile = getEnergyProfile(state.energyType === "fuel");
+    const profile = getEnergyProfile(isFuelActive());
     const targetArrivalSoc = effectiveArrivalReserveSoc(profile);
     const targetEnergy = profile.capacity * targetArrivalSoc / 100;
     const safetyEnergy = profile.capacity * profile.safetyReservePercent / 100;
@@ -1410,7 +1788,7 @@
     let totalAmount = 0;
     let chargeMinutes = 0;
     let p50Wait = 0;
-    let p90Wait = 0;
+    let waitVariance = 0;
     let energyCost = 0;
     let elapsedMinutes = 0;
     const stops = [];
@@ -1452,7 +1830,12 @@
       const plannedP50 = key === "reliable" ? rawP50 * 0.68 : rawP50;
       const plannedP90 = key === "reliable" ? rawP90 * 0.58 : rawP90;
       p50Wait += plannedP50;
-      p90Wait += plannedP90;
+      // 分位数不可加。各站 P90 直接相加，等于假定这一路每个补能点都同时踩中
+      // 各自最差的那 10%——四站独立发生的概率是万分之一，而卡片上印的
+      // "总等待 P90" 正是这个数。按独立性卷积：由每站 p50/p90 反解标准差，
+      // 方差相加后再还原成 P90；只停一次时退化为该站原始 P90。
+      const sigma = Math.max(0, (plannedP90 - plannedP50) / Z90);
+      waitVariance += sigma * sigma;
       energyCost += amount * Math.max(0, Number(station.price || 0));
       stops.push(Object.assign({}, station, {
         sequence: index + 1,
@@ -1471,6 +1854,7 @@
       elapsedMinutes += plannedP50 + stationChargeMinutes + reservationMinutesPerStop;
       if (!canReachStation || !targetMetAtStop) break;
     }
+    const p90Wait = p50Wait + Z90 * Math.sqrt(waitVariance);
     const finalLeg = Number(legs.at(-1)?.distance || 0);
     energy -= finalLeg * profile.consumptionPerKm;
     const arrivalSoc = Math.max(0, Math.min(100, energy / profile.capacity * 100));
@@ -1545,17 +1929,17 @@
     // Once route verification has proved that public POI coverage is too sparse,
     // plan only with the explicit corridor anchors. Mixing the original sparse
     // POIs back in can repeatedly select an unverified urban station instead.
-    const planningStations = state.provisionalCorridorActive
+    const planningStations = stationsForActiveBranch(state.provisionalCorridorActive
       ? state.stations.filter((station) => station.provisionalCorridor)
-      : state.stations;
+      : state.stations);
     try {
       const proposal = await postJson("/api/longtrip", {
         distanceKm: base.distance,
         durationMinutes: base.duration,
         stations: planningStations,
-        energyType: state.energyType,
+        energyType: backendEnergyTypeKey(),
         soc: state.energyPercent,
-        minArrivalSoc: effectiveArrivalReserveSoc(getEnergyProfile(state.energyType === "fuel")),
+        minArrivalSoc: effectiveArrivalReserveSoc(getEnergyProfile(isFuelActive())),
         maxStops: 6,
         maxDetourKm: effectiveLongTripDetourLimit(base)
       }, 20000);
@@ -1567,8 +1951,12 @@
 
   function injectProvisionalCorridorStations() {
     const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
-    if (!base?.path?.length || !Number.isFinite(Number(base.distance)) || state.stations.some((station) => station.provisionalCorridor)) return 0;
-    const profile = getEnergyProfile(state.energyType === "fuel");
+    // 兜底候选是按能源网络生成的。混动切换分支后，另一条网络还没有兜底点，
+    // 这里必须按当前分支判断是否已注入，否则燃油分支会拿到 0 个可用候选。
+    const branchStationType = activeStationType();
+    if (!base?.path?.length || !Number.isFinite(Number(base.distance))
+      || state.stations.some((station) => station.provisionalCorridor && station.type === branchStationType)) return 0;
+    const profile = getEnergyProfile(isFuelActive());
     const totalDistanceKm = Number(base.distance);
     const targetEnergy = profile.capacity * effectiveArrivalReserveSoc(profile) / 100;
     const safetyEnergy = profile.capacity * profile.safetyReservePercent / 100;
@@ -1589,11 +1977,11 @@
       if (!location || progressKm <= previousProgress + 5) break;
       const sequence = generated.length + 1;
       const candidate = simulateStation({
-        id: `provisional-${state.energyType}-${Math.round(progressKm)}-${sequence}`,
+        id: `provisional-${activeEnergyKind()}-${Math.round(progressKm)}-${sequence}`,
         name: `沿线补能候选点 ${sequence}`,
         address: "路线补能兜底候选 · 请在出发前确认现场设备",
         location,
-        type: state.energyType === "fuel" ? "加油站" : "充电站",
+        type: branchStationType,
         sourceLabel: "路线补能兜底候选 · 演示，需确认"
       }, 900 + sequence);
       generated.push(Object.assign(candidate, {
@@ -1720,11 +2108,42 @@
       if (!state.provisionalCorridorActive && injectProvisionalCorridorStations()) {
         return replanLongTripRoutes();
       }
+      // "未通过核验"曾经是一句什么都没说的话：候选路线其实已经算完了，
+      // 四道闸门（能否到站 / 能否补够 / 绕行 / 是否误点）到底是哪一道拦下来的，
+      // 记录里都有，只是被丢掉了。挑一条已经成功路由的候选，把真实原因说出来。
+      const rejected = Object.values(routedBackup).filter(Boolean);
+      const sample = rejected.slice().sort((a, b) => Number(b.canReachStation) - Number(a.canReachStation)
+        || Number(b.targetSocMet) - Number(a.targetSocMet)
+        || Number(a.detour) - Number(b.detour))[0];
+      const describeRejection = (record) => {
+        if (!record) return null;
+        if (!record.canReachStation) return `候选补能点在当前${isFuelActive() ? "油量" : "电量"}下无法安全抵达（最远可达约 ${record.maxSafeFirstLegKm} km）。`;
+        if (!record.targetSocMet) return `沿线候选点补能后仍达不到抵达余量要求（目标 ${record.targetArrivalSoc}%，实际 ${record.arrivalSoc}%）。`;
+        if (!record.detourWithinLimit) return `最优候选需绕行 ${record.detour} km，超过 ${record.detourLimitKm} km 上限。可放宽绕行限制后重试。`;
+        if (record.lateMinutes > 0) return `最优候选会比要求的抵达时间晚 ${record.lateMinutes} 分钟。`;
+        return null;
+      };
+      const detail = describeRejection(sample);
       state.multiStopPlanningMeta = {
         candidatesConsidered: proposal.candidatesConsidered || 0,
         maxStops: proposal.maxStops || 6,
         reason: "ROUTE_VERIFICATION_FAILED",
-        failure: "多站候选未通过逐段真实路线核验，系统未将其展示为可执行方案。"
+        rejectedRouted: rejected.length,
+        rejectionSample: sample
+          ? {
+            stops: (sample.stops || []).map((stop) => stop.name),
+            canReachStation: sample.canReachStation,
+            targetSocMet: sample.targetSocMet,
+            detour: sample.detour,
+            detourLimitKm: sample.detourLimitKm,
+            detourWithinLimit: sample.detourWithinLimit,
+            lateMinutes: sample.lateMinutes,
+            arrivalSoc: sample.arrivalSoc
+          }
+          : null,
+        failure: detail
+          ? `多站候选未通过核验：${detail}系统未将其展示为可执行方案。`
+          : "多站候选未通过逐段真实路线核验，系统未将其展示为可执行方案。"
       };
       return "verification-failed";
     }
@@ -1807,7 +2226,7 @@
     const entries = await Promise.all(Object.keys(policies).map(async (key) => {
       const base = baseRecords[key];
       if (!base) return [key, null];
-      const direct = calculateEnergyPlan(Object.assign({}, base, { station: null }), key, state.energyType === "fuel");
+      const direct = calculateEnergyPlan(Object.assign({}, base, { station: null }), key, isFuelActive());
       if (direct.canDirect) return [key, Object.assign({}, base, {
         station: null,
         directTrip: true,
@@ -1833,7 +2252,7 @@
           detour,
           station: Object.assign({}, station, { detour: detour.toFixed(1) })
         });
-        const energy = calculateEnergyPlan(candidate, key, state.energyType === "fuel");
+        const energy = calculateEnergyPlan(candidate, key, isFuelActive());
         if (energy.canReachStation && energy.detourWithinLimit && energy.targetMet) return [key, candidate];
         lastRejected = candidate;
       }
@@ -1859,7 +2278,7 @@
       .flatMap((record) => (record.stops?.length ? record.stops : [record.station]))
       .map((station) => station?.id)
       .filter(Boolean));
-    const route = state.baseRouteRecords.reliable || state.routeRecords.reliable || { path: FALLBACK.routes.reliable };
+    const route = corridorReferenceRoute();
     const displayCandidates = state.stations.filter((station) => {
       const awayFromOrigin = distanceKm(station.location, state.origin) > 1.2;
       const awayFromDestination = distanceKm(station.location, state.destination) > 0.8;
@@ -1888,9 +2307,15 @@
       return;
     }
     const candidates = Object.keys(state.routeCandidates || {}).length ? state.routeCandidates : state.routeRecords;
-    const base = candidates.reliable || fallbackRoutes().reliable;
-    const isFuel = state.energyType === "fuel";
-    const make = (candidateKey, record, station, costFactor) => {
+    // 实况模式下宁可借用本次行程另一条真实路线，也不能拿演示折线当基准：
+    // base 会同时决定里程、时长和整套费用模型。
+    const base = candidates.reliable
+      || (state.live ? Object.values(candidates).find(Boolean) : null)
+      || fallbackRoutes().reliable;
+    const isFuel = isFuelActive();
+    const profile = getEnergyProfile(isFuel);
+    const referencePrice = referenceEnergyPrice(isFuel);
+    const make = (candidateKey, record, station) => {
       const route = Object.assign({}, record || base, { station: station || null });
       const energyPlan = calculateEnergyPlan(route, candidateKey, isFuel);
       const hasStop = energyPlan.requiresStop && energyPlan.canReachStation;
@@ -1899,11 +2324,22 @@
       const arrival = state.departureMinutes + total;
       const lateMinutes = hasArrivalDeadline() ? Math.max(0, Math.ceil(arrival - state.deadlineMinutes)) : 0;
       const onTime = Math.max(55, Math.min(99, 98 - lateMinutes * 3 - (Number(station?.p90) || 10) * 0.2));
-      const energyCost = hasStop ? Number(station?.price) * energyPlan.amount : 0;
-      const routeCost = route.distance * 0.08 * costFactor;
+      // 本次行程的现金支出：补能支出 + 通行/道路成本。与多站长途路径同口径。
+      // 旧实现按目标写死 1.65/1.55/1.4 与 1.08/1.0/0.82 的“成本系数”，实际是在
+      // 替 simulateStation 里被当成电价的油价打补丁；油价修正后必须去掉，
+      // 否则燃油成本会被重复放大一次。
+      const unitPrice = hasStop ? Math.max(0, Number(station?.price) || referencePrice) : referencePrice;
+      const energyCost = hasStop ? unitPrice * energyPlan.amount : 0;
+      // 通行费与磨损与动力类型无关。
+      const roadCost = Math.max(0, Number(route.distance) || 0) * 0.08 + Math.max(0, Number(route.tolls) || 0);
       const serviceCost = energyPlan.chargeMinutes * 0.15;
-      const cost = Math.max(20, energyCost + routeCost + serviceCost);
+      const cost = Math.max(20, energyCost + roadCost + serviceCost);
       return Object.assign({}, route, {
+        energyCost: Number(energyCost.toFixed(1)),
+        roadCost: Number(roadCost.toFixed(1)),
+        energyUnitPrice: Number(unitPrice.toFixed(2)),
+        // 全程能耗成本（含起步电/油的折价），用于油电对比而非现金支出对比。
+        tripEnergyCost: Number((Math.max(0, Number(route.distance) || 0) * profile.consumptionPerKm * unitPrice).toFixed(1)),
         key: candidateKey,
         candidateKey,
         station: station || null,
@@ -1932,9 +2368,9 @@
       });
     };
     const raw = [
-      make("fastest", candidates.fastest || base, candidates.fastest?.station, isFuel ? 1.65 : 1.08),
-      make("reliable", candidates.reliable || base, candidates.reliable?.station, isFuel ? 1.55 : 1.0),
-      make("cheapest", candidates.cheapest || base, candidates.cheapest?.station, isFuel ? 1.4 : 0.82)
+      make("fastest", candidates.fastest || base, candidates.fastest?.station),
+      make("reliable", candidates.reliable || base, candidates.reliable?.station),
+      make("cheapest", candidates.cheapest || base, candidates.cheapest?.station)
     ];
     const feasibleFirst = (a, b) => Number(b.feasible) - Number(a.feasible);
     const sortFast = (a, b) => feasibleFirst(a, b) || a.arrival - b.arrival || a.cost - b.cost;
@@ -2018,29 +2454,41 @@
       else if (record.stableCollision) tag.textContent = "备选";
       else tag.textContent = `省 ¥${Math.max(1, Math.round(state.routeRecords.fastest.cost - record.cost))}`;
     }
+    // 服务区候选点是真实的高德服务区 POI，但高德不告诉我们里面到底有没有
+    // 充电桩/油枪——站点面板早就标了"补能设施待确认"，路线卡片却没有。
+    // 对纯电用户来说，一个名字就叫"加油站"的候选点不带这句就是误导。
+    const unconfirmedEquipment = (stations) => stations.some((station) => station && (station.serviceAreaCandidate || station.provisionalCorridor))
+      ? " · 补能设施待确认"
+      : "";
     if (stationLine) stationLine.textContent = record.directTrip
-      ? `无需${state.energyType === "fuel" ? "加油" : "补能"} · 直达 ${state.destinationName} · 到达 ${record.arrivalSoc}%`
+      ? `无需${isFuelActive() ? "加油" : "补能"} · 直达 ${state.destinationName} · 到达 ${record.arrivalSoc}%`
       : record.serviceOnly
         ? `服务停靠 · ${serviceName || "沿线服务"} · ETA 已按真实路线重算`
       : record.multiStop
-        ? `连续${state.energyType === "fuel" ? "加油" : "补能"} ${record.stopCount} 次${serviceName ? ` · 含 ${serviceName}` : ""} · ${record.stops.map((stop) => stop.name).join(" → ")} · 到达 ${record.arrivalSoc}%`
+        ? `连续${isFuelActive() ? "加油" : "补能"} ${record.stopCount} 次${serviceName ? ` · 含 ${serviceName}` : ""} · ${record.stops.map((stop) => stop.name).join(" → ")} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment(record.stops || [])}`
       : !record.canReachStation
-        ? (record.planningFailure || `当前余量不足以安全抵达候选${state.energyType === "fuel" ? "加油站" : "充电站"} · 不建议执行`)
-        : `${state.energyType === "fuel" ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"}${serviceName ? ` · 含 ${serviceName}` : ""} · 到达 ${record.arrivalSoc}%`;
+        ? (record.planningFailure || `当前余量不足以安全抵达候选${isFuelActive() ? "加油站" : "充电站"} · 不建议执行`)
+        : `${isFuelActive() ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"}${serviceName ? ` · 含 ${serviceName}` : ""} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment([record.station])}`;
     if (reason) {
+      // 该策略的高德查询没返回独立路线，这里复用的是本次行程另一条真实路线。
+      // 必须说出来，否则三张卡片看着像三条不同的路线。
+      const policyNote = record.policyFallbackFrom
+        ? `（高德未返回该策略的独立路线，此处沿用"${{ fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }[record.policyFallbackFrom] || record.policyFallbackFrom}"的真实路线）`
+        : "";
+      const withNote = (text) => (policyNote ? `${text}${policyNote}` : text);
       if (record.directTrip) {
-        reason.textContent = `当前${state.energyType === "fuel" ? "油量" : "电量"}可满足${arrivalReserveDescription(record)}，不引入额外补能停靠。`;
+        reason.textContent = withNote(`当前${isFuelActive() ? "油量" : "电量"}可满足${arrivalReserveDescription(record)}，不引入额外补能停靠。`);
         return;
       }
       if (record.serviceOnly) {
-        reason.textContent = `已加入 ${serviceName || "沿线服务"} · 预计额外 ${record.servicePlan?.extraMinutes || 0} 分钟 · 到达余量 ${record.arrivalSoc}%。`;
+        reason.textContent = withNote(`已加入 ${serviceName || "沿线服务"} · 预计额外 ${record.servicePlan?.extraMinutes || 0} 分钟 · 到达余量 ${record.arrivalSoc}%。`);
         return;
       }
       if (record.multiStop) {
         if (!record.feasible) {
-          reason.textContent = record.key === "cheapest"
+          reason.textContent = withNote(record.key === "cheapest"
             ? `高德低费用道路可将通行费降至 ¥${Math.round(record.roadTolls || 0)}，但预计晚到 ${record.lateMinutes} 分钟，不建议在当前时限下执行。`
-            : `该补能策略未同时满足时限、到达余量或绕行约束，已保留为风险备选。`;
+            : `该补能策略未同时满足时限、到达余量或绕行约束，已保留为风险备选。`);
           return;
         }
         const summaries = {
@@ -2050,16 +2498,18 @@
             ? `当前时限下保留同一安全道路走廊，补能采用低价时段/优惠价模拟；费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}。`
             : `费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}；优先在较低模拟站价处补能。`
         };
-        const baseReason = summaries[record.key] || `已逐段核验 ${record.stopCount} 次${state.energyType === "fuel" ? "加油" : "补能"}：总等待 P90 ${record.p90Wait} 分钟。`;
-        reason.textContent = serviceName ? `${baseReason} 已含服务停靠 ${serviceName}。` : baseReason;
+        const baseReason = summaries[record.key] || `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：总等待 P90 ${record.p90Wait} 分钟。`;
+        reason.textContent = withNote(serviceName ? `${baseReason} 已含服务停靠 ${serviceName}。` : baseReason);
         return;
       }
       if (!record.canReachStation) {
-        reason.textContent = record.planningFailure || "候选站首段路程超出当前安全可达距离，已拦截该方案。";
+        reason.textContent = withNote(record.planningFailure || "候选站首段路程超出当前安全可达距离，已拦截该方案。");
         return;
       }
       if (!record.detourWithinLimit) {
-        reason.textContent = `实际绕行 ${Number(record.detour || 0).toFixed(1)} km，超过“绕行≤${state.maxDetourKm} km”约束。`;
+        // 城际行程放宽后的上限和用户看到的 8 km 不是一回事，要报实际用的那个，
+        // 否则"超过 ≤8 km 约束"会去解释一条按 25 km 校验过的路线。
+        reason.textContent = withNote(`实际绕行 ${Number(record.detour || 0).toFixed(1)} km，超过“绕行≤${activeDetourLimitKm(record)} km”约束。`);
         return;
       }
       const reasons = {
@@ -2067,7 +2517,7 @@
         reliable: record.isActualCheapest ? `总成本最低 ¥${Math.round(record.cost)} · P90 ${record.station.p90} 分钟 · ${Math.round(record.onTime)}% 准时` : record.stableCollision ? `路线与站点的可解释备选 · P90 ${record.station.p90} 分钟 · ${Math.round(record.onTime)}% 准时` : record.feasible ? `P90 ${record.station.p90} 分钟 · 负载 ${(record.station.occupancy * 100).toFixed(0)}% · ${Math.round(record.onTime)}% 准时` : `风险备选，但超过到达时限 ${record.lateMinutes} 分钟`,
         cheapest: record.costBackup ? `路线与站点的可解释备选 · 绕行 ${record.station.detour} km · P90 ${record.station.p90} 分钟` : record.feasible ? `总成本最低 · 绕行 ${record.station.detour} km · 预计节省 ¥${Math.max(1, Math.round(state.routeRecords.fastest.cost - record.cost))}` : `成本备选，但超过到达时限，不建议执行`
       };
-      reason.textContent = reasons[record.key];
+      reason.textContent = withNote(reasons[record.key]);
     }
   }
 
@@ -2085,8 +2535,250 @@
     const heading = $(".sheet-heading h2");
     if (heading) heading.textContent = feasibleCount === 3 ? "3 条可行方案" : `${feasibleCount} 条可行 · ${3 - feasibleCount} 条备用`;
     renderActiveRouteSummary();
+    renderHybridCompare();
     updateInsight(state.routeRecords[state.selectedRoute]);
     syncArrivalPayment();
+  }
+
+  // 混动车的两条补能路径必须放在同一条已核验路线上比较，否则"省钱"只是
+  // 两次独立优化的副产品。这里对同一条路线分别核算电、油两侧的全程能耗
+  // 成本、需要的补能次数与补能耗时，再按统一的时间价值折算给出建议。
+  const HYBRID_TIME_VALUE_PER_HOUR = 60;
+  // 与 lib/longtrip.mjs 的 MAX_STOPS 保持一致。
+  const HYBRID_MAX_STOPS = 6;
+
+  function evaluateEnergyBranch(kind, distanceKm) {
+    const isFuel = kind === "fuel";
+    const profile = isFuel ? ENERGY_PROFILES.hybridFuel : ENERGY_PROFILES.hybridElectric;
+    const stationType = isFuel ? "加油站" : "充电站";
+    const pool = state.stations.filter((station) => station.type === stationType);
+    const price = referenceEnergyPrice(isFuel);
+    const level = hybridBranchLevel(kind);
+    const reservePercent = effectiveArrivalReserveSoc(profile);
+    const totalConsumed = Math.max(0, distanceKm) * profile.consumptionPerKm;
+    const startEnergy = profile.capacity * level / 100;
+    const reserveEnergy = profile.capacity * reservePercent / 100;
+    const safetyEnergy = profile.capacity * profile.safetyReservePercent / 100;
+    // 起步可用能量要留出到达余量；每次补满后同样只有到"满-安全下限"可用。
+    const usableFromStart = Math.max(0, startEnergy - reserveEnergy);
+    const usablePerFill = Math.max(1e-6, profile.capacity - safetyEnergy - reserveEnergy);
+    const deficit = Math.max(0, totalConsumed - usableFromStart);
+    const stops = deficit <= 1e-6 ? 0 : Math.ceil(deficit / usablePerFill);
+    const purchased = deficit / profile.transferEfficiency;
+    const medianP50 = pool.length
+      ? pool.map((station) => Number(station.p50) || 0).sort((a, b) => a - b)[Math.floor(pool.length / 2)]
+      : 8;
+    const perFillAmount = stops > 0 ? purchased / stops : 0;
+    const perFillMinutes = stops > 0 ? energyFillMinutes(perFillAmount, pool[0], isFuel) : 0;
+    const stopMinutes = stops * (perFillMinutes + medianP50);
+    // 能耗成本按"本次行程实际消耗"计价，含起步电/油的折价，
+    // 这样直达也不会被算成零成本，两侧才可比。
+    const energyCost = totalConsumed * price;
+    const timeCost = stopMinutes / 60 * HYBRID_TIME_VALUE_PER_HOUR;
+    // available 原来只看"有没有站、停几次不超上限"，不看第一站够不够得着。于是
+    // 电量 22% 的混动电分支：deficit 算出来要停 4 次、池子里有 24 个充电站、4 ≤ 6，
+    // 推荐器判 available=true 并推荐电（电更便宜）；可真正的多停规划器知道最近的
+    // 充电站在 28km 外、22% 电只能跑 24km，直接判 NO_FEASIBLE_SEQUENCE。推荐器和
+    // 规划器对同一条分支给出相反结论，自动换油分支就不会触发，三条线全挂"无法安全
+    // 到站"，哪怕油分支 500km 续航明明能走。按规划器同一道门槛补一道：需要补能时，
+    // 池子里必须至少有一个站落在当前电量可达范围内，否则这条路径不可用。
+    const firstLegKm = Math.max(0, startEnergy - safetyEnergy) / profile.consumptionPerKm;
+    const firstStopReachable = stops === 0 || pool.some((station) => estimateStationApproachKm(station) <= firstLegKm + 0.5);
+    return {
+      kind,
+      label: isFuel ? "燃油" : "纯电",
+      unit: profile.unit,
+      stationType,
+      stationCount: pool.length,
+      level: Math.round(level),
+      rangeKm: Math.max(0, Math.floor(usableFromStart / profile.consumptionPerKm)),
+      price: Number(price.toFixed(2)),
+      consumed: Number(totalConsumed.toFixed(1)),
+      purchased: Number(purchased.toFixed(1)),
+      stops,
+      stopMinutes: Math.round(stopMinutes),
+      energyCost: Number(energyCost.toFixed(1)),
+      costPerKm: distanceKm > 0 ? Number((energyCost / distanceKm).toFixed(2)) : 0,
+      generalizedCost: Number((energyCost + timeCost).toFixed(1)),
+      // 超过多站规划器自身的 6 站上限时，这条路径实际上是排不出路线的，
+      // 不能因为"每公里更便宜"就把它推荐出去。
+      exceedsStopCap: stops > HYBRID_MAX_STOPS,
+      available: firstStopReachable && (stops === 0 || (pool.length > 0 && stops <= HYBRID_MAX_STOPS)),
+      // 不可用原因要分清，否则面板会写"未检索到充电站"而池子里明明有 24 个。
+      unavailableReason: !firstStopReachable && stops > 0
+        ? "first-stop-unreachable"
+        : stops > HYBRID_MAX_STOPS
+          ? "stop-cap-exceeded"
+          : pool.length === 0 && stops > 0
+            ? "no-station"
+            : null
+    };
+  }
+
+  function computeHybridComparison() {
+    if (!isHybrid()) return null;
+    const record = state.routeRecords[state.selectedRoute] || state.routeRecords.reliable;
+    const distanceKm = Math.max(0, Number(record?.baseDistance ?? record?.distance) || 0);
+    if (!distanceKm) return null;
+    const electric = evaluateEnergyBranch("electric", distanceKm);
+    const fuel = evaluateEnergyBranch("fuel", distanceKm);
+    // 规划结果反馈：evaluateEnergyBranch 用直线距离估第一站可达性，会放过"直线
+    // 够得着、路况够不着"的站。活动分支的路线是真实规划器跑出来的，三条线全挂
+    // 就是实测证据，比直线估算可靠--记一笔并强制标不可用。非活动分支的路线还没
+    // 建，不能这样判。已失败过的分支也保持不可用，避免在电/油之间来回切换死循环。
+    const activeKind = activeEnergyKind();
+    for (const branch of [electric, fuel]) {
+      if (state.hybridFailedBranches.has(branch.kind)) {
+        branch.available = false;
+        if (!branch.unavailableReason) branch.unavailableReason = "planning-failed";
+        continue;
+      }
+      if (branch.kind === activeKind && branch.available) {
+        const records = Object.values(state.routeRecords).filter(Boolean);
+        const allFailed = records.length > 0 && records.every((r) => r.feasible === false);
+        if (allFailed) {
+          state.hybridFailedBranches.add(branch.kind);
+          branch.available = false;
+          branch.unavailableReason = "planning-failed";
+        }
+      }
+    }
+    // 沿线没有对应网络的站点、又确实需要补能时，这条路径不可执行。
+    const candidates = [electric, fuel].filter((branch) => branch.available);
+    const recommend = (candidates.length === 1
+      ? candidates[0]
+      : [electric, fuel].slice().sort((a, b) => a.generalizedCost - b.generalizedCost)[0]).kind;
+    const winner = recommend === "fuel" ? fuel : electric;
+    const loser = recommend === "fuel" ? electric : fuel;
+    return {
+      distanceKm: Number(distanceKm.toFixed(1)),
+      electric,
+      fuel,
+      recommend,
+      moneySaved: Number((loser.energyCost - winner.energyCost).toFixed(1)),
+      minutesSaved: Math.round(loser.stopMinutes - winner.stopMinutes),
+      timeValuePerHour: HYBRID_TIME_VALUE_PER_HOUR
+    };
+  }
+
+  function branchCardMarkup(branch, comparison) {
+    const active = activeEnergyKind() === branch.kind;
+    const recommended = comparison.recommend === branch.kind;
+    const stopText = branch.exceedsStopCap
+      ? `需补能 ${branch.stops} 次 · 超过 ${HYBRID_MAX_STOPS} 站规划上限`
+      : !branch.available
+        ? `沿线暂未检索到${branch.stationType}`
+        : branch.stops === 0
+          ? "无需补能，可直达"
+          : `需补能 ${branch.stops} 次 · 约 ${branch.stopMinutes} 分钟`;
+    return `<button type="button" class="hybrid-branch${active ? " active" : ""}" data-hybrid-branch="${branch.kind}" aria-pressed="${active}">
+      <div class="hybrid-branch-head">
+        <span class="hybrid-branch-name"><i data-lucide="${branch.kind === "fuel" ? "fuel" : "zap"}"></i>${branch.label}</span>
+        ${recommended ? '<span class="hybrid-badge">推荐</span>' : ""}
+      </div>
+      <div class="hybrid-branch-cost">¥${branch.energyCost.toFixed(0)}<span>能耗成本</span></div>
+      <div class="hybrid-branch-meta">${branch.costPerKm.toFixed(2)} 元/km · ${branch.price.toFixed(2)} 元/${branch.unit}</div>
+      <div class="hybrid-branch-meta">${stopText}</div>
+      <div class="hybrid-branch-meta">当前 ${branch.level}% · 可续驶约 ${branch.rangeKm} km</div>
+    </button>`;
+  }
+
+  // renderHybridCompare 可以触发一次自动换路径，而换路径又会重绘路线卡片。
+  // 这个标志保证自动切换最多发生一次，不会来回抖动。
+  let hybridAutoSwitching = false;
+
+  function renderHybridCompare() {
+    const host = byId("hybridCompare");
+    if (!host) return;
+    const comparison = isHybrid() ? computeHybridComparison() : null;
+    state.hybridComparison = comparison;
+    host.hidden = !comparison;
+    if (!comparison) {
+      host.innerHTML = "";
+      return;
+    }
+    // 建议只在用户没有手动指定过能源路径时自动生效，避免覆盖显式选择。
+    if (!state.hybridBranchTouched && !hybridAutoSwitching && comparison.recommend !== activeEnergyKind()) {
+      hybridAutoSwitching = true;
+      applyHybridBranch(comparison.recommend, { touched: false })
+        .catch(() => {})
+        .finally(() => { hybridAutoSwitching = false; });
+      return;
+    }
+    const winner = comparison.recommend === "fuel" ? comparison.fuel : comparison.electric;
+    const loser = comparison.recommend === "fuel" ? comparison.electric : comparison.fuel;
+    const money = comparison.moneySaved;
+    const minutes = comparison.minutesSaved;
+    // 便宜和快通常不指向同一条路径。只报对自己有利的那一半会让结论看着更
+    // 漂亮，但用户按它决策会吃亏，所以两侧都要写清楚。
+    let verdict;
+    if (!loser.available) {
+      // 不可用原因分四种，措辞必须和实际情况对得上：站数超上限、沿线确实没站、
+      // 当前电量到不了最近的站、以及规划器实测排不出线（站直线够得着但路况够不着）。
+      // 一律写成"未检索到可用"会把 24 个充电站说没了。
+      const reason = loser.unavailableReason;
+      const loserExplain = reason === "stop-cap-exceeded" || loser.exceedsStopCap
+        ? `${loser.label}需补能 ${loser.stops} 次，超过 ${HYBRID_MAX_STOPS} 站规划上限`
+        : reason === "no-station"
+          ? `沿线未检索到可用的${loser.stationType}`
+          : reason === "first-stop-unreachable" || reason === "planning-failed"
+            ? `当前${loser.label}剩余能量到不了最近的${loser.stationType}（可续驶约 ${loser.rangeKm} km）`
+            : `沿线未检索到可用的${loser.stationType}`;
+      verdict = `本段 ${comparison.distanceKm} km 只能走${winner.label}：${loserExplain}`;
+    } else if (money > 0.5 && minutes > 0) {
+      verdict = `本段 ${comparison.distanceKm} km 走${winner.label}更划算：省 ¥${money.toFixed(0)}，且少花 ${minutes} 分钟补能`;
+    } else if (money > 0.5) {
+      verdict = minutes < 0
+        ? `本段 ${comparison.distanceKm} km 建议走${winner.label}：能耗省 ¥${money.toFixed(0)}，代价是多花 ${Math.abs(minutes)} 分钟补能`
+        : `本段 ${comparison.distanceKm} km 走${winner.label}更划算：能耗省 ¥${money.toFixed(0)}`;
+    } else if (minutes > 0) {
+      verdict = money < -0.5
+        ? `本段 ${comparison.distanceKm} km 建议走${winner.label}：少花 ${minutes} 分钟补能，代价是能耗多 ¥${Math.abs(money).toFixed(0)}`
+        : `本段 ${comparison.distanceKm} km 走${winner.label}更划算：少花 ${minutes} 分钟补能`;
+    } else {
+      verdict = `本段 ${comparison.distanceKm} km 两条路径接近，默认按${winner.label}规划`;
+    }
+    host.innerHTML = `<div class="hybrid-compare-head">
+        <div class="hybrid-compare-title"><i data-lucide="git-compare-arrows"></i>油电划算度对比</div>
+        <div class="hybrid-compare-note">同一条已核验路线 · 时间按 ¥${comparison.timeValuePerHour}/小时折算</div>
+      </div>
+      <div class="hybrid-branches">${branchCardMarkup(comparison.electric, comparison)}${branchCardMarkup(comparison.fuel, comparison)}</div>
+      <div class="hybrid-verdict">${verdict}<span>点击卡片可切换按哪条能源路径生成完整路线</span></div>`;
+    Array.from(host.querySelectorAll("[data-hybrid-branch]")).forEach((button) => {
+      button.addEventListener("click", () => applyHybridBranch(button.dataset.hybridBranch, { touched: true }));
+    });
+    refreshIcons();
+  }
+
+  // 切换能源路径不需要重新检索站点：混动模式下油、电两张网都已在 state.stations
+  // 里，只需要按新分支重新做多站规划并重绘。
+  async function applyHybridBranch(kind, options = {}) {
+    if (!isHybrid()) return;
+    const next = kind === "fuel" ? "fuel" : "electric";
+    if (options.touched) state.hybridBranchTouched = true;
+    // 用户手动切换是在显式重试，清掉之前自动换路径留下的失败记录，给这条分支
+    // 重新评估的机会。自动换路径不带 touched，不清空，失败记忆保留到下一轮规划。
+    if (options.touched) state.hybridFailedBranches = new Set();
+    if (next === state.hybridBranch) {
+      renderHybridCompare();
+      return;
+    }
+    state.hybridBranch = next;
+    syncHybridLevels();
+    state.routeSelectionTouched = false;
+    state.selectedRoute = "reliable";
+    state.multiStopRouteRecords = null;
+    state.multiStopPlanningMeta = null;
+    updateEnergyControls();
+    if (state.live && state.AMap) {
+      setMapStatus(`正在按${next === "fuel" ? "燃油" : "纯电"}路径重新规划…`);
+      await replanRoutesViaStations();
+      drawAmapRoutes();
+      fitAmapView();
+      setMapStatus("高德地图已连接 · 真实路线与 POI 已更新", "ready");
+    }
+    renderRouteCards();
+    if (options.touched) showToast(`已按${next === "fuel" ? "燃油" : "纯电"}路径重新生成路线`);
   }
 
   function selectedPaymentTarget() {
@@ -2117,6 +2809,58 @@
     label.textContent = paidForCurrentStation ? `已扣 ¥${state.paymentReceipt.amount.toFixed(1)}` : "模拟到站";
   }
 
+  // 运营端若对当前这站执行过引流策略，司机在这站付费时就应当享受到那张券。
+  // 这是"运营发券 -> 司机被引流 -> 司机实付减免"的闭环，没有它，运营页的优惠
+  // 和出行页的扣款就是两个互不相干的数字。只在站点 id 吻合且策略已执行时计入。
+  function activeDiversionDiscount(stationId) {
+    const payload = state.pendingOperatorPayload;
+    if (!payload || state.executionState !== "after") return 0;
+    if (payload.targetStation?.id !== stationId) return 0;
+    return Math.max(0, Number(payload.discountAmount || 0));
+  }
+
+  function renderPaymentReceipt(target) {
+    const station = target.station;
+    const unit = target.record.energyUnit || station.priceUnit || "kWh";
+    // 多停方案的 station 是 stop 对象，带 energyAmount；单停方案的 station 是
+    // record.station，没有这个字段（总量在 record.energyAmount 上）。用 ?? 兜底，
+    // 别让单停收据印出"0.0 kWh"。
+    const energyAmount = Number(station.energyAmount ?? target.record.energyAmount ?? 0);
+    const unitPrice = Number(station.price || 0);
+    const energyFee = Number.isFinite(Number(station.energyCost))
+      ? Number(station.energyCost)
+      : Number((energyAmount * unitPrice).toFixed(1));
+    const discount = activeDiversionDiscount(station.id);
+    const paid = Math.max(0, Number((energyFee - discount).toFixed(1)));
+    const noun = isFuelActive() ? "加油" : "补能";
+
+    setText("paymentReceiptTime", formatClock(Number(target.station.arrivalMinute) || state.departureMinutes));
+    setText("paymentReceiptStation", `车牌 <b>${state.vehiclePlate}</b> · ${escapeHtml(station.name)}`);
+    const rows = byId("paymentReceiptRows");
+    if (rows) {
+      rows.innerHTML = `
+        <div class="payment-receipt-row"><span>${noun}量</span><b>${energyAmount.toFixed(1)} ${unit}</b></div>
+        <div class="payment-receipt-row"><span>单价</span><b>¥${unitPrice.toFixed(2)}/${unit}</b></div>
+        <div class="payment-receipt-row"><span>能源费</span><b>¥${energyFee.toFixed(1)}</b></div>
+        ${discount > 0 ? `<div class="payment-receipt-row discount"><span>运营引流优惠</span><b>−¥${discount.toFixed(1)}</b></div>` : ""}`;
+    }
+    setText("paymentReceiptTotal", `¥${paid.toFixed(1)}`);
+    setText("paymentReceiptFoot", discount > 0
+      ? `车牌识别自动扣款 · 已核销运营端 ¥${discount.toFixed(1)} 引流券`
+      : "车牌识别自动扣款 · 已授权");
+    const overlay = byId("paymentReceiptOverlay");
+    if (overlay) { overlay.hidden = false; overlay.classList.add("visible"); }
+    refreshIcons();
+    return { energyFee, discount, paid };
+  }
+
+  function closePaymentReceipt() {
+    const overlay = byId("paymentReceiptOverlay");
+    if (!overlay) return;
+    overlay.classList.remove("visible");
+    window.setTimeout(() => { overlay.hidden = true; }, 180);
+  }
+
   async function runArrivalPayment() {
     const target = selectedPaymentTarget();
     if (!target) {
@@ -2129,14 +2873,17 @@
     if (label) label.textContent = "识别车牌…";
     await new Promise((resolve) => window.setTimeout(resolve, 650));
     state.paymentState = "paid";
+    const breakdown = renderPaymentReceipt(target);
     state.paymentReceipt = {
       stationId: target.station.id,
       stationName: target.station.name,
-      amount: target.amount,
+      amount: breakdown.paid,
+      energyFee: breakdown.energyFee,
+      discount: breakdown.discount,
       createdAt: Date.now()
     };
     syncArrivalPayment();
-    showToast(`车牌 ${state.vehiclePlate} 已在 ${target.station.name} 完成识别，模拟扣款 ¥${target.amount.toFixed(1)}`, 4200);
+    showToast(`车牌 ${state.vehiclePlate} 已在 ${target.station.name} 完成识别，实付 ¥${breakdown.paid.toFixed(1)}`, 4200);
     refreshIcons();
   }
 
@@ -2159,7 +2906,7 @@
     }
     if (!record.station) {
       const title = record.planningFailure ? "未生成虚假的长途补能路线" : "未找到安全可达补能站";
-      const hint = record.planningFailure || `请提高当前${state.energyType === "fuel" ? "油量" : "电量"}或放宽绕行约束`;
+      const hint = record.planningFailure || `请提高当前${isFuelActive() ? "油量" : "电量"}或放宽绕行约束`;
       summary.innerHTML = `<span>${record.displayName || "方案不可执行"}</span><strong>${title}</strong><small>${escapeHtml(hint)}</small>`;
       return;
     }
@@ -2208,9 +2955,9 @@
     if (record.multiStop) {
       const hasProvisional = record.stops.some((stop) => stop.provisionalCorridor);
       if (evidence[0]) evidence[0].textContent = hasProvisional
-        ? `高德主路线已核验；按沿线候选分配 ${record.stopCount} 次${state.energyType === "fuel" ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`
-        : `已逐段核验 ${record.stopCount} 次${state.energyType === "fuel" ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`;
-      if (evidence[1]) evidence[1].textContent = `建议累计${state.energyType === "fuel" ? "加油" : "补能"} ${record.energyAmount} ${record.energyUnit}，总等待 P50 ${record.p50Wait} 分 / P90 ${record.p90Wait} 分。`;
+        ? `高德主路线已核验；按沿线候选分配 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`
+        : `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`;
+      if (evidence[1]) evidence[1].textContent = `建议累计${isFuelActive() ? "加油" : "补能"} ${record.energyAmount} ${record.energyUnit}，总等待 P50 ${record.p50Wait} 分 / P90 ${record.p90Wait} 分。`;
       if (evidence[2]) evidence[2].textContent = `总绕行 ${Number(record.detour || 0).toFixed(1)} km · ${formatClock(record.arrival)} 抵达 · ${arrivalReserveDescription(record)}。`;
       renderServiceRecommendations(record);
       updateServiceNudge(record);
@@ -2244,7 +2991,7 @@
     highlightSelectedStation();
     setText("stationTitle", "本次行程无需补能");
     const subtitle = byId("stationSubtitle");
-    if (subtitle) subtitle.innerHTML = `当前${state.energyType === "fuel" ? "油量" : "电量"}可直达 ${state.destinationName} · <span class="source-badge">真实路线 / 能耗模型计算</span>`;
+    if (subtitle) subtitle.innerHTML = `当前${isFuelActive() ? "油量" : "电量"}可直达 ${state.destinationName} · <span class="source-badge">真实路线 / 能耗模型计算</span>`;
     setInsightBadge("直达可行", false);
     const wait = byId("waitValue");
     if (wait) wait.innerHTML = `0 <small>分钟</small>`;
@@ -2256,7 +3003,7 @@
     const evidence = $$(".evidence-row span");
     if (evidence[0]) evidence[0].textContent = `直达 ${state.destinationName}，不经过补能站，也不增加绕行。`;
     if (evidence[1]) evidence[1].textContent = `预计到达剩余 ${record.arrivalSoc}%（${arrivalReserveDescription(record)}）。`;
-    if (evidence[2]) evidence[2].textContent = `基于真实路线里程与 ${state.energyType === "fuel" ? "油耗" : "能耗"}参数计算，当前无需补能。`;
+    if (evidence[2]) evidence[2].textContent = `基于真实路线里程与 ${isFuelActive() ? "油耗" : "能耗"}参数计算，当前无需补能。`;
     setText("serviceStatus", "本次无补能停靠；如经过饭点或连续驾驶较久，系统会建议服务停靠");
     const serviceButton = byId("serviceFeedbackButton");
     if (serviceButton) {
@@ -2308,11 +3055,11 @@
     if (hasLongTripFailure) {
       if (evidence[0]) evidence[0].textContent = record.planningFailure;
       if (evidence[1]) evidence[1].textContent = `系统最多支持连续补能 ${state.multiStopPlanningMeta?.maxStops || 6} 次，未用默认目的地或单站路线冒充结果。`;
-      if (evidence[2]) evidence[2].textContent = `已同时检查逐段安全余量、${arrivalReserveDescription(record)}与绕行上限（≤${state.maxDetourKm} km）。`;
+      if (evidence[2]) evidence[2].textContent = `已同时检查逐段安全余量、${arrivalReserveDescription(record)}与绕行上限（≤${activeDetourLimitKm(record)} km）。`;
     } else {
       if (evidence[0]) evidence[0].textContent = "未通过“起点→补能站”安全可达性校验，因此未生成途经站路线。";
       if (evidence[1]) evidence[1].textContent = `当前${arrivalReserveDescription(record)}，请提高起始余量或选择更近站点。`;
-      if (evidence[2]) evidence[2].textContent = `已同时检查首段可达性与绕行上限（≤${state.maxDetourKm} km）。`;
+      if (evidence[2]) evidence[2].textContent = `已同时检查首段可达性与绕行上限（≤${activeDetourLimitKm(record)} km）。`;
     }
     setText("serviceStatus", "请先获得可执行补能方案");
     const serviceButton = byId("serviceFeedbackButton");
@@ -2345,6 +3092,12 @@
     const departure = state.departureMinutes;
     const duration = Number(record.duration || 0);
     const driveLabel = formatDuration(duration);
+    // 天气感知：雨雪/恶劣天气时给一句"优先室内"的提示，让服务建议不只是按时长
+    // 触发，也响应沿线天气。weatherFactor=1（晴/阴）时不附加，避免噪音。
+    const weather = state.weather;
+    const weatherSuffix = weather && Number(weather.weatherFactor) > 1
+      ? `当前起点${weather.city || ""}天气${weather.condition}，建议优先选择可室内停靠的服务点。`
+      : "";
     const lunch = nextDailyMoment(departure, duration, 11 * 60 + 30, 13 * 60 + 30);
     const dinner = nextDailyMoment(departure, duration, 17 * 60 + 30, 20 * 60);
     const mealMoment = [lunch, dinner].filter(Number.isFinite).sort((a, b) => a - b)[0];
@@ -2353,7 +3106,7 @@
         kind: "meal",
         icon: "utensils",
         title: `预计 ${formatClock(mealMoment)} 接近用餐时段`,
-        text: `主路线纯驾驶约 ${driveLabel}。是否在该时刻附近安排简餐或咖啡？确认后会把服务停靠加入路线并重算 ETA。`,
+        text: `主路线纯驾驶约 ${driveLabel}。是否在该时刻附近安排简餐或咖啡？确认后会把服务停靠加入路线并重算 ETA。${weatherSuffix}`,
         targetMinute: mealMoment,
         progress: Math.max(0.08, Math.min(0.92, (mealMoment - departure) / Math.max(1, duration)))
       };
@@ -2366,7 +3119,7 @@
         kind: "rest",
         icon: "armchair",
         title: `全程约 ${driveLabel} · 建议 ${formatClock(targetMinute)} 途中休息`,
-        text: `这是高德主路线纯驾驶时长（约 ${driveLabel}），不是把北京到目的地算成 2 小时。系统建议在出发后约 2 小时处短暂休息或咖啡，并优先找顺路服务点。`,
+        text: `这是高德主路线纯驾驶时长（约 ${driveLabel}），不是把全程算成 2 小时。系统建议在出发后约 2 小时处短暂休息或咖啡，并优先找顺路服务点。${weatherSuffix}`,
         targetMinute,
         progress: Math.max(0.08, Math.min(0.92, restAfterMinutes / duration))
       };
@@ -2378,7 +3131,7 @@
         kind: "coffee",
         icon: "coffee",
         title: `全程约 ${driveLabel} · 建议 ${formatClock(targetMinute)} 短暂停靠`,
-        text: `主路线纯驾驶约 ${driveLabel}。是否在出发后约 1.5 小时查看沿线咖啡或休息建议？`,
+        text: `主路线纯驾驶约 ${driveLabel}。是否在出发后约 1.5 小时查看沿线咖啡或休息建议？${weatherSuffix}`,
         targetMinute,
         progress: Math.max(0.08, Math.min(0.92, restAfterMinutes / duration))
       };
@@ -2612,7 +3365,7 @@
         const withinAllowance = estimatedRoadKm <= longTripServiceAllowanceKm + 1e-6;
         const topUpStop = energyStops.at(-1);
         if (withinAllowance && topUpStop) {
-          const profile = getEnergyProfile(state.energyType === "fuel");
+          const profile = getEnergyProfile(isFuelActive());
           const topUpAmount = estimatedRoadKm * profile.consumptionPerKm / profile.transferEfficiency;
           const topUpMinutes = longTripChargeMinutes(topUpAmount, topUpStop);
           const detourDriveMinutes = Math.max(2, Math.ceil(estimatedRoadKm / 0.72));
@@ -2727,6 +3480,19 @@
     revealServiceFlow({ attention: true });
   }
 
+  // 运营页标题原来写死"北京区域补能供需"：用户规划"从上海去杭州"后打开运营视图，
+  // 标题仍写北京。从起点名/备注里提取城市 token，提不到就退成"沿线"，不再假设北京。
+  const REGION_CITY_PATTERN = /北京|上海|天津|重庆|广州|深圳|杭州|南京|济南|成都|武汉|西安|苏州|长沙|青岛|大连|沈阳|哈尔滨|长春|昆明|厦门|福州|郑州|合肥|南昌|石家庄|太原|呼和浩特|银川|乌鲁木齐|拉萨|西宁|兰州|南宁|海口|贵阳|宁波|无锡|佛山|东莞|烟台|温州|唐山|徐州|潍坊|保定|廊坊|沧州|德州/;
+  function originRegionLabel() {
+    const source = `${state.originName || ""} ${state.originNote || ""}`;
+    const match = source.match(REGION_CITY_PATTERN);
+    return match ? `${match[0]}区域` : "沿线";
+  }
+
+  function syncOperatorPanelTitle() {
+    setText("operatorPanelTitle", `${originRegionLabel()}补能供需`);
+  }
+
   function renderStationSummary() {
     if (!state.stations.length) return;
     state.operatorOriginalStations = state.stations.map((station) => Object.assign({}, station));
@@ -2735,8 +3501,11 @@
     state.executionState = "before";
     state.paymentState = "authorized";
     state.paymentReceipt = null;
+    closePaymentReceipt();
+    syncOperatorPanelTitle();
     renderOperatorMetrics(state.operatorBefore, false);
     resetValidationView();
+    loadWeather();
   }
 
   function calculateEnergyPlan(record, key, isFuel) {
@@ -2843,11 +3612,11 @@
       badge.innerHTML = `<i data-lucide="${station.status === "forecast-risk" ? "triangle-alert" : "check-circle-2"}"></i>${station.riskLabel}`;
       badge.classList.toggle("risk", station.status === "forecast-risk");
     }
-    if (adviceLabel) adviceLabel.textContent = state.energyType === "fuel" ? "建议加油" : "建议补能";
+    if (adviceLabel) adviceLabel.textContent = isFuelActive() ? "建议加油" : "建议补能";
     const stationRecord = Object.values(state.routeRecords).find((record) => record.station?.id === station.id);
     if (adviceValue) adviceValue.innerHTML = stationRecord
       ? `${stationRecord.energyAmount} <small>${stationRecord.energyUnit}</small>`
-      : state.energyType === "fuel" ? "— <small>L</small>" : "— <small>kWh</small>";
+      : isFuelActive() ? "— <small>L</small>" : "— <small>kWh</small>";
     requestForecast(station);
     refreshIcons();
     if (showPanel !== false) {
@@ -2901,6 +3670,7 @@
     if (mode === "driver") byId("mapAttribution").textContent = state.live ? "高德地图 · 真实路线与 POI / 演示预测状态" : "固定场景地图 · POI 示意 / 演示预测状态";
     if (mode === "operator") {
       byId("mapAttribution").textContent = "高德地图 · 真实站点 / 演示负载";
+      syncOperatorPanelTitle();
       renderOperatorFlow(state.pendingOperatorPayload);
       if (state.map && state.stations.length) state.map.setFitView(state.stationOverlays, false, [90, 380, 220, 330], 11);
     }
@@ -2941,6 +3711,18 @@
     setPlanningVisibility(false);
   }
 
+  // 用户点名了出发地却定位不到时的出口。和目的地定位失败同样处理：
+  // 报错，而不是退回默认起点后画出一条"起点不对"的真实折线。
+  function showUnresolvedOrigin(origin) {
+    clearPlanForUnresolvedDestination();
+    const message = `未能定位出发地“${origin}”。系统没有改用默认起点${DEFAULT_ORIGIN_NAME}替代，请检查名称后重试。`;
+    setAiStatus("出发地未定位", "unresolved");
+    setAiReply(message);
+    setText("aiReplyMeta", "未生成路线");
+    setText("planHint", "请修改出发地后再次 AI 智能规划；未定位时不会改用默认起点。");
+    showToast(message, 4600);
+  }
+
   function showUnresolvedDestination(destination) {
     clearPlanForUnresolvedDestination();
     const message = destination
@@ -2961,6 +3743,7 @@
     if (input && !typedValue) input.value = value;
     clearDestinationCandidates();
     readManualControls();
+    state.hybridFailedBranches = new Set();
     state.aiActive = true;
     const button = byId("planButton");
     const label = button?.querySelector("span");
@@ -3009,6 +3792,10 @@
       }
       const applied = applyParsedIntent(parsed, payload);
       if (!applied.ok) {
+        if (applied.originUnresolved) {
+          showUnresolvedOrigin(applied.origin);
+          return;
+        }
         if (Array.isArray(candidates) && candidates.length >= 2) {
           setAiStatus("请选择目的地", "unresolved");
           setAiReply(payload.assistantReply || `“${applied.destination || "该地点"}”有多个匹配结果，请选择一个继续。`);
@@ -3025,17 +3812,24 @@
       if (label) label.textContent = "正在比较路线与站点…";
       await recomputePlan({ manageButton: false, silent: true });
       setPlanningVisibility(true);
-      setAiStatus(payload.aiUsed === false ? "本地规则规划完成" : "AI 大模型已完成规划", payload.aiUsed === false ? "fallback" : "ready");
+      // The backend reports *why* the model was skipped (quota / auth / timeout…).
+      // Showing that beats a generic "AI 暂不可用" that hides a days-old outage.
+      const fallbackReason = payload.aiFallbackReason || "AI 暂不可用，已用本地规则完成规划";
+      // aiUsed lives under `parsed`; reading it off the root made this check
+      // always-false, so a failed model still reported "AI 已完成规划".
+      const usedAi = payload.parsed?.aiUsed !== false;
+      setAiStatus(usedAi ? "AI 大模型已完成规划" : "本地规则规划完成", usedAi ? "ready" : "fallback");
       setAiReply(planningCompletionMessage());
-      setText("aiReplyMeta", "规划已完成");
-      showToast(payload.aiUsed === false ? "AI 暂不可用，已用本地规则完成规划" : planningCompletionMessage());
+      setText("aiReplyMeta", usedAi ? "规划已完成" : fallbackReason);
+      showToast(usedAi ? planningCompletionMessage() : fallbackReason);
     } catch (error) {
       const parsed = localIntentFallback(value);
       if (options.explicitDestination) parsed.destination = options.explicitDestination;
       if (options.destinationLocation) parsed.destinationLocation = options.destinationLocation;
       const applied = applyParsedIntent(parsed, options.destinationLocation ? { destinationLocation: options.destinationLocation } : {});
       if (!applied.ok) {
-        showUnresolvedDestination(applied.destination);
+        if (applied.originUnresolved) showUnresolvedOrigin(applied.origin);
+        else showUnresolvedDestination(applied.destination);
         return;
       }
       setAiStatus("本地降级", "fallback");
@@ -3054,7 +3848,7 @@
   }
 
   function computeOperatorSnapshot(stations) {
-    const relevant = stations.filter((station) => station.type === (state.energyType === "fuel" ? "加油站" : "充电站"));
+    const relevant = stations.filter((station) => station.type === (isFuelActive() ? "加油站" : "充电站"));
     const pool = relevant.length ? relevant : stations;
     const average = (values) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
     const averageWait = average(pool.map((station) => station.wait));
@@ -3076,7 +3870,7 @@
   }
 
   function operatorStations() {
-    const type = state.energyType === "fuel" ? "加油站" : "充电站";
+    const type = isFuelActive() ? "加油站" : "充电站";
     const matching = state.stations.filter((station) => station.type === type);
     return matching.length ? matching : state.stations;
   }
@@ -3096,7 +3890,7 @@
     const pool = operatorStations();
     if (!pool.length) return;
     const beforePool = (state.operatorOriginalStations.length ? state.operatorOriginalStations : state.stations)
-      .filter((station) => station.type === (state.energyType === "fuel" ? "加油站" : "充电站"));
+      .filter((station) => station.type === (isFuelActive() ? "加油站" : "充电站"));
     let source = beforePool.slice().sort((a, b) => b.p90 - a.p90 || b.occupancy - a.occupancy)[0] || pool[0];
     const targetId = payload?.targetStation?.id || byId("targetStationSelect")?.value;
     const target = pool.find((station) => station.id === targetId) || pool.filter((station) => station.id !== source?.id).slice().sort((a, b) => (a.p90 + a.occupancy * 18) - (b.p90 + b.occupancy * 18))[0] || source;
@@ -3121,7 +3915,13 @@
       : `负载 ${(before.occupancy * 100).toFixed(0)}% · P90 ${before.p90} 分钟`;
     setText("operatorSourceMetrics", stationMetrics(source, sourceAfter));
     setText("operatorTargetMetrics", stationMetrics(target, targetAfter));
-    const flowLabel = payload ? `¥${payload.discountAmount}（建议 ≥¥${payload.recommendedDiscount || payload.discountAmount}）· 分流 ${Math.round(payload.impact?.divertedVehicles || 0)} 人` : "算法推荐承接站";
+    // recommendedDiscount 现在可能是 null（没有任何券值能不亏本）。原来的
+    // `|| payload.discountAmount` 会把用户自己填的数字回显成"建议值"，
+    // 变成一句假装是建议的同义反复。
+    const suggestion = payload?.recommendedDiscount != null
+      ? `建议 ¥${payload.recommendedDiscount}`
+      : "当前结构下无盈亏平衡券值";
+    const flowLabel = payload ? `¥${payload.discountAmount}（${suggestion}）· 分流 ${Math.round(payload.impact?.divertedVehicles || 0)} 人` : "算法推荐承接站";
     setText("operatorFlowLabel", flowLabel);
     const logic = payload
       ? `依据 ${payload.targetUser}，在承接容量、绕行和 ROI 约束下重新计算`
@@ -3140,8 +3940,43 @@
     const action = byId("operatorAction");
     if (queue) queue.innerHTML = `${snapshot.peakQueue}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> 人</span>`;
     if (discount) discount.innerHTML = `¥${snapshot.discount}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span>`;
-    if (roi) roi.textContent = `${snapshot.roi.toFixed(1)}x`;
-    if (queueNote) queueNote.textContent = executed ? `执行后峰值减少 ${Math.max(1, state.operatorBefore.peakQueue - snapshot.peakQueue)} 人` : `${snapshot.riskCount} 个站点出现集中到达风险`;
+    // 这张卡片原来标着"建议分流优惠"，印的却是滑杆当前值——把用户自己刚设的
+    // 数字当成算法的建议回显给用户，两者差一倍也看不出来（用户设 ¥12、算法建
+    // 议 ¥3，卡片上都写 ¥12）。标签已改成"当前优惠档位"，算法的建议放进注脚，
+    // 不一致时才有得比。
+    const discountNote = byId("operatorDiscountNote");
+    if (discountNote) {
+      const recommended = snapshot.recommendedDiscount;
+      if (recommended === undefined) {
+        discountNote.textContent = "仅对高峰时段目标用户触发";
+      } else if (recommended === null) {
+        discountNote.textContent = "无盈亏平衡券值，建议改用调度";
+      } else if (Math.abs(recommended - snapshot.discount) < 0.5) {
+        discountNote.textContent = `与算法建议一致（ROI ${Number(snapshot.recommendedRoi || 0).toFixed(2)}x）`;
+      } else {
+        discountNote.textContent = `算法建议 ¥${recommended}（ROI ${Number(snapshot.recommendedRoi || 0).toFixed(2)}x）`;
+      }
+    }
+    // ROI 的颜色以前写死在 HTML 的 style 里，永远是"好结果"的青色——
+    // 0.2x（每花一块钱只换回两毛毛利）和 1.8x 长得一模一样。
+    if (roi) {
+      roi.textContent = `${snapshot.roi.toFixed(1)}x`;
+      roi.style.color = snapshot.roi >= 1 ? "var(--teal)" : "var(--amber)";
+    }
+    // Math.max(1, ...) 会把"没降"和"反而升了"都说成"减少 1 人"——一个永远
+    // 报喜的数字。按真实差值说，降了多少说多少，没降就直说。
+    if (queueNote) {
+      if (!executed) {
+        queueNote.textContent = `${snapshot.riskCount} 个站点出现集中到达风险`;
+      } else {
+        const drop = (state.operatorBefore?.peakQueue ?? snapshot.peakQueue) - snapshot.peakQueue;
+        queueNote.textContent = drop >= 0.5
+          ? `执行后峰值减少 ${drop.toFixed(0)} 人`
+          : drop <= -0.5
+            ? `执行后峰值上升 ${Math.abs(drop).toFixed(0)} 人，需复核承接站容量`
+            : "执行后峰值基本持平";
+      }
+    }
     if (roiNote) roiNote.textContent = executed ? "订单回流已写入本次演示复盘" : "演示模拟：新增订单毛利 / 优惠成本";
     if (action && executed) {
       const improved = snapshot.p90 <= state.operatorBefore.p90;
@@ -3196,10 +4031,18 @@
     const before = payload.before;
     const after = payload.after;
     const impact = payload.impact;
-    setText("beforeQueueValue", `${Math.round(before.peakQueue)} 人`);
-    setText("afterQueueValue", `${Math.round(after.peakQueue)} 人`);
+    // 改善量常常小于显示精度：17.86 → 17.32 两边都印成 "17.9m/17.3m" 还看得出来，
+    // 但 17.96 → 17.95 会变成两个一模一样的 "18.0m"，读起来像是策略毫无作用。
+    // 把差值单独写出来，"没有变化"和"变化小到看不见"才分得开。
+    const delta = (from, to, unit, digits) => {
+      const diff = to - from;
+      if (Math.abs(diff) < 0.05) return `${to.toFixed(digits)}${unit}（持平）`;
+      return `${to.toFixed(digits)}${unit}（${diff < 0 ? "−" : "+"}${Math.abs(diff).toFixed(digits)}）`;
+    };
+    setText("beforeQueueValue", `${before.peakQueue.toFixed(1)} 人`);
+    setText("afterQueueValue", delta(before.peakQueue, after.peakQueue, " 人", 1));
     setText("beforeP90Value", `${before.p90Wait.toFixed(1)}m`);
-    setText("afterP90Value", `${after.p90Wait.toFixed(1)}m`);
+    setText("afterP90Value", delta(before.p90Wait, after.p90Wait, "m", 1));
     setText("divertedUsersValue", `${Math.round(impact.divertedVehicles)} 人`);
     setText("strategyRoiValue", `${impact.roi.toFixed(2)}x`);
     const snapshot = {
@@ -3210,16 +4053,36 @@
       discount: payload.discountAmount,
       roi: impact.roi,
       riskCount: payload.stations.filter((station) => station.status === "forecast-risk").length,
-      onTime: state.operatorBefore?.onTime || 89
+      onTime: state.operatorBefore?.onTime || 89,
+      // 算法建议跟着快照走，不能在 renderOperatorMetrics 里读
+      // state.pendingOperatorPayload——那个变量要到本函数返回之后才赋值，
+      // 此刻拿到的是上一轮的结果。
+      recommendedDiscount: payload.recommendedDiscount,
+      recommendedRoi: Number(payload.recommendedBasis?.roi || 0)
     };
     renderOperatorMetrics(snapshot, false);
     const action = byId("operatorAction");
     if (action) {
       const risk = payload.recommendation === "risk";
+      // 模型分三档，界面原来只认 risk，于是"缓解了拥堵但这一单是亏的"
+      // （operationally-effective）和真正划算的方案长得一模一样。ROI 就写在
+      // 正文里，却没有任何一处提示它已经低于 1——这正是运营最需要看到的信号。
+      const unprofitable = payload.recommendation === "operationally-effective";
+      const headline = unprofitable
+        ? `<strong>运营有效但不盈利：</strong>`
+        : `<strong>本次策略：</strong>`;
       action.innerHTML = risk
         ? `<strong>策略风险：</strong>当前优惠会增加目标站点尾部等待，建议降低优惠或更换目标站点。ROI ${impact.roi.toFixed(2)}x。`
-        : `<strong>本次策略：</strong>向${payload.targetUser || "目标用户"}发放 ¥${payload.discountAmount} 优惠，预计分流 ${Math.round(impact.divertedVehicles)} 人，新增 ${Math.round(impact.incrementalOrders)} 单，ROI ${impact.roi.toFixed(2)}x。算法估计最低有效优惠为 ¥${payload.recommendedDiscount || payload.discountAmount}。`;
+        // 推荐值的口径已经不是"最低有效优惠"，而是"ROI≥1 的档位里分流最多的
+        // 那一档"；没有这样的档位时要直说，不能拿用户填的数字冒充建议。
+        : `${headline}向${payload.targetUser || "目标用户"}发放 ¥${payload.discountAmount} 优惠，预计分流 ${Math.round(impact.divertedVehicles)} 人（其中挽回流失 ${impact.retainedOrders?.toFixed?.(1) ?? "—"} 单），新增 ${Math.round(impact.incrementalOrders)} 单，ROI ${impact.roi.toFixed(2)}x${unprofitable ? "（优惠成本高于新增毛利，缓解拥堵要自己贴钱）" : ""}。${payload.recommendedDiscount != null
+          ? `算法建议 ¥${payload.recommendedDiscount}（不亏本前提下分流最多，ROI ${Number(payload.recommendedBasis?.roi || 0).toFixed(2)}x）。`
+          : "当前负载与毛利结构下没有任何券值能做到不亏本，建议改为调度或换承接站点。"}${payload.capacityBound
+            // 加价也解决不了的那部分：承接站已经没有空位了，再高的券只是多花钱。
+            ? `<br><span class="strategy-note">承接站空余容量已是瓶颈：拥堵侧还有约 ${payload.unservedPressure} 人的压力无处承接，继续加码优惠无法缓解，需增开站点或跨区调度。</span>`
+            : ""}`;
       action.classList.toggle("strategy-risk", risk);
+      action.classList.toggle("strategy-unprofitable", unprofitable);
     }
     renderOperatorFlow(payload);
     return snapshot;
@@ -3229,6 +4092,9 @@
     const button = byId("operatorSimulate");
     const discount = Number(byId("discountSlider")?.value || 0);
     const targetUser = byId("targetSegment")?.selectedOptions?.[0]?.textContent || "全部可触达用户";
+    // 中文标签给人看，slug 给模型用。只传标签的话，"准时敏感 · 高峰出行"
+    // 会被关键词匹配当成"价格敏感"，把最不肯绕路的人算成最肯绕路的人。
+    const targetSegment = byId("targetSegment")?.value || "all";
     const targetStationId = byId("targetStationSelect")?.value || null;
     if (button) button.disabled = true;
     try {
@@ -3236,6 +4102,7 @@
         stations: state.stations,
         discountAmount: discount,
         targetUser,
+        targetSegment,
         targetStationId
       }, 20000);
       const snapshot = renderOperatorSimulation(payload);
@@ -3383,7 +4250,9 @@
         onTime: before.onTime,
         roi: Number(payload.impact?.roi || 0),
         discount: Number(payload.discountAmount || 0),
-        riskCount: state.stations.filter((station) => station.status === "forecast-risk").length
+        riskCount: state.stations.filter((station) => station.status === "forecast-risk").length,
+        recommendedDiscount: payload.recommendedDiscount,
+        recommendedRoi: Number(payload.recommendedBasis?.roi || 0)
       };
       Object.values(state.routeRecords).forEach((record) => {
         const updatedStation = state.stations.find((station) => station.id === record.station?.id);
@@ -3490,10 +4359,16 @@
     }, 680);
   }
 
+  function hybridBranchRangeKm(kind) {
+    const profile = kind === "fuel" ? ENERGY_PROFILES.hybridFuel : ENERGY_PROFILES.hybridElectric;
+    return Math.max(0, Math.floor(profile.capacity * hybridBranchLevel(kind) / 100 / profile.consumptionPerKm));
+  }
+
   function updateEnergyControls() {
-    const isFuel = state.energyType === "fuel";
+    const isFuel = isFuelActive();
+    const hybrid = isHybrid();
     const stateLabel = byId("vehicleEnergyLabel");
-    if (stateLabel) stateLabel.textContent = isFuel ? "当前油量" : "当前电量";
+    if (stateLabel) stateLabel.textContent = hybrid ? (isFuel ? "混动 · 油量" : "混动 · 电量") : isFuel ? "当前油量" : "当前电量";
     $$('[data-energy-type]').forEach((button) => button.classList.toggle("active", button.dataset.energyType === state.energyType));
     const vehicleIcon = byId("vehicleEnergyIcon");
     const vehiclePercent = byId("vehicleEnergyPercent");
@@ -3503,17 +4378,49 @@
     if (vehicleRange) {
       const profile = getEnergyProfile(isFuel);
       const estimatedRange = Math.max(0, Math.floor(profile.capacity * state.energyPercent / 100 / profile.consumptionPerKm));
-      vehicleRange.textContent = `预计可行驶 ${estimatedRange} km`;
+      vehicleRange.textContent = hybrid
+        ? `纯电 ${hybridBranchRangeKm("electric")} km · 燃油 ${hybridBranchRangeKm("fuel")} km`
+        : `预计可行驶 ${estimatedRange} km`;
+    }
+    const hybridPanel = byId("hybridLevels");
+    if (hybridPanel) hybridPanel.hidden = !hybrid;
+    if (hybrid) {
+      const electricInput = byId("hybridElectricInput");
+      const fuelInput = byId("hybridFuelInput");
+      if (electricInput && document.activeElement !== electricInput) electricInput.value = String(Math.round(hybridBranchLevel("electric")));
+      if (fuelInput && document.activeElement !== fuelInput) fuelInput.value = String(Math.round(hybridBranchLevel("fuel")));
     }
     syncManualControls();
     refreshIcons();
     updateInsight(state.routeRecords[state.selectedRoute]);
   }
 
+  // Switching the vehicle type has to re-seed the hybrid levels before anything
+  // reads `energyPercent`, otherwise the first plan runs on the previous
+  // vehicle's tank level interpreted as a battery percentage.
+  function adoptEnergyType(type) {
+    if (!ENERGY_TYPES.includes(type) || type === state.energyType) return false;
+    const previousKind = activeEnergyKind();
+    const previousPercent = state.energyPercent;
+    if (type === "hybrid") {
+      // Carry the level the driver already entered into the matching branch.
+      state.hybridLevels[previousKind] = clampPercent(previousPercent, previousKind === "fuel" ? 60 : 35);
+      state.energyType = "hybrid";
+      state.hybridBranch = previousKind;
+      state.hybridBranchTouched = false;
+      syncHybridLevels();
+    } else {
+      state.energyType = type;
+      state.energyPercent = clampPercent(state.hybridLevels[type], type === "fuel" ? 60 : 35);
+      state.hybridBranchTouched = false;
+    }
+    state.hybridComparison = null;
+    return true;
+  }
+
   async function setEnergyType(type, replan) {
-    if (!['electric', 'fuel'].includes(type)) return;
-    const changed = state.energyType !== type;
-    state.energyType = type;
+    if (!ENERGY_TYPES.includes(type)) return;
+    const changed = adoptEnergyType(type);
     state.routeSelectionTouched = false;
     state.selectedRoute = "reliable";
     updateEnergyControls();
@@ -3531,16 +4438,22 @@
       renderRouteCards();
     } else {
       if (!state.live) {
-        const expectedType = type === "fuel" ? "加油站" : "充电站";
-        state.stations = FALLBACK.stations.filter((station) => station.type === expectedType).map(simulateStation);
+        // A hybrid can use either network, so the offline sample keeps both.
+        const expectedTypes = isHybrid() ? ["加油站", "充电站"] : [isFuelActive() ? "加油站" : "充电站"];
+        state.stations = FALLBACK.stations.filter((station) => expectedTypes.includes(station.type)).map(simulateStation);
+        const branchPool = stationsForActiveBranch();
         state.routeCandidates = fallbackRoutes();
-        state.routeCandidates.fastest.station = state.stations[0] || null;
-        state.routeCandidates.reliable.station = state.stations[1] || state.stations[0] || null;
-        state.routeCandidates.cheapest.station = state.stations[2] || state.stations[0] || null;
+        state.routeCandidates.fastest.station = branchPool[0] || null;
+        state.routeCandidates.reliable.station = branchPool[1] || branchPool[0] || null;
+        state.routeCandidates.cheapest.station = branchPool[2] || branchPool[0] || null;
       }
       renderRouteCards();
     }
-    if (changed) showToast(type === "fuel" ? "已切换为燃油补能方案" : "已切换为纯电补能方案");
+    if (changed) {
+      showToast(type === "hybrid"
+        ? "已切换为混动车型：将同时核算油、电两条补能路径"
+        : type === "fuel" ? "已切换为燃油补能方案" : "已切换为纯电补能方案");
+    }
   }
 
   async function recomputePlan(options = {}) {
@@ -3563,7 +4476,27 @@
       const policies = makeDrivingPolicies(state.AMap);
       const records = await Promise.all(Object.entries(policies).map(async ([key, policy]) => [key, await queryDriving(key, policy)]));
       const liveRecords = Object.fromEntries(records.filter((entry) => entry[1]));
-      state.routeRecords = Object.assign(fallbackRoutes(), liveRecords);
+      // 一条真实路线都没有时，不能退到演示折线：那是固定的北京→大兴机场数据，
+      // 画在"高德已连接"的地图上就是一条与本次行程无关的虚假路线。
+      if (!Object.keys(liveRecords).length) {
+        state.routeRecords = {};
+        state.baseRouteRecords = {};
+        state.routeCandidates = {};
+        state.stations = [];
+        state.hasPlannedRoute = false;
+        clearLiveOverlays();
+        renderStationSummary();
+        setMapStatus("高德路线服务未返回本次行程的可行路线，未生成方案", "error");
+        setText("mapAttribution", "高德地图 · 路线不可用");
+        if (button && manageButton) {
+          button.disabled = false;
+          if (label) label.textContent = "重新尝试 AI 规划";
+          button.style.opacity = "1";
+        }
+        showToast("未生成虚假路线：高德未返回本次行程的可行路线，请稍后重试", 4200);
+        return;
+      }
+      state.routeRecords = fillMissingObjectivesWithRealRoutes(liveRecords, Object.keys(policies));
       state.baseRouteRecords = Object.assign({}, state.routeRecords);
       await queryStations();
       await replanRoutesViaStations();
@@ -3600,11 +4533,13 @@
   function prepareFallbackPlan() {
     state.routeRecords = fallbackRoutes();
     state.baseRouteRecords = Object.assign({}, state.routeRecords);
-    const expectedType = state.energyType === "fuel" ? "加油站" : "充电站";
-    state.stations = FALLBACK.stations.filter((station) => station.type === expectedType).map(simulateStation);
-    state.routeRecords.fastest.station = state.stations[0] || null;
-    state.routeRecords.reliable.station = state.stations[1] || state.stations[0] || null;
-    state.routeRecords.cheapest.station = state.stations[2] || state.stations[0] || null;
+    // 混动模式下油、电两张网都要保留，油电对比才有数据可算。
+    const expectedTypes = isHybrid() ? ["加油站", "充电站"] : [isFuelActive() ? "加油站" : "充电站"];
+    state.stations = FALLBACK.stations.filter((station) => expectedTypes.includes(station.type)).map(simulateStation);
+    const branchPool = stationsForActiveBranch();
+    state.routeRecords.fastest.station = branchPool[0] || null;
+    state.routeRecords.reliable.station = branchPool[1] || branchPool[0] || null;
+    state.routeRecords.cheapest.station = branchPool[2] || branchPool[0] || null;
     state.routeCandidates = Object.assign({}, state.routeRecords);
     renderStationSummary();
   }
@@ -3664,6 +4599,7 @@
   function begin() {
     refreshIcons();
     initDemoNotice();
+    initUpdateNotice();
     initFallback();
     setPlanningVisibility(false);
     fitIntentInput();
@@ -3718,6 +4654,18 @@
     [byId("deadlineInput"), byId("minArrivalSocInput")].filter(Boolean).forEach((input) => input.addEventListener("input", () => {
       readManualControls({ markArrivalOverrides: true });
     }));
+    // 混动的两格电/油量直接写进 hybridLevels；当前规划分支那一格同步到
+    // energyPercent，另一格只用于油电对比与切换分支后的起始能量。
+    [["hybridElectricInput", "electric"], ["hybridFuelInput", "fuel"]].forEach(([id, kind]) => {
+      byId(id)?.addEventListener("change", (event) => {
+        state.hybridLevels[kind] = clampPercent(event.target.value, kind === "fuel" ? 60 : 35);
+        if (activeEnergyKind() === kind) state.energyPercent = state.hybridLevels[kind];
+        syncHybridLevels();
+        updateEnergyControls();
+        renderHybridCompare();
+        showToast("混动能量状态已更新，点击 AI 智能规划后重新计算", 2200);
+      });
+    });
     byId("collapseTrip").addEventListener("click", () => byId("tripPanel").classList.add("collapsed"));
     byId("expandTrip").addEventListener("click", () => byId("tripPanel").classList.remove("collapsed"));
     byId("expandInsight").addEventListener("click", () => {
@@ -3733,6 +4681,8 @@
     byId("approveButton").addEventListener("click", runExecutionLoop);
     byId("resetExecution").addEventListener("click", resetExecution);
     byId("arrivalPaymentButton")?.addEventListener("click", runArrivalPayment);
+    byId("paymentReceiptClose")?.addEventListener("click", closePaymentReceipt);
+    byId("paymentReceiptOverlay")?.addEventListener("click", (event) => { if (event.target.id === "paymentReceiptOverlay") closePaymentReceipt(); });
     const discountSlider = byId("discountSlider");
     if (discountSlider) discountSlider.addEventListener("input", () => setText("discountValue", `¥${discountSlider.value}`));
     const operatorSimulate = byId("operatorSimulate");
@@ -3781,12 +4731,18 @@
   window.__FLOWTWIN_DEBUG__ = () => ({
     live: state.live,
     mode: state.mode,
+    originName: state.originName || null,
+    destinationName: state.destinationName || null,
+    origin: state.origin,
+    destination: state.destination,
     stationCount: state.stations.length,
     displayedMarkerCount: state.stationOverlays.length,
     routeKeys: Object.keys(state.routeRecords),
     selectedRoute: state.selectedRoute,
     selectedStation: state.selectedStation ? state.selectedStation.name : null,
     energyType: state.energyType,
+    energyPercent: state.energyPercent,
+    energyProfile: getEnergyProfile(isFuelActive()),
     executionState: state.executionState,
     routeErrors: state.routeErrors,
     routes: Object.fromEntries(Object.entries(state.routeRecords).map(([key, record]) => [key, {
@@ -3795,6 +4751,11 @@
       stationType: record.station?.type || null,
       pathPoints: record.path?.length || 0,
       geometryHash: record.path ? stableHash(record.path.map((point) => `${point[0].toFixed(4)},${point[1].toFixed(4)}`).join("|")) : null,
+      // 这条折线到底是不是"本次行程"的折线。两端偏离都应是零点几公里；
+      // 一旦出现几十上百公里，说明画出来的是另一段行程的路线。
+      pathStartOffsetKm: record.path?.length ? Number(distanceKm(record.path[0], state.origin).toFixed(2)) : null,
+      pathEndOffsetKm: record.path?.length ? Number(distanceKm(record.path[record.path.length - 1], state.destination).toFixed(2)) : null,
+      policyFallbackFrom: record.policyFallbackFrom || null,
       distance: Number(record.distance?.toFixed ? record.distance.toFixed(2) : record.distance),
       baseDistance: Number(record.baseDistance?.toFixed ? record.baseDistance.toFixed(2) : record.baseDistance),
       detour: record.station?.detour || null,
@@ -3803,18 +4764,61 @@
       totalMinutes: Number.isFinite(record.total) ? Number(record.total.toFixed(2)) : null,
       cost: Number.isFinite(record.cost) ? Number(record.cost.toFixed(2)) : null,
       p90: record.station?.p90 || null,
+      // 能量账本。单站方案里 energyAmount 不可能超过 (capacity - 到站电量)/效率，
+      // firstLegKm 也必须和站点在路线上的位置对得上；对不上就是补能量算错了。
+      multiStop: Boolean(record.multiStop),
+      stopCount: record.stopCount || null,
+      energyAmount: record.energyAmount,
+      firstLegKm: Number.isFinite(record.firstLegKm) ? Number(record.firstLegKm.toFixed(2)) : null,
+      arrivalAtStationSoc: record.arrivalAtStationSoc,
+      arrivalSoc: record.arrivalSoc,
+      energyReason: record.energyReason || null,
+      // 等待账本。"总等待 P90" 是卡片上的头条数字，却一直没法核对。分位数不可加，
+      // 各站 P90 直接相加会系统性高估、并且停得越多罚得越重；这里把每站的
+      // plannedP50/plannedP90 和汇总值一起摊出来，naiveP90Sum 就是旧口径，
+      // 两者拉开差距才说明卷积真的生效了（单停时应当相等）。
+      p50Wait: record.p50Wait ?? null,
+      p90Wait: record.p90Wait ?? null,
+      stopWaits: record.stops?.map((stop) => ({ name: stop.name, p50: stop.plannedP50, p90: stop.plannedP90 })) || null,
+      naiveP90Sum: record.stops?.length ? Number(record.stops.reduce((sum, stop) => sum + Number(stop.plannedP90 || 0), 0).toFixed(1)) : null,
       feasible: record.feasible
     }])),
+    // 选站为什么落空：候选池是空的，还是每个候选都被"够不着 / 绕路太远"筛掉了？
+    // 这两种情况对应完全不同的修法，不区分开就只能靠猜。
+    maxDetourKm: state.maxDetourKm,
+    longTripActive: state.longTripActive,
+    provisionalCorridorActive: state.provisionalCorridorActive,
+    multiStopPlanningMeta: state.multiStopPlanningMeta || null,
+    directEnergy: (() => {
+      const base = state.baseRouteRecords[state.selectedRoute] || state.baseRouteRecords.reliable;
+      if (!base) return null;
+      const direct = directEnergyState(base, isFuelActive());
+      return {
+        canDirect: direct.canDirect,
+        maxSafeFirstLegKm: Number(direct.maxSafeFirstLegKm?.toFixed?.(2) ?? direct.maxSafeFirstLegKm),
+        baseDistanceKm: Number(Number(base.distance || 0).toFixed(2))
+      };
+    })(),
     stations: state.stations.map((station) => ({
       id: station.id,
       name: station.name,
+      // 服务区兜底候选常常只叫"服务区"，光看 name 没法判断它到底是不是真实地点；
+      // 带上地址才核得动。
+      address: station.address,
       type: station.type,
       source: station.source,
       p90: station.p90,
       price: station.price,
       occupancy: Number(station.occupancy.toFixed(2)),
-      progress: Number(routeProgress(station.location, (state.baseRouteRecords.reliable || state.routeRecords.reliable || { path: FALLBACK.routes.reliable }).path).toFixed(2)),
-      corridorKm: Number(nearestPointDistance(station.location, (state.baseRouteRecords.reliable || state.routeRecords.reliable || { path: FALLBACK.routes.reliable }).path).toFixed(2)),
+      // 单站选站的两道硬门槛，和 chooseStationForRouteExcluding 用的是同一对函数。
+      approachKm: Number(estimateStationApproachKm(station).toFixed(2)),
+      detourKm: Number(estimateStationDetourKm(station).toFixed(2)),
+      progress: Number(routeProgress(station.location, corridorReferenceRoute().path).toFixed(2)),
+      // 没有参考路线时是 Infinity，如实报 null，不要被四舍五入成一个数字。
+      corridorKm: (() => {
+        const offset = nearestPointDistance(station.location, corridorReferenceRoute().path);
+        return Number.isFinite(offset) ? Number(offset.toFixed(2)) : null;
+      })(),
       location: station.location
     }))
   });

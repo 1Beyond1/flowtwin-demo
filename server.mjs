@@ -307,6 +307,81 @@ async function forecastApi(request, response) {
   return json(response, 200, forecastStations(body.stations || [], body.scenario || {}));
 }
 
+// 高德天气文案 -> 对补能等待的放大因子与是否恶劣。雨天/雪天更多人充电、服务也
+// 更慢，预测模型据此抬高 P50/P90。只做有方向的放大，不编造精确系数。
+const WEATHER_FACTOR_TABLE = [
+  { match: /暴雪|大暴雨|暴雨|特大暴雨|强沙尘暴/, factor: 1.30, severe: true },
+  { match: /大雪|暴风雨/, factor: 1.26, severe: true },
+  { match: /大雨/, factor: 1.20, severe: false },
+  { match: /中雪|雨夹雪/, factor: 1.16, severe: false },
+  { match: /中雨|雷阵雨/, factor: 1.14, severe: false },
+  { match: /小雨|阵雨|小雪|阵雪|冻雨/, factor: 1.10, severe: false },
+  { match: /雾|霾/, factor: 1.08, severe: false },
+  { match: /沙|浮尘|扬沙/, factor: 1.08, severe: false }
+];
+function weatherImpactFor(condition) {
+  const text = String(condition || "");
+  for (const row of WEATHER_FACTOR_TABLE) if (row.match.test(text)) return { weatherFactor: row.factor, severe: row.severe };
+  return { weatherFactor: 1, severe: false };
+}
+
+const weatherCache = new Map();
+const WEATHER_CACHE_MS = 10 * 60 * 1000;
+
+async function weatherApi(requestUrl, response) {
+  const location = parseCoordinate(requestUrl.searchParams.get("location"));
+  if (!location) return json(response, 400, { error: "INVALID_LOCATION" });
+  const { webServiceKey } = config;
+  if (!webServiceKey) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
+
+  // 天气按 adcode 查；先逆地理拿到坐标所在区县的 adcode。
+  const regeoParams = new URLSearchParams({ key: webServiceKey, location, extensions: "base" });
+  let adcode = null;
+  let cityName = null;
+  try {
+    const regeo = await fetch(`https://restapi.amap.com/v3/geocode/regeo?${regeoParams}`, {
+      headers: { "User-Agent": "FlowTwin-Demo/1.0" }, signal: AbortSignal.timeout(10000)
+    });
+    const regeoJson = await regeo.json();
+    const component = regeoJson?.regeocode?.addressComponent;
+    adcode = component?.adcode ? String(component.adcode) : null;
+    cityName = component?.city ? String(component.city) : (component?.province ? String(component.province) : null);
+  } catch { /* 落到下面的报错 */ }
+  if (!adcode) return json(response, 502, { error: "AMAP_REGEO_FAILED" });
+
+  const cached = weatherCache.get(adcode);
+  if (cached && cached.expiresAt > Date.now()) return json(response, 200, cached.data);
+
+  const weatherParams = new URLSearchParams({ key: webServiceKey, city: adcode, extensions: "base" });
+  let result;
+  try {
+    const upstream = await fetch(`https://restapi.amap.com/v3/weather/weatherInfo?${weatherParams}`, {
+      headers: { "User-Agent": "FlowTwin-Demo/1.0" }, signal: AbortSignal.timeout(10000)
+    });
+    result = await upstream.json();
+  } catch {
+    return json(response, 502, { error: "AMAP_WEATHER_UNREACHABLE" });
+  }
+  const live = Array.isArray(result.lives) ? result.lives[0] : null;
+  if (result.status !== "1" || !live) return json(response, 502, { error: result.info || "AMAP_WEATHER_FAILED", infocode: result.infocode || null });
+
+  const { weatherFactor, severe } = weatherImpactFor(live.weather);
+  const data = {
+    adcode,
+    city: live.city || cityName || null,
+    condition: live.weather,
+    temperature: Number(live.temperature) || null,
+    humidity: live.humidity || null,
+    wind: `${live.winddirection || ""} ${live.windpower || ""}`.trim(),
+    reporttime: live.reporttime || null,
+    weatherFactor,
+    severe,
+    source: "高德天气实况"
+  };
+  weatherCache.set(adcode, { data, expiresAt: Date.now() + WEATHER_CACHE_MS });
+  return json(response, 200, data);
+}
+
 async function longTripApi(request, response) {
   const body = await readJsonBody(request, 128000);
   if (!Array.isArray(body.stations)) return json(response, 400, { error: "STATIONS_REQUIRED" });
@@ -386,6 +461,7 @@ createServer(async (request, response) => {
     if (request.method === "GET" && requestUrl.pathname === "/api/contracts") return json(response, 200, API_CONTRACTS);
     if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
     if (requestUrl.pathname === "/api/poi") return await poiApi(requestUrl, response);
+    if (requestUrl.pathname === "/api/weather") return await weatherApi(requestUrl, response);
   if (request.method === "POST" && requestUrl.pathname === "/api/plan") return await planApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/forecast") return await forecastApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/longtrip") return await longTripApi(request, response);

@@ -275,6 +275,61 @@
       .arrival-payment-button:disabled { cursor: default; opacity: 0.62; }
       .arrival-payment-button.is-paid { border-color: #92cfc1; background: #e4f5ef; color: #16725f; }
 
+      .payment-receipt-overlay {
+        position: fixed; inset: 0; z-index: 1000;
+        background: rgba(10, 24, 20, 0.42);
+        display: flex; align-items: center; justify-content: center;
+        opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
+      }
+      .payment-receipt-overlay.visible { opacity: 1; pointer-events: auto; }
+      .payment-receipt {
+        width: min(360px, 92vw);
+        background: var(--surface-solid, #fff);
+        border: 1px solid var(--border, #e3e8e6);
+        border-radius: 14px;
+        box-shadow: 0 18px 48px rgba(8, 30, 24, 0.22);
+        overflow: hidden;
+        transform: translateY(8px); transition: transform 0.18s ease;
+        font-family: var(--sans);
+      }
+      .payment-receipt-overlay.visible .payment-receipt { transform: translateY(0); }
+      .payment-receipt-head {
+        display: flex; align-items: center; gap: 8px;
+        padding: 14px 16px 10px;
+        border-bottom: 1px dashed var(--border, #e3e8e6);
+      }
+      .payment-receipt-head i { width: 16px; height: 16px; color: var(--teal); }
+      .payment-receipt-head strong { font-size: 13px; color: var(--ink); }
+      .payment-receipt-head span { margin-left: auto; font-size: 10px; color: var(--muted); }
+      .payment-receipt-station { padding: 8px 16px; font-size: 11px; color: var(--quiet); }
+      .payment-receipt-station b { color: var(--ink); font-size: 12px; }
+      .payment-receipt-rows { padding: 4px 16px 8px; }
+      .payment-receipt-row {
+        display: flex; justify-content: space-between; align-items: baseline;
+        padding: 5px 0; font-size: 11px; color: var(--quiet);
+      }
+      .payment-receipt-row b { color: var(--ink); font-variant-numeric: tabular-nums; }
+      .payment-receipt-row.discount b { color: var(--teal); }
+      .payment-receipt-total {
+        display: flex; justify-content: space-between; align-items: baseline;
+        padding: 10px 16px; margin-top: 4px;
+        border-top: 1px dashed var(--border, #e3e8e6);
+        font-size: 12px; color: var(--quiet);
+      }
+      .payment-receipt-total b { font-size: 18px; color: var(--ink); font-variant-numeric: tabular-nums; }
+      .payment-receipt-foot {
+        padding: 8px 16px 14px; font-size: 10px; color: var(--muted);
+        display: flex; align-items: center; gap: 6px;
+      }
+      .payment-receipt-foot i { width: 12px; height: 12px; }
+      .payment-receipt-close {
+        display: block; width: 100%; padding: 11px;
+        border: none; border-top: 1px solid var(--border, #e3e8e6);
+        background: var(--surface, #f7f9f8); color: var(--ink);
+        font-size: 12px; font-weight: 600; cursor: pointer; font-family: var(--sans);
+      }
+      .payment-receipt-close:hover { background: #eef3f1; }
+
       .status-item.status-editable {
         gap: 8px;
       }
@@ -535,6 +590,22 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+
+      .field-weather {
+        margin-top: 4px;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 2px 8px;
+        border-radius: 99px;
+        background: #eef4f8;
+        color: #355a78;
+        font-size: 10px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .field-weather i { width: 12px; height: 12px; }
+      .field-weather.severe { background: #fef0ec; color: #b54321; }
 
       .constraint-grid {
         display: grid;
@@ -873,6 +944,143 @@
         gap: 10px;
       }
 
+      .hybrid-compare {
+        margin-bottom: 12px;
+        padding: 11px 13px 12px;
+        border: 1px solid #d6e6dc;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #f4fbf6 0%, #ffffff 62%);
+      }
+
+      .hybrid-compare[hidden] {
+        display: none;
+      }
+
+      .hybrid-compare-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 6px;
+        margin-bottom: 9px;
+      }
+
+      .hybrid-compare-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 750;
+        color: var(--ink);
+      }
+
+      .hybrid-compare-title svg {
+        width: 14px;
+        height: 14px;
+        color: #2f7a52;
+      }
+
+      .hybrid-compare-note {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .hybrid-branches {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 9px;
+      }
+
+      .hybrid-branch {
+        min-width: 0;
+        padding: 9px 11px 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        text-align: left;
+        cursor: pointer;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+
+      .hybrid-branch:hover {
+        border-color: #b9d3c3;
+      }
+
+      .hybrid-branch.active {
+        border-color: #4f9b73;
+        box-shadow: 0 0 0 2px rgba(79, 155, 115, 0.16);
+      }
+
+      .hybrid-branch-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        margin-bottom: 4px;
+      }
+
+      .hybrid-branch-name {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+
+      .hybrid-branch-name svg {
+        width: 13px;
+        height: 13px;
+        color: var(--muted);
+      }
+
+      .hybrid-badge {
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: #e3f3ea;
+        color: #256b41;
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .hybrid-branch-cost {
+        display: flex;
+        align-items: baseline;
+        gap: 5px;
+        margin-bottom: 3px;
+        font-size: 19px;
+        font-weight: 760;
+        color: var(--ink);
+        letter-spacing: -0.01em;
+      }
+
+      .hybrid-branch-cost span {
+        font-size: 10px;
+        font-weight: 650;
+        color: var(--muted);
+        letter-spacing: 0;
+      }
+
+      .hybrid-branch-meta {
+        font-size: 11px;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+
+      .hybrid-verdict {
+        margin-top: 9px;
+        font-size: 11.5px;
+        font-weight: 650;
+        color: #256b41;
+      }
+
+      .hybrid-verdict span {
+        display: block;
+        margin-top: 2px;
+        font-weight: 500;
+        color: var(--muted);
+      }
+
       .route-option {
         position: relative;
         min-width: 0;
@@ -1097,6 +1305,27 @@
 
       .operator-actions strong {
         color: var(--teal);
+      }
+
+      /* strategy-risk 早就在 app.js 里被 toggle，却从来没有对应样式，
+         风险结论和正常结论看起来一模一样。 */
+      .operator-actions p.strategy-risk strong {
+        color: var(--amber);
+      }
+
+      /* 缓解了拥堵、但这一单是亏的：既不是推荐，也不是风险，要有自己的颜色。 */
+      .operator-actions p.strategy-unprofitable strong {
+        color: var(--amber);
+      }
+
+      /* 容量瓶颈提示：这不是"再加点优惠"能解决的问题，要和策略正文区分开。 */
+      .strategy-note {
+        display: block;
+        margin-top: 5px;
+        padding-left: 8px;
+        border-left: 2px solid var(--line);
+        color: var(--muted);
+        line-height: 1.55;
       }
 
       .secondary-action {
@@ -1684,6 +1913,10 @@
         align-items: flex-start;
         margin-top: 7px;
         line-height: 1.4;
+        /* 上面那条 8px 是和 .forecast-legend 共用的，legend 只有 P50/P90 两个
+           短标签，8px 尚可；这里是整段口径说明（模型公式 + 数据来源声明），
+           8px 的中文正文实际上没法读——写得再准也没人看得清。单独提到 10px。 */
+        font-size: 10px;
       }
 
       .forecast-source svg {
@@ -2476,6 +2709,49 @@
         height: 15px;
       }
 
+      .update-notice {
+        width: min(520px, calc(100vw - 32px));
+        max-height: calc(100vh - 48px);
+        overflow-y: auto;
+        padding: 22px;
+        border: 1px solid rgba(215, 221, 218, 0.96);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.98);
+        box-shadow: 0 20px 70px rgba(34, 44, 48, 0.2);
+      }
+      .update-notice-mark {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 30px; height: 30px; margin-bottom: 12px; border-radius: 8px;
+        background: #eef4f8; color: #355a78;
+      }
+      .update-notice-mark svg { width: 17px; height: 17px; }
+      .update-notice h2 { font-size: 19px; font-weight: 700; }
+      .update-notice-sub { margin-top: 4px; color: var(--muted); font-size: 11px; }
+      .update-list { margin: 14px 0 0; padding: 0; list-style: none; }
+      .update-item {
+        display: flex; gap: 10px; align-items: flex-start;
+        padding: 9px 0; border-bottom: 1px solid #eef2f0; font-size: 12px; line-height: 1.55;
+      }
+      .update-item:last-child { border-bottom: 0; }
+      .update-item i { width: 15px; height: 15px; margin-top: 1px; color: var(--teal); flex: 0 0 auto; }
+      .update-item b { color: var(--ink); font-weight: 650; }
+      .update-item span { color: var(--quiet); }
+      .update-foot {
+        display: flex; align-items: flex-start; gap: 8px;
+        margin-top: 14px; padding: 10px 11px; border: 1px solid #dce9e4; border-radius: 7px;
+        background: #f5faf8; color: #176e60; font-size: 11px; line-height: 1.5;
+      }
+      .update-foot svg { width: 13px; height: 13px; margin-top: 1px; flex: 0 0 auto; }
+      .update-notice-action { margin-top: 16px; text-align: right; }
+      .update-notice-action button {
+        display: inline-flex; align-items: center; gap: 7px;
+        min-height: 36px; padding: 0 16px; border: 0; border-radius: 6px;
+        background: var(--blue); color: white; cursor: pointer;
+        font: inherit; font-size: 12px; font-weight: 650;
+      }
+      .update-notice-action button:hover { background: #3c6fe5; }
+      .update-notice-action svg { width: 15px; height: 15px; }
+
       .amap-logo,
       .amap-copyright {
         bottom: 232px !important;
@@ -2840,7 +3116,7 @@
 
       .energy-type-switch {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(3, 1fr);
         gap: 3px;
       }
 
@@ -2875,6 +3151,48 @@
         border-color: #ead0aa;
         background: #fff4e4;
         color: #9a621d;
+      }
+
+      .energy-type-switch button[data-energy-type="hybrid"].active {
+        border-color: #bfe0c9;
+        background: #eaf7ef;
+        color: #256b41;
+      }
+
+      .hybrid-levels {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin-top: 6px;
+      }
+
+      .hybrid-levels label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 4px;
+        padding: 4px 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+        font-size: 10px;
+        color: var(--muted);
+        font-weight: 650;
+      }
+
+      .hybrid-levels input {
+        width: 42px;
+        border: 0;
+        background: transparent;
+        text-align: right;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+
+      .hybrid-levels label b {
+        font-size: 10px;
+        color: var(--muted);
       }
 
       .editable-constraint {
@@ -3281,8 +3599,9 @@
             <span class="route-dot"></span>
             <div>
               <div class="field-label">起点</div>
-              <div class="field-value">能链中心 · 北京总部</div>
-              <div class="field-note">北京市朝阳区姚家园南路 1 号</div>
+              <div class="field-value" id="originName">能链中心 · 北京总部</div>
+              <div class="field-note" id="originMeta">北京市朝阳区姚家园南路 1 号 · 演示默认起点</div>
+              <div class="field-weather" id="originWeather" hidden></div>
             </div>
           </div>
           <div class="route-field">
@@ -3296,7 +3615,7 @@
         </div>
 
         <div class="constraint-grid" id="manualControls" aria-label="行程约束" hidden>
-          <div class="constraint energy-type-constraint"><div class="constraint-label">动力类型</div><div class="energy-type-switch" role="group" aria-label="动力类型"><button type="button" class="active" data-energy-type="electric"><i data-lucide="zap"></i>纯电</button><button type="button" data-energy-type="fuel"><i data-lucide="fuel"></i>燃油</button></div></div>
+          <div class="constraint energy-type-constraint"><div class="constraint-label">动力类型</div><div class="energy-type-switch" role="group" aria-label="动力类型"><button type="button" class="active" data-energy-type="electric"><i data-lucide="zap"></i>纯电</button><button type="button" data-energy-type="fuel"><i data-lucide="fuel"></i>燃油</button><button type="button" data-energy-type="hybrid"><i data-lucide="git-compare-arrows"></i>混动</button></div><div class="hybrid-levels" id="hybridLevels" hidden><label>电量<span><input id="hybridElectricInput" type="number" min="5" max="100" step="1" inputmode="numeric" aria-label="混动车当前电量百分比" /><b>%</b></span></label><label>油量<span><input id="hybridFuelInput" type="number" min="5" max="100" step="1" inputmode="numeric" aria-label="混动车当前油量百分比" /><b>%</b></span></label></div></div>
           <div class="constraint constraint-arrival"><div class="constraint-label">到达要求 <small>可选</small></div><div class="arrival-inputs"><label>最晚<input id="deadlineInput" type="time" aria-label="最晚到达时间，可留空" title="留空即不限制最晚到达时间" /></label><label>余量<input id="minArrivalSocInput" type="number" min="5" max="100" step="1" placeholder="不限" inputmode="numeric" aria-label="最低到达余量，可留空" title="留空即不设到达余量要求，仅保留车辆安全下限" /><b>%</b></label></div><div class="constraint-note">留空即不作为硬约束；系统仍保留车辆安全下限。</div></div>
         </div>
 
@@ -3369,14 +3688,14 @@
         <div class="operator-head">
           <div>
             <div class="eyebrow">Operator intelligence</div>
-            <h2>北京区域补能供需</h2>
+            <h2 id="operatorPanelTitle">北京区域补能供需</h2>
             <p>把聚合出行需求转成可解释的跨站引流与定价动作。<span class="source-badge">真实站点 POI · 经营状态演示仿真</span></p>
           </div>
           <button class="close-button" id="closeOperator" aria-label="关闭运营视图"><i data-lucide="x"></i></button>
         </div>
         <div class="operator-grid">
           <div class="operator-metric"><div class="stat-label">未来 30 分钟峰值排队</div><strong id="operatorQueue">43<span style="font-size:13px;font-family:var(--sans);font-weight:500"> 人</span></strong><p id="operatorQueueNote">大兴南区 3 个站点出现集中到达</p></div>
-          <div class="operator-metric"><div class="stat-label">建议分流优惠</div><strong id="operatorDiscount">¥6<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span></strong><p>仅对高峰时段目标用户触发</p></div>
+          <div class="operator-metric"><div class="stat-label">当前优惠档位</div><strong id="operatorDiscount">¥6<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span></strong><p id="operatorDiscountNote">仅对高峰时段目标用户触发</p></div>
           <div class="operator-metric"><div class="stat-label">预测优惠 ROI</div><strong id="operatorRoi" style="color:var(--teal)">1.8x</strong><p id="operatorRoiNote">演示模拟：新增订单毛利 / 优惠成本</p></div>
         </div>
         <section class="station-flow" aria-label="跨站分流路径">
@@ -3388,7 +3707,7 @@
           </div>
         </section>
         <div class="strategy-lab" id="operatorStrategyLab">
-          <div class="strategy-lab-head"><strong>最低有效优惠实验台</strong><span>优惠不足无法分流；优惠过高会拉低 ROI</span></div>
+          <div class="strategy-lab-head"><strong>优惠档位实验台</strong><span>优惠不足无法分流；优惠过高会拉低 ROI。算法在 ROI ≥ 1 的档位里取分流量最大的一档</span></div>
           <div class="strategy-controls">
             <div class="strategy-control">
               <div class="strategy-control-head"><label for="discountSlider">单笔优惠金额</label><output id="discountValue" for="discountSlider">¥6</output></div>
@@ -3416,7 +3735,7 @@
             <div class="comparison-metric"><span>优惠投入回报</span><div class="comparison-values"><strong id="strategyRoiValue">1.5x</strong></div></div>
           </div>
         </div>
-        <div class="operator-actions"><p id="operatorAction"><strong>建议动作：</strong>先识别拥堵站，再在承接站容量和 ROI 约束内计算最小优惠。</p><div class="operator-button-group"><button class="secondary-action subtle hidden" id="resetExecution"><i data-lucide="rotate-ccw"></i>重置</button><button class="secondary-action" id="approveButton"><i data-lucide="play"></i>运行分流仿真</button></div></div>
+        <div class="operator-actions"><p id="operatorAction"><strong>建议动作：</strong>先识别拥堵站，再在承接站容量和 ROI ≥ 1 的约束内，求分流量最大的优惠档位。</p><div class="operator-button-group"><button class="secondary-action subtle hidden" id="resetExecution"><i data-lucide="rotate-ccw"></i>重置</button><button class="secondary-action" id="approveButton"><i data-lucide="play"></i>运行分流仿真</button></div></div>
       </section>
 
       <section class="validation-panel" id="validationPanel" aria-label="策略验证">
@@ -3467,6 +3786,7 @@
           <div class="sheet-heading"><h2>3 条可行方案</h2><span>按最终时间、风险和成本生成可解释对比</span></div>
           <div class="sheet-actions"><button class="sheet-action" id="resetView"><i data-lucide="scan-line"></i>回到全程</button><button class="sheet-action" id="collapseRoutes" aria-label="收起路线方案"><i data-lucide="chevron-down"></i>收起</button></div>
         </div>
+        <div class="hybrid-compare" id="hybridCompare" hidden></div>
         <div class="route-options" id="routeOptions">
           <button class="route-option" data-route="fastest">
             <div class="option-top"><span class="option-name"><i data-lucide="zap"></i><span class="option-name-text">最快到达</span></span><span class="option-tag">少 8 分钟</span></div>
@@ -3495,7 +3815,26 @@
       <div class="toast" id="toast"><i data-lucide="check-circle-2"></i><span id="toastText">操作已完成</span></div>
     </div>
 
-    <div class="demo-notice-backdrop" id="demoNoticeBackdrop">
+    <div class="demo-notice-backdrop" id="updateNoticeBackdrop">
+      <section class="update-notice" role="dialog" aria-modal="true" aria-labelledby="updateNoticeTitle">
+        <span class="update-notice-mark"><i data-lucide="sparkles"></i></span>
+        <h2 id="updateNoticeTitle">本次更新</h2>
+        <p class="update-notice-sub">FlowTwin · 能链 AI 油电一体化补能协同 Demo</p>
+        <ul class="update-list">
+          <li class="update-item"><i data-lucide="git-compare-arrows"></i><span><b>预测口径对齐</b>：模型描述照代码重写，油价/电价/等待分位系数与天气因子统一，不再两页两套口径。</span></li>
+          <li class="update-item"><i data-lucide="bar-chart-3"></i><span><b>长途 P90 卷积</b>：各站等待按独立性卷积，不再把各站最差 10% 直接相加虚高。</span></li>
+          <li class="update-item"><i data-lucide="filter"></i><span><b>站点过滤</b>：纯电方案不再出现"加油站"补能点，服务区兜底候选补上区县位置。</span></li>
+          <li class="update-item"><i data-lucide="git-branch"></i><span><b>混动分支</b>：电分支够不着最近站时自动转油，失败原因如实说明，不再误报"未检索到充电站"。</span></li>
+          <li class="update-item"><i data-lucide="map-pin"></i><span><b>运营页去硬编码</b>：标题、休息提示、目的地建议随当前行程动态，不再写死北京。</span></li>
+          <li class="update-item"><i data-lucide="receipt"></i><span><b>支付电子收据</b>：分项明细（量×单价=能源费−优惠=实付），并打通运营引流优惠闭环。</span></li>
+          <li class="update-item"><i data-lucide="cloud-rain"></i><span><b>天气接入</b>：高德实况天气影响预测，雨雪天峰值等待上升，服务建议优先室内。</span></li>
+        </ul>
+        <div class="update-foot"><i data-lucide="info"></i><span>可输入全国可驾车目的地；站点价格/占用率/等待为演示仿真数据，天气与路线为高德实况。</span></div>
+        <div class="update-notice-action"><button id="updateNoticeConfirm" type="button"><span>知道了，开始体验</span><i data-lucide="arrow-right"></i></button></div>
+      </section>
+    </div>
+
+    <div class="demo-notice-backdrop hidden" id="demoNoticeBackdrop">
       <section class="demo-notice" role="dialog" aria-modal="true" aria-labelledby="demoNoticeTitle" aria-describedby="demoNoticeDescription">
         <span class="demo-notice-mark"><i data-lucide="map"></i></span>
         <h2 id="demoNoticeTitle">全国长途规划已开启</h2>
@@ -3503,6 +3842,19 @@
         <div class="demo-notice-boundary"><i data-lucide="info"></i><span>建议体验：输入城市、机场、火车站或具体地址，系统将检索路线与沿线补能站。</span></div>
         <div class="demo-notice-action"><button id="demoNoticeConfirm" type="button"><span>知道了，开始体验</span><i data-lucide="arrow-right"></i></button></div>
       </section>
+
+      <div class="payment-receipt-overlay" id="paymentReceiptOverlay" role="dialog" aria-modal="true" aria-labelledby="paymentReceiptTitle" hidden>
+        <div class="payment-receipt">
+          <div class="payment-receipt-head">
+            <i data-lucide="receipt"></i><strong id="paymentReceiptTitle">电子收据</strong><span id="paymentReceiptTime"></span>
+          </div>
+          <div class="payment-receipt-station" id="paymentReceiptStation"></div>
+          <div class="payment-receipt-rows" id="paymentReceiptRows"></div>
+          <div class="payment-receipt-total"><span>实付金额</span><b id="paymentReceiptTotal">¥0.0</b></div>
+          <div class="payment-receipt-foot"><i data-lucide="shield-check"></i><span id="paymentReceiptFoot"></span></div>
+          <button class="payment-receipt-close" id="paymentReceiptClose" type="button">完成</button>
+        </div>
+      </div>
     </div>
 
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.js"></script>
