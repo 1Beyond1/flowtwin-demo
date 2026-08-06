@@ -1365,6 +1365,37 @@
         display: none;
       }
 
+      .feishu-sync-panel {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface-soft);
+      }
+
+      .feishu-sync-panel .secondary-action {
+        min-height: 34px;
+      }
+
+      .feishu-sync-status {
+        min-width: 0;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.45;
+      }
+
+      .feishu-sync-status strong {
+        color: var(--teal);
+      }
+
+      .feishu-sync-status[data-state="error"] strong {
+        color: var(--amber);
+      }
+
       .flow-marker {
         border: 0;
         background: transparent;
@@ -3736,6 +3767,7 @@
           </div>
         </div>
         <div class="operator-actions"><p id="operatorAction"><strong>建议动作：</strong>先识别拥堵站，再在承接站容量和 ROI ≥ 1 的约束内，求分流量最大的优惠档位。</p><div class="operator-button-group"><button class="secondary-action subtle hidden" id="resetExecution"><i data-lucide="rotate-ccw"></i>重置</button><button class="secondary-action" id="approveButton"><i data-lucide="play"></i>运行分流仿真</button></div></div>
+        <div class="feishu-sync-panel" aria-label="飞书 AI 同步"><button class="secondary-action" id="feishuSyncButton" type="button"><i data-lucide="cloud-upload"></i>同步至飞书 AI</button><p class="feishu-sync-status" id="feishuSyncStatus" data-state="idle"><strong>可选执行链路</strong> · 将当前运营快照写入飞书多维表格，并读取 AI 策略结果。未配置时保留本地演示。</p></div>
       </section>
 
       <section class="validation-panel" id="validationPanel" aria-label="策略验证">

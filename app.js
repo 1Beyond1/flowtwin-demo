@@ -160,6 +160,8 @@
     validationPayload: null,
     pendingOperatorPayload: null,
     pendingOperatorSnapshot: null,
+    feishuSync: null,
+    feishuPollVersion: 0,
     hasPlannedRoute: false,
     vehiclePlate: "京A·FT2026",
     paymentState: "authorized",
@@ -491,6 +493,19 @@
         body: JSON.stringify(body || {}),
         signal: controller.signal
       });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `HTTP_${response.status}`);
+      return payload;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  async function getJson(path, timeoutMs) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs || 20000);
+    try {
+      const response = await fetch(path, { headers: { Accept: "application/json" }, signal: controller.signal });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || `HTTP_${response.status}`);
       return payload;
@@ -3493,6 +3508,116 @@
     setText("operatorPanelTitle", `${originRegionLabel()}补能供需`);
   }
 
+  function renderFeishuSyncStatus(result = state.feishuSync) {
+    const status = byId("feishuSyncStatus");
+    const button = byId("feishuSyncButton");
+    if (!status) return;
+    const stateName = result?.status === "error" || result?.mode === "error"
+      ? "error"
+      : result?.status === "completed"
+        ? "completed"
+        : result?.status === "processing" || result?.status === "syncing"
+          ? "processing"
+          : "idle";
+    status.dataset.state = stateName;
+    if (stateName === "completed") {
+      status.innerHTML = `<strong>飞书 AI 已完成</strong> · ${escapeHtml(result.aiResult || "已返回策略结果")} · 数据来源：FlowTwin 演示仿真`;
+    } else if (stateName === "processing") {
+      status.innerHTML = `<strong>飞书 AI 分析中</strong> · 已同步 ${Number(result.stationCount || 0)} 个站点，等待 AI 字段返回`;
+    } else if (stateName === "error") {
+      status.innerHTML = `<strong>飞书同步失败</strong> · ${escapeHtml(result.message || "请检查配置、权限或字段名称")}`;
+    } else if (result?.status === "not-configured") {
+      status.innerHTML = `<strong>本地演示模式</strong> · 未配置飞书多维表格，当前运营结果仍可在本页查看`;
+    } else {
+      status.innerHTML = `<strong>可选执行链路</strong> · 将当前运营快照写入飞书多维表格，并读取 AI 策略结果。未配置时保留本地演示。`;
+    }
+    if (button) button.disabled = stateName === "processing";
+  }
+
+  function resetFeishuSync() {
+    state.feishuPollVersion += 1;
+    state.feishuSync = null;
+    renderFeishuSyncStatus(null);
+  }
+
+  async function pollFeishuSync(syncId, pollVersion) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1800));
+      if (pollVersion !== state.feishuPollVersion) return;
+      try {
+        const result = await getJson(`/api/feishu/sync/${encodeURIComponent(syncId)}`, 12000);
+        state.feishuSync = result;
+        renderFeishuSyncStatus(result);
+        if (result.status === "completed" || result.status === "error") {
+          showToast(result.status === "completed" ? "飞书 AI 策略已返回" : "飞书同步失败，请查看状态提示", 3200);
+          return;
+        }
+      } catch {
+        state.feishuSync = { mode: "error", status: "error", message: "暂时无法读取飞书 AI 结果" };
+        renderFeishuSyncStatus(state.feishuSync);
+        return;
+      }
+    }
+    if (pollVersion === state.feishuPollVersion && state.feishuSync?.status === "processing") {
+      renderFeishuSyncStatus({ ...state.feishuSync, message: "AI 仍在处理，可稍后再次点击同步" });
+    }
+  }
+
+  async function syncFeishuOperatorSnapshot() {
+    const button = byId("feishuSyncButton");
+    if (!state.stations.length) {
+      state.feishuSync = { status: "error", mode: "error", message: "请先完成一次出行规划" };
+      renderFeishuSyncStatus(state.feishuSync);
+      return;
+    }
+    const strategy = state.pendingOperatorPayload || {
+      before: state.operatorBefore,
+      after: state.operatorAfter,
+      impact: { roi: Number(state.operatorAfter?.roi || 0) },
+      discountAmount: Number(state.operatorAfter?.discount || state.operatorBefore?.discount || 0),
+      targetStation: null,
+      targetUser: "当前运营场景",
+      stations: state.stations
+    };
+    const runId = `operator-${stableHash(JSON.stringify({
+      destination: state.destinationName,
+      energyType: state.energyType,
+      selectedRoute: state.selectedRoute,
+      stations: state.stations.map((station) => [station.id, station.occupancy, station.wait, station.p90]),
+      strategy: [strategy.discountAmount, strategy.targetStation?.id, strategy.targetUser]
+    }))}`;
+    state.feishuPollVersion += 1;
+    const pollVersion = state.feishuPollVersion;
+    if (button) button.disabled = true;
+    state.feishuSync = { status: "syncing", mode: "feishu-bitable", stationCount: state.stations.length };
+    renderFeishuSyncStatus(state.feishuSync);
+    try {
+      const result = await postJson("/api/feishu/sync", {
+        runId,
+        stations: state.stations,
+        strategy,
+        source: "FlowTwin 演示仿真",
+        dataAsOf: new Date().toISOString()
+      }, 30000);
+      state.feishuSync = result;
+      renderFeishuSyncStatus(result);
+      if (result.status === "not-configured") {
+        showToast("飞书未配置，当前保留本地演示", 3200);
+        return;
+      }
+      if (result.syncId) {
+        showToast("运营快照已同步，正在等待飞书 AI", 2600);
+        await pollFeishuSync(result.syncId, pollVersion);
+      }
+    } catch (error) {
+      state.feishuSync = { status: "error", mode: "error", message: error.message || "飞书同步失败" };
+      renderFeishuSyncStatus(state.feishuSync);
+      showToast("飞书同步失败，未影响本地运营结果", 3600);
+    } finally {
+      if (button && state.feishuSync?.status !== "processing") button.disabled = false;
+    }
+  }
+
   function renderStationSummary() {
     if (!state.stations.length) return;
     state.operatorOriginalStations = state.stations.map((station) => Object.assign({}, station));
@@ -3501,6 +3626,7 @@
     state.executionState = "before";
     state.paymentState = "authorized";
     state.paymentReceipt = null;
+    resetFeishuSync();
     closePaymentReceipt();
     syncOperatorPanelTitle();
     renderOperatorMetrics(state.operatorBefore, false);
@@ -4310,6 +4436,7 @@
     state.operatorAfter = null;
     state.pendingOperatorPayload = null;
     state.pendingOperatorSnapshot = null;
+    resetFeishuSync();
     $$(".execution-step").forEach((step) => step.classList.remove("done"));
     const button = byId("approveButton");
     const reset = byId("resetExecution");
@@ -4687,6 +4814,7 @@
     if (discountSlider) discountSlider.addEventListener("input", () => setText("discountValue", `¥${discountSlider.value}`));
     const operatorSimulate = byId("operatorSimulate");
     if (operatorSimulate) operatorSimulate.addEventListener("click", simulateOperatorStrategy);
+    byId("feishuSyncButton")?.addEventListener("click", syncFeishuOperatorSnapshot);
     const services = byId("serviceRecommendations");
     if (services) services.addEventListener("click", async (event) => {
       const card = event.target.closest("[data-service]");

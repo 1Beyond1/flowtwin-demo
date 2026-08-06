@@ -11,6 +11,13 @@ import { executeFeishu } from "./lib/feishu.mjs";
 import { buildLongTripPlans } from "./lib/longtrip.mjs";
 import { API_CONTRACTS } from "./lib/contracts.mjs";
 import { cleanTranscriptText, polishTranscriptText } from "./lib/stt.mjs";
+import { hasAmapServiceKey, requestAmapJson } from "./lib/amap.mjs";
+import {
+  feishuConfigSummary,
+  startFeishuSync,
+  getFeishuSyncStatus,
+  approveFeishuStrategy
+} from "./lib/feishu-bitable.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const config = await loadConfig({ root });
@@ -36,8 +43,10 @@ function json(response, status, body) {
 }
 
 function parseCoordinate(value) {
-  if (!/^\d{2,3}\.\d{1,6},\d{2}\.\d{1,6}$/.test(value || "")) return null;
-  const [longitude, latitude] = value.split(",").map(Number);
+  const parts = String(value || "").trim().split(",");
+  if (parts.length !== 2 || parts.some((part) => !part || part.length > 24)) return null;
+  const [longitude, latitude] = parts.map(Number);
+  if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return null;
   if (longitude < 73 || longitude > 136 || latitude < 18 || latitude > 54) return null;
   return `${longitude.toFixed(6)},${latitude.toFixed(6)}`;
 }
@@ -65,23 +74,17 @@ async function routeApi(requestUrl, response) {
   const strategies = { fastest: "38", reliable: "33", cheapest: "36" };
   if (!origin || !destination || !strategies[key]) return json(response, 400, { error: "INVALID_ROUTE_PARAMS" });
 
-  const { webServiceKey } = config;
-  if (!webServiceKey) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
+  if (!hasAmapServiceKey(config)) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
   const params = new URLSearchParams({
     origin,
     destination,
     strategy: strategies[key],
     cartype: requestUrl.searchParams.get("cartype") === "0" ? "0" : "1",
     ferry: "1",
-    show_fields: "cost,navi,polyline",
-    key: webServiceKey
+    show_fields: "cost,navi,polyline"
   });
   if (waypoint) params.set("waypoints", waypoint);
-  const upstream = await fetch(`https://restapi.amap.com/v5/direction/driving?${params}`, {
-    headers: { "User-Agent": "FlowTwin-Demo/1.0" },
-    signal: AbortSignal.timeout(15000)
-  });
-  const result = await upstream.json();
+  const result = (await requestAmapJson("https://restapi.amap.com/v5/direction/driving", params, { config, timeoutMs: 15000 })).payload || {};
   const paths = Array.isArray(result.route?.paths) ? result.route.paths : [];
   if (result.status !== "1" || !paths.length) return json(response, 502, { error: result.info || "AMAP_ROUTE_FAILED", infocode: result.infocode || null });
   const station = waypoint ? { location: waypoint.split(",").map(Number) } : null;
@@ -102,10 +105,8 @@ async function poiApi(requestUrl, response) {
   const type = requestedType === "fuel" ? "fuel" : requestedType === "service" ? "service" : "electric";
   const keyword = type === "fuel" ? "加油站" : type === "service" ? "服务区" : "充电站";
   if (!location) return json(response, 400, { error: "INVALID_POI_LOCATION" });
-  const { webServiceKey } = config;
-  if (!webServiceKey) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
+  if (!hasAmapServiceKey(config)) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
   const params = new URLSearchParams({
-    key: webServiceKey,
     location,
     keywords: keyword,
     radius: "30000",
@@ -113,13 +114,23 @@ async function poiApi(requestUrl, response) {
     page_num: "1",
     show_fields: "business,children"
   });
-  const upstream = await fetch(`https://restapi.amap.com/v5/place/around?${params}`, {
-    headers: { "User-Agent": "FlowTwin-Demo/1.0" },
-    signal: AbortSignal.timeout(15000)
-  });
-  const result = await upstream.json();
+  const result = (await requestAmapJson("https://restapi.amap.com/v5/place/around", params, { config, timeoutMs: 15000 })).payload || {};
   let pois = Array.isArray(result.pois) ? result.pois : [];
-  if (result.status !== "1") return json(response, 502, { error: result.info || "AMAP_POI_FAILED", infocode: result.infocode || null });
+  if (result.status !== "1") {
+    // POI discovery is an optional enrichment layer. A temporary quota or
+    // upstream failure should let the browser use its SDK/fallback candidates
+    // without turning the normal planning flow into a wall of 502 console
+    // errors. The response remains explicit and never claims that POI data was
+    // retrieved successfully.
+    return json(response, 200, {
+      pois: [],
+      source: "高德 POI 暂不可用 · 已进入候选降级",
+      degraded: true,
+      warning: result.info || "AMAP_POI_FAILED",
+      infocode: result.infocode || null,
+      kind: type
+    });
+  }
   let source = "高德周边 POI";
   // Motorway samples often sit outside an urban POI radius even though the
   // nearest city has public charging stations. When the around-search is
@@ -128,21 +139,15 @@ async function poiApi(requestUrl, response) {
   // filters; this only broadens data discovery, not the safety judgement.
   if (!pois.length) {
     try {
-      const reverseParams = new URLSearchParams({ key: webServiceKey, location, radius: "1000", extensions: "base" });
-      const reverse = await fetch(`https://restapi.amap.com/v3/geocode/regeo?${reverseParams}`, {
-        headers: { "User-Agent": "FlowTwin-Demo/1.0" }, signal: AbortSignal.timeout(10000)
-      });
-      const reversePayload = await reverse.json();
+      const reverseParams = new URLSearchParams({ location, radius: "1000", extensions: "base" });
+      const reversePayload = (await requestAmapJson("https://restapi.amap.com/v3/geocode/regeo", reverseParams, { config, timeoutMs: 10000 })).payload || {};
       const cityValue = reversePayload?.regeocode?.addressComponent?.city;
       const city = Array.isArray(cityValue) ? cityValue.find(Boolean) : cityValue;
       if (reversePayload.status === "1" && typeof city === "string" && city.trim()) {
         const textParams = new URLSearchParams({
-          key: webServiceKey, keywords: keyword, city: city.trim(), citylimit: "true", offset: "25", page: "1", extensions: "base"
+          keywords: keyword, city: city.trim(), citylimit: "true", offset: "25", page: "1", extensions: "base"
         });
-        const textSearch = await fetch(`https://restapi.amap.com/v3/place/text?${textParams}`, {
-          headers: { "User-Agent": "FlowTwin-Demo/1.0" }, signal: AbortSignal.timeout(10000)
-        });
-        const textPayload = await textSearch.json();
+        const textPayload = (await requestAmapJson("https://restapi.amap.com/v3/place/text", textParams, { config, timeoutMs: 10000 })).payload || {};
         if (textPayload.status === "1" && Array.isArray(textPayload.pois)) {
           pois = textPayload.pois;
           source = "高德城市文本 POI";
@@ -331,18 +336,14 @@ const WEATHER_CACHE_MS = 10 * 60 * 1000;
 async function weatherApi(requestUrl, response) {
   const location = parseCoordinate(requestUrl.searchParams.get("location"));
   if (!location) return json(response, 400, { error: "INVALID_LOCATION" });
-  const { webServiceKey } = config;
-  if (!webServiceKey) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
+  if (!hasAmapServiceKey(config)) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
 
   // 天气按 adcode 查；先逆地理拿到坐标所在区县的 adcode。
-  const regeoParams = new URLSearchParams({ key: webServiceKey, location, extensions: "base" });
+  const regeoParams = new URLSearchParams({ location, extensions: "base" });
   let adcode = null;
   let cityName = null;
   try {
-    const regeo = await fetch(`https://restapi.amap.com/v3/geocode/regeo?${regeoParams}`, {
-      headers: { "User-Agent": "FlowTwin-Demo/1.0" }, signal: AbortSignal.timeout(10000)
-    });
-    const regeoJson = await regeo.json();
+    const regeoJson = (await requestAmapJson("https://restapi.amap.com/v3/geocode/regeo", regeoParams, { config, timeoutMs: 10000 })).payload || {};
     const component = regeoJson?.regeocode?.addressComponent;
     adcode = component?.adcode ? String(component.adcode) : null;
     cityName = component?.city ? String(component.city) : (component?.province ? String(component.province) : null);
@@ -352,13 +353,10 @@ async function weatherApi(requestUrl, response) {
   const cached = weatherCache.get(adcode);
   if (cached && cached.expiresAt > Date.now()) return json(response, 200, cached.data);
 
-  const weatherParams = new URLSearchParams({ key: webServiceKey, city: adcode, extensions: "base" });
+  const weatherParams = new URLSearchParams({ city: adcode, extensions: "base" });
   let result;
   try {
-    const upstream = await fetch(`https://restapi.amap.com/v3/weather/weatherInfo?${weatherParams}`, {
-      headers: { "User-Agent": "FlowTwin-Demo/1.0" }, signal: AbortSignal.timeout(10000)
-    });
-    result = await upstream.json();
+    result = (await requestAmapJson("https://restapi.amap.com/v3/weather/weatherInfo", weatherParams, { config, timeoutMs: 10000 })).payload || {};
   } catch {
     return json(response, 502, { error: "AMAP_WEATHER_UNREACHABLE" });
   }
@@ -424,6 +422,27 @@ async function executionApi(request, response) {
   return json(response, 200, result);
 }
 
+async function feishuSyncApi(request, response) {
+  const body = await readJsonBody(request, 128000);
+  const result = await startFeishuSync({ payload: body, config });
+  return json(response, 200, result);
+}
+
+async function feishuStatusApi(syncId, response) {
+  const result = await getFeishuSyncStatus({ syncId, config });
+  return json(response, result.mode === "error" && result.code !== "FEISHU_SYNC_NOT_FOUND" ? 502 : 200, result);
+}
+
+async function feishuApproveApi(request, response, strategyRecordId) {
+  const body = await readJsonBody(request, 8192);
+  const result = await approveFeishuStrategy({
+    strategyRecordId,
+    status: body.status || "已确认",
+    config
+  });
+  return json(response, 200, result);
+}
+
 async function staticFile(pathname, response) {
   const requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
   const protectedNames = new Set([".env", ".env.example", "config.local.js", "server.mjs", "package.json", "package-lock.json"]);
@@ -457,7 +476,14 @@ createServer(async (request, response) => {
   try {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
     if (request.method === "OPTIONS") return json(response, 204, {});
-    if (requestUrl.pathname === "/api/health") return json(response, 200, { ok: true, service: "FlowTwin" });
+    if (requestUrl.pathname === "/api/health") return json(response, 200, {
+      ok: true,
+      service: "FlowTwin",
+      dependencies: {
+        amapConfigured: hasAmapServiceKey(config),
+        feishu: feishuConfigSummary(config)
+      }
+    });
     if (request.method === "GET" && requestUrl.pathname === "/api/contracts") return json(response, 200, API_CONTRACTS);
     if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
     if (requestUrl.pathname === "/api/poi") return await poiApi(requestUrl, response);
@@ -468,6 +494,15 @@ createServer(async (request, response) => {
     if (request.method === "POST" && requestUrl.pathname === "/api/operator/simulate") return await operatorApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/validate") return await validateApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/execution") return await executionApi(request, response);
+    if (request.method === "GET" && requestUrl.pathname === "/api/feishu/health") return json(response, 200, { ok: true, ...feishuConfigSummary(config) });
+    if (request.method === "POST" && requestUrl.pathname === "/api/feishu/sync") return await feishuSyncApi(request, response);
+    if (request.method === "GET" && requestUrl.pathname.startsWith("/api/feishu/sync/")) {
+      return await feishuStatusApi(decodeURIComponent(requestUrl.pathname.slice("/api/feishu/sync/".length)), response);
+    }
+    if (request.method === "POST" && requestUrl.pathname.startsWith("/api/feishu/strategy/") && requestUrl.pathname.endsWith("/approve")) {
+      const strategyRecordId = requestUrl.pathname.slice("/api/feishu/strategy/".length, -"/approve".length);
+      return await feishuApproveApi(request, response, decodeURIComponent(strategyRecordId));
+    }
     if (request.method === "POST" && requestUrl.pathname === "/api/stt") return await sttApi(request, response);
     if (requestUrl.pathname === "/runtime-config.js") return await runtimeConfig(response);
     return await staticFile(requestUrl.pathname, response);
