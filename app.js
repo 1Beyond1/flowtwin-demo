@@ -3508,6 +3508,70 @@
     setText("operatorPanelTitle", `${originRegionLabel()}补能供需`);
   }
 
+  function setOperatorAnalysisStep(step, stateName, label) {
+    const card = byId(step === "simulation" ? "operatorSimulationStep" : "operatorFeishuStep");
+    const state = byId(step === "simulation" ? "operatorSimulationState" : "operatorFeishuState");
+    if (!card || !state) return;
+    card.classList.remove("active", "processing", "complete", "error");
+    if (stateName === "processing") card.classList.add("processing");
+    else if (stateName === "completed") card.classList.add("complete");
+    else if (stateName === "error" || stateName === "not-configured") card.classList.add("error");
+    else if (step === "simulation") card.classList.add("active");
+    state.textContent = label;
+  }
+
+  function resetOperatorAnalysisSteps() {
+    setOperatorAnalysisStep("simulation", "idle", "待开始");
+    setOperatorAnalysisStep("feishu", "idle", "等待仿真结果");
+  }
+
+  function parseFeishuAiResult(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return [];
+    // The Feishu field may return one line or multiple lines. Split only before
+    // numbered conclusions, so decimal values such as 4.5 are preserved.
+    const body = raw.split(/(?:\s*[·；;]\s*)?数据来源：/i)[0].trim();
+    return body
+      .replace(/\s+(?=\d+\.\s)/g, "\n")
+      .split(/\n+/)
+      .map((entry) => entry.replace(/^\s*\d+\.\s*/, "").trim().replace(/operationally-effective/gi, "运营有效但未达到盈利目标"))
+      .filter(Boolean);
+  }
+
+  function renderFeishuAiResult(result = state.feishuSync) {
+    const empty = byId("feishuAiEmpty");
+    const conclusions = byId("feishuAiConclusions");
+    const source = byId("feishuAiSource");
+    if (!empty || !conclusions) return;
+    const status = result?.status;
+    const entries = status === "completed" ? parseFeishuAiResult(result.aiResult) : [];
+    if (entries.length) {
+      empty.hidden = true;
+      conclusions.hidden = false;
+      conclusions.innerHTML = entries.map((entry, index) => `<article class="feishu-ai-conclusion"><span class="feishu-ai-conclusion-index">${String(index + 1).padStart(2, "0")}</span><p>${escapeHtml(entry)}</p></article>`).join("");
+      if (source) source.innerHTML = "<strong>数据来源：</strong>FlowTwin 演示仿真；以上不是企业实时经营结论。";
+      return;
+    }
+    conclusions.hidden = true;
+    if (status === "processing" || status === "syncing") {
+      empty.hidden = false;
+      empty.textContent = "正在等待飞书 AI 返回运营解读……";
+      if (source) source.textContent = "仿真结果已生成，AI 正在读取策略记录。";
+    } else if (status === "error" || result?.mode === "error") {
+      empty.hidden = false;
+      empty.textContent = `本地分流仿真已完成，但飞书 AI 暂时不可用：${result.message || "请检查配置或权限"}`;
+      if (source) source.textContent = "本地仿真结果不受影响；飞书 AI 结果未伪造。";
+    } else if (status === "not-configured") {
+      empty.hidden = false;
+      empty.textContent = "本地分流仿真已完成，当前未配置飞书 AI；不会用示例文字冒充 AI 结果。";
+      if (source) source.textContent = "本地仿真结果不受影响；飞书 AI 需要完成服务配置后使用。";
+    } else {
+      empty.hidden = false;
+      empty.textContent = "点击“开始智能分析”，先完成分流仿真，再查看 AI 对运营结果的自然语言解读。";
+      if (source) source.textContent = "数据来源将在分析完成后明确标注；当前不代表企业实时经营结论。";
+    }
+  }
+
   function renderFeishuSyncStatus(result = state.feishuSync) {
     const status = byId("feishuSyncStatus");
     const button = byId("feishuSyncButton");
@@ -3521,16 +3585,24 @@
           : "idle";
     status.dataset.state = stateName;
     if (stateName === "completed") {
-      status.innerHTML = `<strong>飞书 AI 已完成</strong> · ${escapeHtml(result.aiResult || "已返回策略结果")} · 数据来源：FlowTwin 演示仿真`;
+      const entryCount = parseFeishuAiResult(result.aiResult).length;
+      const resultSummary = entryCount ? `已生成 ${entryCount} 条运营解读` : "已返回 AI 策略结果";
+      status.innerHTML = `<strong>飞书 AI 已完成</strong> · ${resultSummary}`;
+      setOperatorAnalysisStep("feishu", "completed", "已完成");
     } else if (stateName === "processing") {
       status.innerHTML = `<strong>飞书 AI 分析中</strong> · 已同步 ${Number(result.stationCount || 0)} 个站点，等待 AI 字段返回`;
+      setOperatorAnalysisStep("feishu", "processing", "分析中");
     } else if (stateName === "error") {
       status.innerHTML = `<strong>飞书同步失败</strong> · ${escapeHtml(result.message || "请检查配置、权限或字段名称")}`;
+      setOperatorAnalysisStep("feishu", "error", "暂不可用");
     } else if (result?.status === "not-configured") {
       status.innerHTML = `<strong>本地演示模式</strong> · 未配置飞书多维表格，当前运营结果仍可在本页查看`;
+      setOperatorAnalysisStep("feishu", "not-configured", "未配置");
     } else {
-      status.innerHTML = `<strong>可选执行链路</strong> · 将当前运营快照写入飞书多维表格，并读取 AI 策略结果。未配置时保留本地演示。`;
+      status.innerHTML = `<strong>等待仿真结果</strong> · 点击“开始智能分析”后自动请求飞书 AI`;
+      setOperatorAnalysisStep("feishu", "idle", "等待仿真结果");
     }
+    renderFeishuAiResult(result);
     if (button) button.disabled = stateName === "processing";
   }
 
@@ -3627,6 +3699,7 @@
     state.paymentState = "authorized";
     state.paymentReceipt = null;
     resetFeishuSync();
+    resetOperatorAnalysisSteps();
     closePaymentReceipt();
     syncOperatorPanelTitle();
     renderOperatorMetrics(state.operatorBefore, false);
@@ -4223,6 +4296,8 @@
     const targetSegment = byId("targetSegment")?.value || "all";
     const targetStationId = byId("targetStationSelect")?.value || null;
     if (button) button.disabled = true;
+    resetFeishuSync();
+    setOperatorAnalysisStep("simulation", "processing", "计算中");
     try {
       const payload = await postJson("/api/operator/simulate", {
         stations: state.stations,
@@ -4235,8 +4310,10 @@
       state.pendingOperatorPayload = payload;
       state.pendingOperatorSnapshot = snapshot;
       renderOperatorFlow(payload);
+      setOperatorAnalysisStep("simulation", "completed", "已计算");
       showToast("已根据优惠和目标人群重新计算供需响应");
     } catch (error) {
+      setOperatorAnalysisStep("simulation", "error", "计算失败");
       showToast("策略计算失败，请稍后重试", 3600);
     } finally {
       if (button) button.disabled = false;
@@ -4437,6 +4514,7 @@
     state.pendingOperatorPayload = null;
     state.pendingOperatorSnapshot = null;
     resetFeishuSync();
+    resetOperatorAnalysisSteps();
     $$(".execution-step").forEach((step) => step.classList.remove("done"));
     const button = byId("approveButton");
     const reset = byId("resetExecution");
@@ -4444,7 +4522,7 @@
       button.disabled = false;
       button.style.opacity = "1";
       button.style.color = "";
-      button.innerHTML = '<i data-lucide="play"></i>运行分流仿真';
+      button.innerHTML = '<i data-lucide="sparkles"></i>开始智能分析';
     }
     if (reset) reset.classList.add("hidden");
     renderOperatorMetrics(state.operatorBefore, false);
@@ -4466,24 +4544,31 @@
     state.executionState = "running";
     const button = byId("approveButton");
     if (button) {
-      button.innerHTML = '<i data-lucide="loader-circle"></i>正在模拟分流…';
+      button.innerHTML = '<i data-lucide="loader-circle"></i>正在计算分流…';
       button.disabled = true;
       button.style.opacity = "0.72";
       refreshIcons();
     }
-    window.setTimeout(() => {
-      applyStrategy();
-      state.executionState = "after";
-      if (button) {
-        button.disabled = false;
-        button.style.opacity = "1";
-        button.style.color = "var(--teal)";
-        button.innerHTML = '<i data-lucide="rotate-ccw"></i>重置分流仿真';
-      }
-      byId("resetExecution").classList.remove("hidden");
-      showToast("分流仿真完成：地图与站点指标已更新");
+    await new Promise((resolve) => window.setTimeout(resolve, 680));
+    applyStrategy();
+    state.executionState = "after";
+    setOperatorAnalysisStep("simulation", "completed", "已完成");
+    if (button) {
+      button.innerHTML = '<i data-lucide="loader-circle"></i>正在获取 AI 解读…';
       refreshIcons();
-    }, 680);
+    }
+    await syncFeishuOperatorSnapshot();
+    if (button) {
+      button.disabled = false;
+      button.style.opacity = "1";
+      button.style.color = "var(--teal)";
+      button.innerHTML = '<i data-lucide="rotate-ccw"></i>重置分析';
+    }
+    // The main CTA becomes “重置分析” after completion; keep the legacy
+    // secondary reset control hidden so the evaluator sees one clear action.
+    byId("resetExecution")?.classList.add("hidden");
+    showToast("分析完成：仿真结果与 AI 运营解读已更新");
+    refreshIcons();
   }
 
   function hybridBranchRangeKm(kind) {

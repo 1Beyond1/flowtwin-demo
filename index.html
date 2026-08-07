@@ -1257,6 +1257,104 @@
         font-size: 11px;
       }
 
+      /* The operator view intentionally shows the two halves of the decision
+         loop: deterministic simulation first, natural-language interpretation
+         second.  The entry point is shared, but the responsibilities stay
+         visually and technically separate. */
+      .analysis-flow-strip {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 34px minmax(0, 1fr);
+        align-items: stretch;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .analysis-step-card {
+        min-width: 0;
+        padding: 13px 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-soft);
+        transition: border-color 160ms ease, background 160ms ease;
+      }
+
+      .analysis-step-card.active {
+        border-color: #b9c9f8;
+        background: #f7f9ff;
+      }
+
+      .analysis-step-card.complete {
+        border-color: #abd8cf;
+        background: #f4fbf9;
+      }
+
+      .analysis-step-card.processing {
+        border-color: #e6d3a7;
+        background: #fffaf0;
+      }
+
+      .analysis-step-card.error {
+        border-color: #e8c99a;
+        background: #fffaf0;
+      }
+
+      .analysis-step-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .analysis-step-number {
+        display: inline-grid;
+        width: 24px;
+        height: 24px;
+        place-items: center;
+        border-radius: 6px;
+        background: var(--blue-soft);
+        color: var(--blue);
+        font-family: var(--mono);
+        font-size: 10px;
+        font-weight: 750;
+      }
+
+      .analysis-step-card:nth-child(3) .analysis-step-number {
+        background: #e4f6f1;
+        color: var(--teal);
+      }
+
+      .analysis-step-state,
+      .feishu-ai-state {
+        color: var(--quiet);
+        font-size: 10px;
+        font-weight: 650;
+      }
+
+      .analysis-step-card strong {
+        display: block;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .analysis-step-card p {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      .analysis-flow-connector {
+        display: grid;
+        place-items: center;
+        color: var(--quiet);
+      }
+
+      .analysis-flow-connector svg {
+        width: 17px;
+        height: 17px;
+      }
+
       .operator-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1296,6 +1394,18 @@
         margin-top: 14px;
         padding-top: 13px;
         border-top: 1px solid var(--line);
+      }
+
+      .operator-action-copy {
+        min-width: 0;
+      }
+
+      .operator-action-copy small {
+        display: block;
+        margin-top: 5px;
+        color: var(--quiet);
+        font-size: 10px;
+        line-height: 1.45;
       }
 
       .operator-actions p {
@@ -1346,6 +1456,18 @@
         background: var(--surface-soft);
       }
 
+      .analysis-run-button {
+        min-width: 146px;
+        border-color: var(--teal);
+        background: var(--teal);
+        color: white;
+      }
+
+      .analysis-run-button:hover {
+        border-color: #087d6c;
+        background: #087d6c;
+      }
+
       .secondary-action svg {
         width: 15px;
         height: 15px;
@@ -1394,6 +1516,136 @@
 
       .feishu-sync-status[data-state="error"] strong {
         color: var(--amber);
+      }
+
+      .feishu-ai-panel {
+        margin-top: 16px;
+        padding: 18px;
+        border: 1px solid #b9dcd4;
+        border-radius: 10px;
+        background: #f5fbf9;
+      }
+
+      .feishu-ai-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .feishu-ai-title {
+        display: flex;
+        min-width: 0;
+        align-items: flex-start;
+        gap: 10px;
+      }
+
+      .feishu-ai-title h3 {
+        margin-top: 1px;
+        color: var(--text);
+        font-size: 20px;
+        font-weight: 720;
+      }
+
+      .feishu-ai-title p {
+        max-width: 560px;
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.55;
+      }
+
+      .feishu-ai-actions {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: flex-end;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .feishu-ai-state {
+        min-height: 17px;
+        color: var(--teal);
+        text-align: right;
+      }
+
+      .feishu-ai-state[data-state="processing"] {
+        color: var(--amber);
+      }
+
+      .feishu-ai-state[data-state="error"] {
+        color: var(--amber);
+      }
+
+      .feishu-ai-state strong {
+        color: inherit;
+        font-size: 11px;
+      }
+
+      .feishu-ai-result {
+        min-height: 112px;
+        margin-top: 15px;
+        padding: 15px 16px;
+        border: 1px solid #d5e9e4;
+        border-radius: 8px;
+        background: var(--surface-solid);
+      }
+
+      .feishu-ai-empty {
+        display: grid;
+        min-height: 80px;
+        place-items: center;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.65;
+        text-align: center;
+      }
+
+      .feishu-ai-conclusions {
+        display: grid;
+        gap: 11px;
+      }
+
+      .feishu-ai-conclusion {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        align-items: start;
+        gap: 10px;
+      }
+
+      .feishu-ai-conclusion-index {
+        display: inline-grid;
+        width: 26px;
+        height: 26px;
+        place-items: center;
+        border-radius: 7px;
+        background: #e4f6f1;
+        color: var(--teal);
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 750;
+      }
+
+      .feishu-ai-conclusion p {
+        margin: 1px 0 0;
+        color: var(--text);
+        font-size: 15px;
+        line-height: 1.75;
+      }
+
+      .feishu-ai-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 11px;
+        color: var(--quiet);
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      .feishu-ai-foot strong {
+        color: var(--teal);
       }
 
       .flow-marker {
@@ -3004,6 +3256,34 @@
           grid-template-columns: 1fr;
         }
 
+        .analysis-flow-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .analysis-flow-connector {
+          min-height: 18px;
+          transform: rotate(90deg);
+        }
+
+        .feishu-ai-head,
+        .feishu-ai-foot {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .feishu-ai-actions {
+          width: 100%;
+          align-items: flex-start;
+        }
+
+        .feishu-ai-state {
+          text-align: left;
+        }
+
+        .feishu-ai-conclusion p {
+          font-size: 14px;
+        }
+
         .strategy-preview-button {
           width: 100%;
           min-height: 40px;
@@ -3724,6 +4004,19 @@
           </div>
           <button class="close-button" id="closeOperator" aria-label="关闭运营视图"><i data-lucide="x"></i></button>
         </div>
+        <div class="analysis-flow-strip" aria-label="智能分析流程">
+          <article class="analysis-step-card active" id="operatorSimulationStep">
+            <div class="analysis-step-top"><span class="analysis-step-number">01</span><span class="analysis-step-state" id="operatorSimulationState">待开始</span></div>
+            <strong>分流仿真计算</strong>
+            <p>用拥堵、容量、等待与 ROI 约束计算跨站分流结果，不由大模型替代。</p>
+          </article>
+          <div class="analysis-flow-connector" aria-hidden="true"><i data-lucide="arrow-right"></i></div>
+          <article class="analysis-step-card" id="operatorFeishuStep">
+            <div class="analysis-step-top"><span class="analysis-step-number">02</span><span class="analysis-step-state" id="operatorFeishuState">等待仿真结果</span></div>
+            <strong>飞书 AI 运营解读</strong>
+            <p>读取仿真字段，用自然语言给出运营建议、风险提示与审批依据。</p>
+          </article>
+        </div>
         <div class="operator-grid">
           <div class="operator-metric"><div class="stat-label">未来 30 分钟峰值排队</div><strong id="operatorQueue">43<span style="font-size:13px;font-family:var(--sans);font-weight:500"> 人</span></strong><p id="operatorQueueNote">大兴南区 3 个站点出现集中到达</p></div>
           <div class="operator-metric"><div class="stat-label">当前优惠档位</div><strong id="operatorDiscount">¥6<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span></strong><p id="operatorDiscountNote">仅对高峰时段目标用户触发</p></div>
@@ -3757,7 +4050,7 @@
               <label for="targetStationSelect">承接站</label>
               <select id="targetStationSelect" aria-label="承接站"></select>
             </div>
-            <button class="strategy-preview-button" id="operatorSimulate"><i data-lucide="calculator"></i> 重新计算</button>
+            <button class="strategy-preview-button" id="operatorSimulate"><i data-lucide="calculator"></i> 试算这组方案</button>
           </div>
           <div class="strategy-comparison" aria-label="策略执行前后对比">
             <div class="comparison-metric snapshot" id="operatorBeforeCompare"><span>执行前</span><div class="snapshot-values"><strong id="beforeQueueValue">18 人</strong><strong id="beforeP90Value">P90 23.0m</strong></div></div>
@@ -3766,8 +4059,34 @@
             <div class="comparison-metric"><span>优惠投入回报</span><div class="comparison-values"><strong id="strategyRoiValue">1.5x</strong></div></div>
           </div>
         </div>
-        <div class="operator-actions"><p id="operatorAction"><strong>建议动作：</strong>先识别拥堵站，再在承接站容量和 ROI ≥ 1 的约束内，求分流量最大的优惠档位。</p><div class="operator-button-group"><button class="secondary-action subtle hidden" id="resetExecution"><i data-lucide="rotate-ccw"></i>重置</button><button class="secondary-action" id="approveButton"><i data-lucide="play"></i>运行分流仿真</button></div></div>
-        <div class="feishu-sync-panel" aria-label="飞书 AI 同步"><button class="secondary-action" id="feishuSyncButton" type="button"><i data-lucide="cloud-upload"></i>同步至飞书 AI</button><p class="feishu-sync-status" id="feishuSyncStatus" data-state="idle"><strong>可选执行链路</strong> · 将当前运营快照写入飞书多维表格，并读取 AI 策略结果。未配置时保留本地演示。</p></div>
+        <div class="operator-actions">
+          <div class="operator-action-copy">
+            <p id="operatorAction"><strong>建议动作：</strong>先识别拥堵站，再在承接站容量和 ROI ≥ 1 的约束内，求分流量最大的优惠档位。</p>
+            <small>点击“开始智能分析”后，系统会先完成严谨仿真，再自动请求飞书 AI 解读；两条结果彼此独立。</small>
+          </div>
+          <div class="operator-button-group"><button class="secondary-action subtle hidden" id="resetExecution"><i data-lucide="rotate-ccw"></i>重置分析</button><button class="secondary-action analysis-run-button" id="approveButton"><i data-lucide="sparkles"></i>开始智能分析</button></div>
+        </div>
+        <section class="feishu-ai-panel" id="feishuAiPanel" aria-label="飞书 AI 运营解读">
+          <div class="feishu-ai-head">
+            <div class="feishu-ai-title">
+              <span class="analysis-step-number">02</span>
+              <div>
+                <div class="eyebrow">AI operation interpretation</div>
+                <h3>飞书 AI 运营解读</h3>
+                <p>它不重新计算仿真指标，而是读取当前策略记录，把分流结果解释成运营人员可以执行和复核的建议。</p>
+              </div>
+            </div>
+            <div class="feishu-ai-actions">
+              <div class="feishu-ai-state" id="feishuSyncStatus" data-state="idle" role="status" aria-live="polite"><strong>等待仿真结果</strong></div>
+              <button class="secondary-action" id="feishuSyncButton" type="button"><i data-lucide="refresh-cw"></i>重新获取 AI 解读</button>
+            </div>
+          </div>
+          <div class="feishu-ai-result" id="feishuAiResult" aria-live="polite">
+            <div class="feishu-ai-empty" id="feishuAiEmpty">点击“开始智能分析”，先完成分流仿真，再查看 AI 对运营结果的自然语言解读。</div>
+            <div class="feishu-ai-conclusions" id="feishuAiConclusions" hidden></div>
+          </div>
+          <div class="feishu-ai-foot"><span id="feishuAiSource">数据来源将在分析完成后明确标注；当前不代表企业实时经营结论。</span><span class="source-badge">仿真结果 → AI 解读</span></div>
+        </section>
       </section>
 
       <section class="validation-panel" id="validationPanel" aria-label="策略验证">
