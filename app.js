@@ -4561,7 +4561,9 @@
     if (button) {
       button.disabled = false;
       button.style.opacity = "1";
-      button.style.color = "var(--teal)";
+      // The completed state keeps the teal CTA background; keep the label
+      // white so it does not disappear into the button color.
+      button.style.color = "white";
       button.innerHTML = '<i data-lucide="rotate-ccw"></i>重置分析';
     }
     // The main CTA becomes “重置分析” after completion; keep the legacy
