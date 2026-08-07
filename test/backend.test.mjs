@@ -50,6 +50,40 @@ test("plan parser uses strict AI JSON and returns locations without exposing sec
   assert.equal(JSON.stringify(result).includes("test-secret"), false);
 });
 
+test("plan parser fails over from the primary AI provider to the backup", async () => {
+  const calls = [];
+  const result = await parseTripIntent({
+    message: "从北京去南京，优先准时",
+    config: {
+      aiBaseUrl: "https://primary.example/v1",
+      aiApiKey: "primary-secret",
+      aiModel: "primary-model",
+      aiBackupBaseUrl: "https://backup.example/v1",
+      aiBackupApiKey: "backup-secret",
+      aiBackupModel: "backup-model"
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.startsWith("https://primary.example")) return new Response("upstream unavailable", { status: 503 });
+      if (url.startsWith("https://backup.example")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+          origin: "北京", destination: "南京", arrivalDeadline: null,
+          minArrivalSoc: null, energyType: "unknown", priority: "on_time", maxDetourKm: null,
+          services: [], clarificationNeeded: false, assistantReply: "已识别"
+        }) } }] }), { status: 200 });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }
+  });
+  assert.equal(result.aiUsed, true);
+  assert.equal(result.destination, "南京");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].options.headers.Authorization, "Bearer primary-secret");
+  assert.equal(calls[1].options.headers.Authorization, "Bearer backup-secret");
+  assert.equal(JSON.stringify(result).includes("primary-secret"), false);
+  assert.equal(JSON.stringify(result).includes("backup-secret"), false);
+});
+
 test("plan parser leaves current time and energy to the client controls", async () => {
   const result = await parseTripIntent({
     message: "18:30去大兴机场，电量22%，不能迟到",

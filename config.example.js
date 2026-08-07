@@ -7,6 +7,10 @@ window.FLOWTWIN_CONFIG = {
   aiBaseUrl: "https://your-ai-gateway.example.com/v1",
   aiApiKey: "YOUR_AI_API_KEY",
   aiModel: "YOUR_CHAT_MODEL_NAME",
+  // Optional fallback: used only when the primary AI request fails.
+  aiBackupBaseUrl: "https://your-backup-ai-gateway.example.com/v1",
+  aiBackupApiKey: "YOUR_BACKUP_AI_API_KEY",
+  aiBackupModel: "YOUR_BACKUP_CHAT_MODEL_NAME",
   // Optional STT: POST {sttBaseUrl}/audio/transcriptions
   sttApiKey: "YOUR_STT_API_KEY",
   sttBaseUrl: "https://your-stt-gateway.example.com/v1",

@@ -53,7 +53,7 @@ npm start
 
 ### 环境变量
 
-以下均为**占位示例**，请换成你自己的服务地址、Key 与模型名。AI 需兼容 OpenAI 风格的 `POST {AI_BASE_URL}/chat/completions`；语音转写需兼容 `POST {STT_BASE_URL}/audio/transcriptions`（multipart：`file` + `model`）。
+以下均为**占位示例**，请换成你自己的服务地址、Key 与模型名。主 AI 需兼容 OpenAI 风格的 `POST {AI_BASE_URL}/chat/completions`；备用 AI 使用同样的协议，只有主接口失败时才调用。语音转写需兼容 `POST {STT_BASE_URL}/audio/transcriptions`（multipart：`file` + `model`）。
 
 ```env
 # 高德
@@ -66,6 +66,11 @@ AMAP_WEB_SERVICE_KEY_BACKUP=your_backup_amap_web_service_key
 AI_BASE_URL=https://your-ai-gateway.example.com/v1
 AI_API_KEY=your_ai_api_key
 AI_MODEL=your_chat_model_name
+
+# 可选备用 AI：仅主接口失败时启用
+AI_BACKUP_BASE_URL=https://your-backup-ai-gateway.example.com/v1
+AI_BACKUP_API_KEY=your_backup_ai_api_key
+AI_BACKUP_MODEL=your_backup_chat_model_name
 
 # 可选：语音转写（任意兼容 /audio/transcriptions 的网关）
 # 也可用 SILICONFLOW_API_KEY / SILICONFLOW_BASE_URL / SILICONFLOW_STT_MODEL 作为别名
@@ -90,7 +95,7 @@ FEISHU_APPROVAL_FIELD=审批状态
 PORT=4182
 ```
 
-`config.local.js` 中对应字段为 `aiBaseUrl` / `aiApiKey` / `aiModel`、`sttApiKey` / `sttBaseUrl` / `sttModel`、`feishuAppId` / `feishuAppSecret` / `feishuAppToken` 等，含义相同，仍用你自己的值覆盖示例。
+`config.local.js` 中对应字段为 `aiBaseUrl` / `aiApiKey` / `aiModel`、可选的 `aiBackupBaseUrl` / `aiBackupApiKey` / `aiBackupModel`、`sttApiKey` / `sttBaseUrl` / `sttModel`、`feishuAppId` / `feishuAppSecret` / `feishuAppToken` 等，含义相同，仍用你自己的值覆盖示例。备用 AI 只有在主接口失败时才会请求，主接口成功时不会额外消耗备用额度；两套 Key 都只在服务端读取。
 
 高德 Web Service Key 按主用、备用顺序读取。只有配额超限、请求过频、临时 HTTP 错误或网络错误时才尝试备用 Key；参数错误、平台不匹配、域名/IP 白名单错误不会被自动轮换掩盖。浏览器只加载一套 JS Key，JS Key 和安全密钥需要在高德控制台绑定正式域名。
 
