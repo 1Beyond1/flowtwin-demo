@@ -3690,7 +3690,7 @@
         /* Keep the hit area stable while the composer changes shape. If the
            outer dock also shrinks from 560px to a circle, a pointer sitting
            near the edge can repeatedly enter/leave it during the transition. */
-        width: min(560px, calc(100vw - 48px));
+        width: min(520px, calc(100vw - 56px));
         transform: translateX(-50%);
         /* The dock is only a layout anchor. The composer itself is the hit
            target, so the transparent space below/around the circle cannot
@@ -3701,7 +3701,7 @@
 
       .ai-composer-status {
         width: max-content;
-        max-width: min(520px, calc(100vw - 60px));
+        max-width: min(480px, calc(100vw - 68px));
         min-height: 27px;
         margin: 0;
         padding: 5px 10px;
@@ -3723,15 +3723,15 @@
       .ai-composer {
         position: relative;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto 50px;
+        grid-template-columns: minmax(0, 1fr) auto 44px;
         align-items: center;
         justify-self: center;
         pointer-events: auto;
-        gap: 9px;
+        gap: 8px;
         width: 100%;
-        min-height: 62px;
+        min-height: 58px;
         margin: 0;
-        padding: 7px 8px 7px 13px;
+        padding: 6px 7px 6px 12px;
         border: 1px solid rgba(216, 220, 215, 0.96);
         border-radius: 999px;
         background: rgba(255, 255, 255, 0.95);
@@ -3751,8 +3751,8 @@
       }
 
       .ai-composer textarea {
-        min-height: 48px;
-        max-height: 96px;
+        min-height: 44px;
+        max-height: 88px;
         padding: 8px 4px;
         border: 0;
         border-radius: 20px;
@@ -3774,8 +3774,8 @@
 
       .ai-composer .ai-parse-button {
         position: relative;
-        width: 46px;
-        height: 46px;
+        width: 44px;
+        height: 44px;
         align-self: center;
         border: 0;
         border-radius: 50%;
@@ -3783,6 +3783,11 @@
         color: #ffffff;
         box-shadow: 0 5px 12px rgba(28, 33, 35, 0.18);
         transition: width 380ms cubic-bezier(0.22, 1, 0.36, 1), height 380ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease, transform 180ms ease, box-shadow 200ms ease;
+      }
+
+      .ai-composer .composer-submit-button {
+        width: 44px;
+        height: 44px;
       }
 
       .ai-composer .ai-parse-button:hover {
@@ -3935,7 +3940,7 @@
         top: calc(100% + 9px);
         right: auto;
         left: 50%;
-        width: min(520px, calc(100% - 28px));
+        width: min(480px, calc(100% - 28px));
         border-radius: 12px;
         font-size: 11px;
         display: block;
@@ -3985,6 +3990,11 @@
       }
 
       .app.has-plan .ai-composer:not(:hover):not(:focus-within) .ai-parse-button {
+        width: 50px;
+        height: 50px;
+      }
+
+      .app.has-plan .ai-composer:not(:hover):not(:focus-within) .composer-submit-button {
         width: 50px;
         height: 50px;
       }
@@ -4473,19 +4483,24 @@
         }
 
         .ai-composer {
-          min-height: 64px;
-          padding: 7px 8px 7px 13px;
+          min-height: 60px;
+          padding: 6px 7px 6px 12px;
         }
 
         .ai-composer textarea {
-          min-height: 50px;
-          max-height: 92px;
+          min-height: 46px;
+          max-height: 88px;
           font-size: 12px;
         }
 
         .ai-composer .ai-parse-button {
-          width: 46px;
-          height: 46px;
+          width: 44px;
+          height: 44px;
+        }
+
+        .ai-composer .composer-submit-button {
+          width: 44px;
+          height: 44px;
         }
 
         .ai-composer .ai-input-hint {
