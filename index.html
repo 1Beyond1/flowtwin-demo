@@ -67,6 +67,9 @@
         min-width: 320px;
         overflow: hidden;
         background: var(--bg);
+        /* Keep map credits at the actual map edge. The route-sheet state below
+           may temporarily lift them only when the visible sheet covers them. */
+        --map-credit-bottom: 12px;
       }
 
       #map {
@@ -96,7 +99,7 @@
       .map-attribution {
         position: absolute;
         right: 20px;
-        bottom: 210px;
+        bottom: var(--map-credit-bottom);
         z-index: 700;
         padding: 4px 7px;
         border: 1px solid rgba(255, 255, 255, 0.76);
@@ -105,6 +108,17 @@
         color: #596163;
         font-size: 10px;
         line-height: 1;
+      }
+
+      .amap-logo,
+      .amap-copyright {
+        bottom: var(--map-credit-bottom) !important;
+      }
+
+      /* The bottom route sheet may cover the legal credits. This is deliberately
+         state-scoped; the no-plan map must never inherit a raised watermark. */
+      .app.has-plan:has(#routeSheet:not([hidden]):not(.collapsed):not([style*="display: none"])) {
+        --map-credit-bottom: 210px;
       }
 
       .active-route-summary {
@@ -3032,11 +3046,6 @@
         width: 15px;
         height: 15px;
       }
-      .amap-logo,
-      .amap-copyright {
-        bottom: 232px !important;
-      }
-
       .amap-marker-content {
         white-space: nowrap;
       }
@@ -3222,18 +3231,8 @@
           min-height: 86px;
         }
 
-        .map-attribution {
-          right: 12px;
-          bottom: 286px;
-        }
-
         .active-route-summary {
           display: none;
-        }
-
-        .amap-logo,
-        .amap-copyright {
-          bottom: 286px !important;
         }
 
         .operator-panel {
@@ -3395,13 +3394,17 @@
       .composer-submit-button.is-loading .composer-arrow { opacity: 0; transform: translateY(4px) scale(0.7); }
 
       .composer-dot-loader {
+        position: absolute;
+        inset: 0;
         display: none;
         grid-template-columns: repeat(3, 5px);
         grid-template-rows: repeat(3, 5px);
         gap: 3px;
-        width: 21px;
-        height: 21px;
+        width: auto;
+        height: auto;
+        place-items: center;
         place-content: center;
+        pointer-events: none;
       }
 
       .composer-submit-button.is-loading .composer-dot-loader { display: grid; }
@@ -3441,7 +3444,6 @@
         transform: translateY(-1px);
       }
 
-      .voice-intent-button .voice-wave { display: flex; }
       .voice-intent-button.recording {
         border-color: #c8d6f6 !important;
         background: #f3f4f2 !important;
@@ -3765,7 +3767,7 @@
       }
 
       .voice-wave {
-        display: none;
+        display: flex;
         align-items: center;
         justify-content: center;
         gap: 2px;
@@ -3780,12 +3782,11 @@
         height: var(--wave-height, 16px);
         border-radius: 999px;
         background: currentColor;
-        transform: scaleY(0.42);
+        transform: scaleY(0.72);
         transform-origin: center;
-        opacity: 0.68;
-        animation: voice-wave-left-to-right 1.05s ease-in-out infinite;
-        animation-delay: var(--wave-delay, 0s);
-        will-change: transform, opacity;
+        opacity: 0.88;
+        animation: none;
+        will-change: auto;
       }
 
       .voice-wave > span:nth-child(1) { --wave-height: 10px; --wave-delay: 0s; }
@@ -3798,6 +3799,12 @@
 
       .ai-composer .ai-parse-button.recording .voice-wave {
         display: flex;
+      }
+
+      .ai-composer .ai-parse-button.recording .voice-wave > span {
+        animation: voice-wave-left-to-right 1.05s ease-in-out infinite;
+        animation-delay: var(--wave-delay, 0s);
+        will-change: transform, opacity;
       }
 
       @keyframes voice-wave-left-to-right {
@@ -4353,9 +4360,9 @@
         .insight-panel { top: 76px; max-height: calc(100dvh - 240px); }
         .route-sheet { bottom: 14px; max-height: 214px; overflow-y: auto; }
         .app.has-plan .ai-composer-dock { bottom: 238px; }
-        .map-attribution { bottom: 180px; }
-        .amap-logo,
-        .amap-copyright { bottom: 200px !important; }
+        .app.has-plan:has(#routeSheet:not([hidden]):not(.collapsed):not([style*="display: none"])) {
+          --map-credit-bottom: 176px;
+        }
       }
 
       @media (max-width: 1180px) and (min-width: 761px) {
@@ -4374,6 +4381,10 @@
         .app.has-plan .ai-composer-dock {
           bottom: min(390px, calc(100dvh - 210px));
           width: calc(100vw - 28px);
+        }
+
+        .app.has-plan:has(#routeSheet:not([hidden]):not(.collapsed):not([style*="display: none"])) {
+          --map-credit-bottom: 294px;
         }
 
         .ai-composer-status {
