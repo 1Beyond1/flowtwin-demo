@@ -121,4 +121,3 @@ test("an identical optimum may be reused and is labelled with all winning object
   assert.deepEqual(result.plansByObjective.fastest.badges, ["fastest", "reliable", "cheapest"]);
   assert.equal(result.plans.length, 3);
 });
-
