@@ -714,7 +714,9 @@
         right: 24px;
         width: 302px;
         max-height: calc(100vh - 300px);
+        min-width: 0;
         overflow-y: auto;
+        overflow-x: hidden;
         overscroll-behavior: contain;
         padding: 18px;
       }
@@ -728,19 +730,39 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: 14px;
+        min-width: 0;
         margin-bottom: 14px;
+      }
+
+      .insight-top > div:first-child {
+        min-width: 0;
+        flex: 1 1 auto;
       }
 
       .insight-title {
         font-size: 15px;
         font-weight: 650;
         line-height: 1.35;
+        overflow-wrap: anywhere;
       }
 
       .insight-subtitle {
         margin-top: 4px;
         color: var(--muted);
         font-size: 11px;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+      }
+
+      .insight-subtitle .source-badge {
+        display: inline-block;
+        max-width: 100%;
+        height: auto;
+        padding: 2px 6px;
+        line-height: 1.3;
+        white-space: normal;
+        vertical-align: middle;
+        overflow-wrap: anywhere;
       }
 
       .close-button {
@@ -2991,50 +3013,6 @@
         width: 15px;
         height: 15px;
       }
-
-      .update-notice {
-        width: min(520px, calc(100vw - 32px));
-        max-height: calc(100vh - 48px);
-        overflow-y: auto;
-        padding: 22px;
-        border: 1px solid rgba(215, 221, 218, 0.96);
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.98);
-        box-shadow: 0 20px 70px rgba(34, 44, 48, 0.2);
-      }
-      .update-notice-mark {
-        display: inline-flex; align-items: center; justify-content: center;
-        width: 30px; height: 30px; margin-bottom: 12px; border-radius: 8px;
-        background: #eef4f8; color: #355a78;
-      }
-      .update-notice-mark svg { width: 17px; height: 17px; }
-      .update-notice h2 { font-size: 19px; font-weight: 700; }
-      .update-notice-sub { margin-top: 4px; color: var(--muted); font-size: 11px; }
-      .update-list { margin: 14px 0 0; padding: 0; list-style: none; }
-      .update-item {
-        display: flex; gap: 10px; align-items: flex-start;
-        padding: 9px 0; border-bottom: 1px solid #eef2f0; font-size: 12px; line-height: 1.55;
-      }
-      .update-item:last-child { border-bottom: 0; }
-      .update-item i { width: 15px; height: 15px; margin-top: 1px; color: var(--teal); flex: 0 0 auto; }
-      .update-item b { color: var(--ink); font-weight: 650; }
-      .update-item span { color: var(--quiet); }
-      .update-foot {
-        display: flex; align-items: flex-start; gap: 8px;
-        margin-top: 14px; padding: 10px 11px; border: 1px solid #dce9e4; border-radius: 7px;
-        background: #f5faf8; color: #176e60; font-size: 11px; line-height: 1.5;
-      }
-      .update-foot svg { width: 13px; height: 13px; margin-top: 1px; flex: 0 0 auto; }
-      .update-notice-action { margin-top: 16px; text-align: right; }
-      .update-notice-action button {
-        display: inline-flex; align-items: center; gap: 7px;
-        min-height: 36px; padding: 0 16px; border: 0; border-radius: 6px;
-        background: var(--blue); color: white; cursor: pointer;
-        font: inherit; font-size: 12px; font-weight: 650;
-      }
-      .update-notice-action button:hover { background: #3c6fe5; }
-      .update-notice-action svg { width: 15px; height: 15px; }
-
       .amap-logo,
       .amap-copyright {
         bottom: 232px !important;
@@ -3331,6 +3309,264 @@
         }
       }
 
+      /* Settings, display modes, and the single composer action. */
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        min-width: 0;
+        pointer-events: auto;
+      }
+
+      .settings-trigger {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-width: 48px;
+        min-height: 48px;
+        padding: 0 12px;
+        border: 1px solid rgba(216, 220, 215, 0.9);
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.93);
+        box-shadow: 0 7px 22px rgba(22, 29, 30, 0.09);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .settings-trigger:hover,
+      .settings-trigger:focus-visible {
+        border-color: #b9caf5;
+        background: #f7f9ff;
+        color: var(--text);
+        outline: 0;
+      }
+
+      .settings-trigger svg { width: 16px; height: 16px; }
+
+      .composer-submit-button {
+        position: relative;
+        display: grid;
+        width: 46px;
+        height: 46px;
+        align-self: center;
+        place-items: center;
+        border: 1px solid #d8ddda;
+        border-radius: 50%;
+        background: #ffffff;
+        color: #111617;
+        box-shadow: 0 5px 12px rgba(28, 33, 35, 0.14);
+        transition: width 240ms ease, height 240ms ease, background 160ms ease, color 160ms ease, transform 180ms ease, box-shadow 200ms ease;
+      }
+
+      .composer-submit-button:hover:not(:disabled),
+      .composer-submit-button:focus-visible {
+        border-color: #b8c0bd;
+        background: #f7f8f6;
+        box-shadow: 0 7px 16px rgba(28, 33, 35, 0.2), 0 0 0 3px rgba(74, 125, 240, 0.1);
+        outline: 0;
+        transform: translateY(-1px);
+      }
+
+      .composer-submit-button:active:not(:disabled) { transform: translateY(1px) scale(0.98); }
+      .composer-submit-button:disabled { cursor: wait; }
+      .composer-submit-button .composer-arrow { width: 21px; height: 21px; transition: opacity 180ms ease, transform 240ms ease; }
+      .composer-submit-button.is-loading .composer-arrow { opacity: 0; transform: translateY(4px) scale(0.7); }
+
+      .composer-dot-loader {
+        display: none;
+        grid-template-columns: repeat(3, 5px);
+        grid-template-rows: repeat(3, 5px);
+        gap: 3px;
+        width: 21px;
+        height: 21px;
+        place-content: center;
+      }
+
+      .composer-submit-button.is-loading .composer-dot-loader { display: grid; }
+      .composer-dot {
+        display: block;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #d8ddda;
+      }
+
+      @keyframes composer-dot-emphasis {
+        0%, 4% { background: #111617; box-shadow: 0 0 0 1px rgba(17, 22, 23, 0.04); transform: scale(1.26); }
+        15% { background: #111617; transform: scale(1.08); }
+        20%, 100% { background: #d8ddda; box-shadow: none; transform: scale(0.9); }
+      }
+
+      .composer-submit-button.is-loading .composer-dot:nth-child(3) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: 0s; }
+      .composer-submit-button.is-loading .composer-dot:nth-child(1) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: -0.2s; }
+      .composer-submit-button.is-loading .composer-dot:nth-child(7) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: -0.4s; }
+      .composer-submit-button.is-loading .composer-dot:nth-child(9) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: -0.6s; }
+      .composer-submit-button.is-loading .composer-dot:nth-child(6) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: -0.8s; }
+      .composer-submit-button.is-loading .composer-dot:nth-child(5) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: -1s; }
+
+      .voice-intent-button {
+        background: var(--blue) !important;
+        border-color: var(--blue) !important;
+        color: #ffffff !important;
+        box-shadow: 0 5px 12px rgba(74, 125, 240, 0.24) !important;
+      }
+
+      .voice-intent-button:hover:not(:disabled),
+      .voice-intent-button:focus-visible {
+        background: #3c6fe5 !important;
+        box-shadow: 0 7px 16px rgba(74, 125, 240, 0.3) !important;
+        outline: 0;
+        transform: translateY(-1px);
+      }
+
+      .voice-intent-button .voice-wave { display: flex; }
+      .voice-intent-button.recording {
+        border-color: #c8d6f6 !important;
+        background: #f3f4f2 !important;
+        color: var(--blue) !important;
+        box-shadow: 0 0 0 4px rgba(74, 125, 240, 0.1), 0 8px 20px rgba(28, 33, 35, 0.16) !important;
+      }
+
+      .app.has-plan .ai-composer:not(:hover):not(:focus-within) .voice-intent-button { display: none; }
+      .app.has-plan .ai-composer:not(:hover):not(:focus-within) .composer-submit-button { width: 50px; height: 50px; }
+
+      .settings-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1500;
+        display: flex;
+        justify-content: flex-end;
+        background: rgba(22, 29, 30, 0.28);
+        backdrop-filter: blur(3px);
+      }
+
+      .settings-panel {
+        width: min(440px, 100vw);
+        height: 100%;
+        overflow-y: auto;
+        padding: 26px 24px 32px;
+        border-left: 1px solid rgba(216, 220, 215, 0.94);
+        background: var(--surface-solid);
+        box-shadow: -18px 0 48px rgba(22, 29, 30, 0.16);
+        outline: 0;
+        animation: settings-panel-in 220ms ease-out;
+      }
+
+      @keyframes settings-panel-in {
+        from { opacity: 0; transform: translateX(24px); }
+        to { opacity: 1; transform: translateX(0); }
+      }
+
+      .settings-head,
+      .settings-section-head,
+      .version-check-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .settings-head { margin-bottom: 28px; }
+      .settings-head h2 { font-size: 24px; font-weight: 700; }
+      .settings-section { padding: 20px 0; border-top: 1px solid var(--line); }
+      .settings-section:first-of-type { border-top: 0; }
+      .settings-section-head { align-items: baseline; margin-bottom: 12px; }
+      .settings-section-head h3 { margin: 0; font-size: 14px; font-weight: 700; }
+      .settings-section-head > span { color: var(--quiet); font-size: 10px; text-align: right; }
+
+      .display-mode-switch {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--surface-soft);
+      }
+
+      .display-mode-option {
+        display: grid;
+        gap: 4px;
+        min-width: 0;
+        min-height: 74px;
+        padding: 11px 10px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--muted);
+        text-align: left;
+      }
+
+      .display-mode-option strong { color: inherit; font-size: 12px; }
+      .display-mode-option small { color: inherit; font-size: 9px; line-height: 1.4; }
+      .display-mode-option.active { border-color: #b9caf5; background: #ffffff; color: var(--text); box-shadow: 0 2px 8px rgba(22, 29, 30, 0.08); }
+      .display-mode-option:hover:not(.active), .display-mode-option:focus-visible { border-color: #c9d5f3; color: var(--text); outline: 0; }
+
+      .version-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 7px;
+        margin: 0 0 14px;
+      }
+
+      .version-grid > div { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
+      .version-grid dt { color: var(--quiet); font-size: 9px; }
+      .version-grid dd { overflow-wrap: anywhere; margin: 5px 0 0; color: var(--text); font-family: var(--mono); font-size: 12px; font-weight: 650; }
+      .version-check-row { align-items: center; }
+      .settings-action { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--text); font-size: 11px; font-weight: 650; }
+      .settings-action:hover:not(:disabled), .settings-action:focus-visible { border-color: #b9caf5; background: #f7f9ff; outline: 0; }
+      .settings-action:disabled { cursor: wait; opacity: 0.58; }
+      .settings-action svg, .version-update-link svg { width: 14px; height: 14px; }
+      .version-check-status { color: var(--quiet); font-size: 10px; }
+      .version-check-status[data-state="latest"] { color: var(--teal); }
+      .version-check-status[data-state="update"] { color: var(--blue); font-weight: 700; }
+      .version-check-status[data-state="unavailable"] { color: var(--amber); }
+      .version-update-link { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; color: #315bb8; font-size: 10px; font-weight: 650; text-decoration: none; }
+      .version-update-link:hover { text-decoration: underline; }
+      .settings-boundary p { color: var(--muted); font-size: 11px; line-height: 1.6; }
+      .settings-boundary-note { margin-top: 9px; color: var(--quiet) !important; font-size: 10px !important; }
+
+      .insight-panel { box-sizing: border-box; width: min(380px, calc(100vw - 48px)); max-width: calc(100vw - 48px); }
+      .insight-panel > *, .insight-panel .forecast-card, .insight-panel .arrival-loop { min-width: 0; max-width: 100%; }
+      .insight-panel .forecast-head, .insight-panel .arrival-head, .insight-panel .forecast-source, .insight-panel .arrival-foot { min-width: 0; }
+      .insight-panel .forecast-head > *, .insight-panel .arrival-head > *, .insight-panel .forecast-source > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+      .insight-panel .forecast-status, .insight-panel .concept-badge { flex: 0 1 auto; white-space: normal; text-align: right; }
+      .insight-panel .forecast-chart { max-width: 100%; }
+      .station-stat { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .station-stat .stat-block { min-width: 0; }
+      .station-stat .stat-value { overflow-wrap: anywhere; font-size: 16px; }
+
+      body[data-display-mode="user"] [data-reviewer-only] { display: none !important; }
+      body[data-display-mode="user"] .mode-switch button[data-mode="operator"],
+      body[data-display-mode="user"] .mode-switch button[data-mode="validation"] { display: none; }
+      body[data-display-mode="user"] .source-badge { display: none !important; }
+      body[data-display-mode="user"] .ai-composer-status .ai-runtime-main { color: #16725f; }
+
+      @media (max-width: 1180px) and (min-width: 761px) {
+        .insight-panel { width: min(350px, calc(100vw - 48px)); max-width: calc(100vw - 48px); }
+      }
+
+      @media (max-width: 760px) {
+        .topbar-actions { gap: 5px; max-width: calc(100vw - 96px); }
+        .settings-trigger { min-width: 42px; min-height: 42px; padding: 0 10px; }
+        .settings-trigger span { display: none; }
+        .settings-panel { width: 100vw; padding: 20px 18px 28px; }
+        .display-mode-switch, .version-grid { grid-template-columns: 1fr; }
+        .display-mode-option { min-height: 58px; }
+        .station-stat { grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
+        .station-stat .stat-block { padding: 8px 7px; }
+        .station-stat .stat-label { font-size: 9px; }
+        .station-stat .stat-value { font-size: 14px; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .settings-panel { animation: none; }
+        .composer-submit-button.is-loading .composer-dot { animation: none !important; transform: scale(0.9); }
+        .composer-submit-button.is-loading .composer-dot:nth-child(3) { background: #111617; transform: scale(1.15); }
+      }
       @media (prefers-reduced-motion: reduce) {
         *,
         *::before,
@@ -3368,21 +3604,317 @@
         height: 15px;
       }
 
-      .ai-request::after {
+      /* The composer starts as a compact lower-screen capsule. After a plan
+         exists it docks above the route sheet as a circle and expands only on
+         hover/focus, keeping the map and three route cards visible. */
+      .ai-composer-dock {
         position: absolute;
-        top: 13px;
-        right: 50px;
-        width: 15px;
-        height: 15px;
-        border: 1px solid #aeb8c7;
-        border-radius: 50%;
-        color: #6c7b91;
-        content: "?";
-        font-size: 10px;
-        font-weight: 700;
-        line-height: 13px;
-        text-align: center;
+        z-index: 840;
+        bottom: clamp(88px, 12vh, 140px);
+        left: 50%;
+        display: grid;
+        justify-items: center;
+        gap: 8px;
+        /* Keep the hit area stable while the composer changes shape. If the
+           outer dock also shrinks from 560px to a circle, a pointer sitting
+           near the edge can repeatedly enter/leave it during the transition. */
+        width: min(560px, calc(100vw - 48px));
+        transform: translateX(-50%);
+        /* The dock is only a layout anchor. The composer itself is the hit
+           target, so the transparent space below/around the circle cannot
+           trigger an expansion. */
         pointer-events: none;
+        transition: bottom 420ms cubic-bezier(0.22, 1, 0.36, 1), transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      .ai-composer-status {
+        width: max-content;
+        max-width: min(520px, calc(100vw - 60px));
+        min-height: 27px;
+        margin: 0;
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: rgba(247, 252, 250, 0.94);
+        box-shadow: 0 5px 14px rgba(22, 29, 30, 0.08);
+        font-size: 10px;
+        backdrop-filter: blur(12px);
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0) scale(1);
+        transition: opacity 220ms ease, transform 420ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0s;
+      }
+
+      .ai-composer-status .ai-runtime-meta {
+        max-width: 270px;
+      }
+
+      .ai-composer {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto 50px;
+        align-items: center;
+        justify-self: center;
+        pointer-events: auto;
+        gap: 9px;
+        width: 100%;
+        min-height: 62px;
+        margin: 0;
+        padding: 7px 8px 7px 13px;
+        border: 1px solid rgba(216, 220, 215, 0.96);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.95);
+        box-shadow: 0 12px 30px rgba(22, 29, 30, 0.14), 0 2px 8px rgba(22, 29, 30, 0.06);
+        backdrop-filter: blur(14px);
+        transition: width 430ms cubic-bezier(0.22, 1, 0.36, 1), min-height 430ms cubic-bezier(0.22, 1, 0.36, 1), padding 430ms cubic-bezier(0.22, 1, 0.36, 1), border-radius 430ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, box-shadow 240ms ease;
+      }
+
+      .ai-composer::after {
+        display: none;
+      }
+
+      .ai-composer:focus-within,
+      .ai-composer:hover {
+        border-color: rgba(74, 125, 240, 0.55);
+        box-shadow: 0 14px 32px rgba(22, 29, 30, 0.16), 0 0 0 3px rgba(74, 125, 240, 0.1);
+      }
+
+      .ai-composer textarea {
+        min-height: 48px;
+        max-height: 96px;
+        padding: 8px 4px;
+        border: 0;
+        border-radius: 20px;
+        background: transparent;
+        font-size: 13px;
+        line-height: 1.45;
+        transition: width 380ms cubic-bezier(0.22, 1, 0.36, 1), min-width 380ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, padding 380ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      .ai-composer textarea:focus {
+        border: 0;
+        outline: 0;
+        background: transparent;
+      }
+
+      .ai-composer textarea::placeholder {
+        color: var(--quiet);
+      }
+
+      .ai-composer .ai-parse-button {
+        position: relative;
+        width: 46px;
+        height: 46px;
+        align-self: center;
+        border: 0;
+        border-radius: 50%;
+        background: var(--text);
+        color: #ffffff;
+        box-shadow: 0 5px 12px rgba(28, 33, 35, 0.18);
+        transition: width 380ms cubic-bezier(0.22, 1, 0.36, 1), height 380ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease, transform 180ms ease, box-shadow 200ms ease;
+      }
+
+      .ai-composer .ai-parse-button:hover {
+        background: #313a3d;
+        box-shadow: 0 7px 16px rgba(28, 33, 35, 0.22);
+        transform: translateY(-1px);
+      }
+
+      .ai-composer .ai-parse-button:active {
+        transform: translateY(1px) scale(0.98);
+      }
+
+      .ai-composer .ai-parse-button.recording {
+        border: 1px solid #d8ddda;
+        background: #f3f4f2;
+        color: #283033;
+        box-shadow: 0 0 0 4px rgba(77, 126, 240, 0.10), 0 8px 20px rgba(28, 33, 35, 0.16);
+      }
+
+      .ai-composer .ai-parse-button.recording:hover {
+        background: #eceeeb;
+        box-shadow: 0 0 0 5px rgba(77, 126, 240, 0.12), 0 9px 22px rgba(28, 33, 35, 0.18);
+      }
+
+      .ai-composer .ai-parse-button.recording::before {
+        position: absolute;
+        inset: -5px;
+        border: 1px solid rgba(77, 126, 240, 0.28);
+        border-radius: inherit;
+        content: "";
+        pointer-events: none;
+        animation: voice-recording-pulse 1.65s ease-out infinite;
+      }
+
+      .voice-wave {
+        display: none;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        width: 30px;
+        height: 26px;
+        color: currentColor;
+      }
+
+      .voice-wave > span {
+        display: block;
+        flex: 0 0 2.5px;
+        height: var(--wave-height, 16px);
+        border-radius: 999px;
+        background: currentColor;
+        transform: scaleY(0.42);
+        transform-origin: center;
+        opacity: 0.68;
+        animation: voice-wave-left-to-right 1.05s ease-in-out infinite;
+        animation-delay: var(--wave-delay, 0s);
+        will-change: transform, opacity;
+      }
+
+      .voice-wave > span:nth-child(1) { --wave-height: 10px; --wave-delay: 0s; }
+      .voice-wave > span:nth-child(2) { --wave-height: 16px; --wave-delay: 0.08s; }
+      .voice-wave > span:nth-child(3) { --wave-height: 21px; --wave-delay: 0.16s; }
+      .voice-wave > span:nth-child(4) { --wave-height: 24px; --wave-delay: 0.24s; }
+      .voice-wave > span:nth-child(5) { --wave-height: 19px; --wave-delay: 0.32s; }
+      .voice-wave > span:nth-child(6) { --wave-height: 14px; --wave-delay: 0.40s; }
+      .voice-wave > span:nth-child(7) { --wave-height: 9px; --wave-delay: 0.48s; }
+
+      .ai-composer .ai-parse-button.recording .voice-wave {
+        display: flex;
+      }
+
+      @keyframes voice-wave-left-to-right {
+        0%, 100% {
+          transform: scaleY(0.42);
+          opacity: 0.62;
+        }
+        22% {
+          transform: scaleY(0.68);
+          opacity: 0.82;
+        }
+        44% {
+          transform: scaleY(1);
+          opacity: 1;
+        }
+        64% {
+          transform: scaleY(0.58);
+          opacity: 0.76;
+        }
+        82% {
+          transform: scaleY(0.82);
+          opacity: 0.92;
+        }
+      }
+
+      @keyframes voice-recording-pulse {
+        0% {
+          transform: scale(0.94);
+          opacity: 0.72;
+        }
+        68%, 100% {
+          transform: scale(1.08);
+          opacity: 0;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .voice-wave > span {
+          animation: none;
+          transform: scaleY(0.72);
+          opacity: 0.88;
+        }
+
+        .ai-composer .ai-parse-button.recording::before {
+          animation: none;
+          opacity: 0.72;
+        }
+      }
+
+      .ai-composer .ai-input-hint {
+        top: calc(100% + 9px);
+        right: auto;
+        left: 50%;
+        width: min(520px, calc(100% - 28px));
+        border-radius: 12px;
+        font-size: 11px;
+        display: block;
+        opacity: 0;
+        visibility: hidden;
+        transform: translate(-50%, -7px);
+        transition: opacity 220ms ease, transform 420ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 420ms;
+      }
+
+      .ai-composer:hover .ai-input-hint,
+      .ai-composer:focus-within .ai-input-hint {
+        opacity: 1;
+        visibility: visible;
+        transform: translate(-50%, 0);
+        pointer-events: auto;
+        transition-delay: 430ms;
+      }
+
+      .app.has-plan .ai-composer-dock {
+        bottom: clamp(238px, 27vh, 290px);
+      }
+
+      /* Once the route drawer is tucked away, return the composer to the
+         lower map area instead of leaving it floating in the middle of the
+         viewport. The same bottom transition makes the two panels feel like
+         one coordinated interaction; expanding the drawer moves it back up. */
+      .app.has-plan:has(.route-sheet.collapsed) .ai-composer-dock {
+        bottom: clamp(88px, 12vh, 140px);
+      }
+
+      .app.has-plan .ai-composer:not(:hover):not(:focus-within) {
+        grid-template-columns: 1fr;
+        grid-template-rows: 50px;
+        row-gap: 0;
+        width: 58px;
+        height: 58px;
+        min-height: 58px;
+        max-height: 58px;
+        padding: 4px;
+        border-radius: 50%;
+        border-color: rgba(220, 226, 224, 0.96);
+        box-shadow: 0 9px 22px rgba(22, 29, 30, 0.17), 0 0 0 3px rgba(255, 255, 255, 0.58);
+      }
+
+      .app.has-plan .ai-composer:not(:hover):not(:focus-within) textarea {
+        display: none;
+      }
+
+      .app.has-plan .ai-composer:not(:hover):not(:focus-within) .ai-parse-button {
+        width: 50px;
+        height: 50px;
+      }
+
+      .app.has-plan .ai-composer:not(:hover):not(:focus-within) .ai-input-hint {
+        display: none;
+        opacity: 0;
+        overflow: hidden;
+        pointer-events: none;
+      }
+
+      /* The status chip and the example hint are secondary information. They
+         appear only after the capsule has completed its expansion, instead of
+         jumping into view at the same time as the input. */
+      .app.has-plan .ai-composer-dock:not(:has(.ai-composer:hover)):not(:focus-within) .ai-composer-status {
+        opacity: 0;
+        visibility: hidden;
+        transform: translateY(8px) scale(0.96);
+        pointer-events: none;
+        transition-delay: 0ms;
+      }
+
+      .app.has-plan .ai-composer-dock:has(.ai-composer:hover) .ai-composer-status,
+      .app.has-plan .ai-composer-dock:focus-within .ai-composer-status {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0) scale(1);
+        transition-delay: 430ms;
+      }
+
+      .app.has-plan .ai-composer-dock:has(.ai-composer:hover) .ai-input-hint,
+      .app.has-plan .ai-composer-dock:focus-within .ai-input-hint {
+        transition-delay: 500ms;
       }
 
       #serviceFlow.attention,
@@ -3682,14 +4214,17 @@
       .service-recommendations {
         display: grid;
         gap: 6px;
+        width: 100%;
+        min-width: 0;
       }
 
       .service-card {
         display: grid;
-        grid-template-columns: 26px 1fr auto;
+        grid-template-columns: 26px minmax(0, 1fr) auto;
         gap: 8px;
         align-items: center;
         width: 100%;
+        min-width: 0;
         padding: 8px;
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -3722,11 +4257,14 @@
       .service-card strong,
       .service-card small {
         display: block;
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
 
       .service-card strong { font-size: 10px; }
       .service-card small { margin-top: 2px; color: var(--muted); font-size: 8px; line-height: 1.35; }
-      .service-card > span:last-child { color: var(--teal); font-size: 8px; font-weight: 700; white-space: nowrap; }
+      .service-card > span:nth-child(2) { min-width: 0; }
+      .service-card > span:nth-child(3):last-child { color: var(--teal); font-size: 8px; font-weight: 700; white-space: nowrap; }
 
       .station-flow {
         margin-top: 14px;
@@ -3795,6 +4333,7 @@
         .trip-panel,
         .insight-panel { top: 76px; max-height: calc(100dvh - 240px); }
         .route-sheet { bottom: 14px; max-height: 214px; overflow-y: auto; }
+        .app.has-plan .ai-composer-dock { bottom: 238px; }
         .map-attribution { bottom: 180px; }
         .amap-logo,
         .amap-copyright { bottom: 200px !important; }
@@ -3802,12 +4341,55 @@
 
       @media (max-width: 1180px) and (min-width: 761px) {
         .trip-panel { width: min(340px, calc(50vw - 34px)); }
-        .insight-panel { width: min(286px, calc(42vw - 22px)); }
+        .insight-panel { width: min(302px, calc(100vw - 48px)); }
         .active-route-summary { max-width: 240px; }
         .station-flow-head { align-items: flex-start; flex-direction: column; }
       }
 
       @media (max-width: 760px) {
+        .ai-composer-dock {
+          bottom: 84px;
+          width: calc(100vw - 28px);
+        }
+
+        .app.has-plan .ai-composer-dock {
+          bottom: min(390px, calc(100dvh - 210px));
+          width: calc(100vw - 28px);
+        }
+
+        .ai-composer-status {
+          max-width: calc(100vw - 48px);
+        }
+
+        .ai-composer-status .ai-runtime-meta {
+          max-width: 150px;
+        }
+
+        .ai-composer {
+          min-height: 64px;
+          padding: 7px 8px 7px 13px;
+        }
+
+        .ai-composer textarea {
+          min-height: 50px;
+          max-height: 92px;
+          font-size: 12px;
+        }
+
+        .ai-composer .ai-parse-button {
+          width: 46px;
+          height: 46px;
+        }
+
+        .ai-composer .ai-input-hint {
+          display: none !important;
+        }
+
+        .ai-composer .ai-input-hint {
+          right: 12px;
+          left: 12px;
+        }
+
         .trip-panel,
         .insight-panel,
         .route-sheet { max-height: calc(100dvh - 94px); }
@@ -3835,13 +4417,37 @@
       }
     </style>
   </head>
-  <body>
-    <div class="app" id="app">
+  <body data-display-mode="reviewer">
+    <div class="app" id="app" data-display-mode="reviewer">
       <div id="map" aria-label="全国路线地图"></div>
       <div class="map-wash"></div>
       <div class="map-status" id="mapStatus"><i data-lucide="loader-circle"></i><span>正在连接高德地图与路线服务…</span></div>
-      <div class="map-attribution" id="mapAttribution">地图底图 · 真实路线 / 演示状态</div>
+      <div class="map-attribution" id="mapAttribution" data-reviewer-only>地图底图 · 真实路线 / 演示状态</div>
       <div class="active-route-summary" id="activeRouteSummary" aria-live="polite" hidden><span>最可靠</span><strong>途经站点计算中</strong><small>—</small></div>
+
+      <div class="ai-composer-dock" id="aiComposerDock" aria-label="AI 出行输入与状态">
+        <div class="ai-runtime-status ai-composer-status" id="aiStatus" data-status="idle" role="status" aria-live="polite">
+          <span class="ai-runtime-main" id="aiStatusText">AI 大模型已接入</span>
+          <span class="ai-runtime-meta" id="aiModelLabel" data-reviewer-only>等待出行需求</span>
+        </div>
+        <div class="ai-request ai-composer" id="aiComposer" aria-label="自然语言出行输入">
+          <textarea id="intentInput" rows="1" aria-label="用自然语言描述出行要求" aria-describedby="intentInputHint" placeholder="告诉我这次出行怎么安排…">从能链北京总部前往上海东方明珠广播电视塔，优先准时</textarea>
+          <button type="button" class="composer-submit-button" id="composerSubmitButton" aria-label="提交新行程规划" title="开始规划">
+            <i class="composer-arrow" data-lucide="arrow-up"></i>
+            <span class="composer-dot-loader" aria-hidden="true">
+              <span class="composer-dot" data-dot-position="top-left" data-sequence="11"></span><span class="composer-dot" data-dot-position="top-center"></span><span class="composer-dot" data-dot-position="top-right" data-sequence="33"></span>
+              <span class="composer-dot" data-dot-position="middle-left"></span><span class="composer-dot" data-dot-position="center" data-sequence="22"></span><span class="composer-dot" data-dot-position="middle-right" data-sequence="32"></span>
+              <span class="composer-dot" data-dot-position="bottom-left" data-sequence="13"></span><span class="composer-dot" data-dot-position="bottom-center"></span><span class="composer-dot" data-dot-position="bottom-right" data-sequence="33"></span>
+            </span>
+          </button>
+          <button type="button" class="ai-parse-button voice-intent-button" id="voiceIntentButton" aria-label="开始语音输入" aria-pressed="false" title="语音输入">
+            <span class="voice-wave" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+            </span>
+          </button>
+          <div class="ai-input-hint" id="intentInputHint" role="tooltip"><strong>可直接体验或改写：</strong>去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时。</div>
+        </div>
+      </div>
 
       <header class="topbar">
         <div class="brand" aria-label="FlowTwin 能流智枢">
@@ -3849,10 +4455,11 @@
           <span class="brand-name">FLOWTWIN</span>
           <span class="brand-sub">能流智枢</span>
         </div>
+        <div class="topbar-actions">
         <div class="status-rail" aria-label="车辆状态">
           <div class="status-item status-editable"><i data-lucide="clock-3"></i><label for="departureTimeInput">当前时间</label><span class="status-editor"><input id="departureTimeInput" type="time" aria-label="当前出发时间" /></span></div>
           <div class="status-item status-editable"><i data-lucide="battery-medium" id="vehicleEnergyIcon"></i><label id="vehicleEnergyLabel" for="topEnergyPercentInput">当前电量</label><span class="status-editor"><input id="topEnergyPercentInput" type="number" min="5" max="100" step="1" value="22" inputmode="numeric" aria-label="当前电量百分比" /><b>%</b></span><span class="status-caption" id="vehicleEnergyRange">预计可行驶 96 km</span></div>
-          <div class="status-item vehicle-identity" aria-label="车牌到站识别与模拟支付">
+          <div class="status-item vehicle-identity" aria-label="车牌到站识别与模拟支付" data-reviewer-only>
             <i data-lucide="scan-line"></i><label>车牌</label><strong id="vehiclePlate">京A·FT2026</strong>
             <button id="arrivalPaymentButton" class="arrival-payment-button" type="button" disabled title="到达补能站后，模拟车牌识别与授权扣款"><i data-lucide="scan-line"></i><span id="arrivalPaymentText">等待到站</span></button>
           </div>
@@ -3862,6 +4469,10 @@
             <button data-mode="operator" role="tab" aria-selected="false" disabled title="完成一次 AI 规划后可用"><i data-lucide="activity"></i>运营</button>
             <button data-mode="validation" role="tab" aria-selected="false" disabled title="完成一次 AI 规划后可用"><i data-lucide="bar-chart-3"></i>验证</button>
           </div>
+        </div>
+          <button class="settings-trigger" id="settingsButton" type="button" aria-label="打开设置" aria-controls="settingsBackdrop" aria-expanded="false" title="设置">
+            <i data-lucide="settings"></i><span>设置</span>
+          </button>
         </div>
       </header>
 
@@ -3874,18 +4485,6 @@
           <div class="panel-heading-actions"><button class="panel-collapse-button" id="collapseTrip" aria-label="收起行程规划"><i data-lucide="panel-left-close"></i></button></div>
         </div>
 
-        <div class="ai-runtime-status" id="aiStatus" data-status="idle" role="status" aria-live="polite">
-          <span class="ai-runtime-main" id="aiStatusText">AI 大模型已接入</span>
-          <span class="ai-runtime-meta" id="aiModelLabel">等待出行需求</span>
-        </div>
-
-        <div class="ai-request" aria-label="自然语言出行约束">
-          <textarea id="intentInput" rows="1" aria-label="用自然语言描述出行要求" aria-describedby="intentInputHint">从能链北京总部前往上海东方明珠广播电视塔，优先准时</textarea>
-          <button type="button" class="ai-parse-button" id="voiceIntentButton" aria-label="语音输入" title="语音输入">
-            <i data-lucide="mic"></i>
-          </button>
-          <div class="ai-input-hint" id="intentInputHint" role="tooltip"><strong>可直接体验或改写：</strong>去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时。</div>
-        </div>
         <div class="ai-feedback" id="aiReply" aria-live="polite" hidden>
           <div class="ai-feedback-head"><span>AI 行程助理</span><small id="aiReplyMeta">已理解当前需求</small></div>
           <div class="ai-feedback-message" id="aiReplyText">我会优先保证 19:30 前抵达，并在实际道路沿线筛选低排队风险的补能站。</div>
@@ -3900,7 +4499,7 @@
             <div class="service-nudge-actions"><button class="primary" id="serviceNudgeAccept" type="button">查看推荐</button><button id="serviceNudgeDismiss" type="button">暂不安排</button></div>
           </div>
         </section>
-        <div id="parsedOutput" hidden>
+        <div id="parsedOutput" hidden data-reviewer-only>
           <div class="parsed-section-head"><strong>结构化约束</strong><span id="parsedConfidence">解析置信度 96%</span></div>
           <div class="parsed-row" id="parsedRow" aria-label="已解析约束"></div>
         </div>
@@ -3930,8 +4529,6 @@
           <div class="constraint constraint-arrival"><div class="constraint-label">到达要求 <small>可选</small></div><div class="arrival-inputs"><label>最晚<input id="deadlineInput" type="time" aria-label="最晚到达时间，可留空" title="留空即不限制最晚到达时间" /></label><label>余量<input id="minArrivalSocInput" type="number" min="5" max="100" step="1" placeholder="不限" inputmode="numeric" aria-label="最低到达余量，可留空" title="留空即不设到达余量要求，仅保留车辆安全下限" /><b>%</b></label></div><div class="constraint-note">留空即不作为硬约束；系统仍保留车辆安全下限。</div></div>
         </div>
 
-        <button class="primary-action" id="planButton"><i data-lucide="sparkles"></i><span>开始 AI 智能规划</span></button>
-        <div class="hint-line"><i data-lucide="info"></i><span id="planHint">直接点击即可体验预设行程，也可先输入全国目的地。</span></div>
       </section>
       <button class="panel-reveal reveal-left" id="expandTrip" aria-label="展开行程规划"><i data-lucide="panel-left-open"></i><span>行程规划</span></button>
 
@@ -3940,16 +4537,17 @@
           <div>
             <div class="eyebrow">Recommended energy stop</div>
             <div class="insight-title" id="stationTitle">大兴榆垡综合能源站</div>
-            <div class="insight-subtitle" id="stationSubtitle">距路线 0.8 km · 直流快充 · <span class="source-badge">站点真实 / 状态演示</span></div>
+            <div class="insight-subtitle" id="stationSubtitle">距路线 0.8 km · 直流快充<span class="source-badge"> · 站点真实 / 状态演示</span></div>
           </div>
           <button class="close-button" id="closeInsight" aria-label="收起站点详情"><i data-lucide="panel-right-close"></i></button>
         </div>
         <span class="state-badge" id="stationState"><i data-lucide="check-circle-2"></i>预测可用</span>
         <div class="station-stat">
-          <div class="stat-block"><div class="stat-label">预计 P90 等待</div><div class="stat-value" id="waitValue">8 <small>分钟</small></div></div>
+          <div class="stat-block"><div class="stat-label" id="waitLabel" data-reviewer-copy="预计 P90 等待" data-user-copy="预计等待">预计 P90 等待</div><div class="stat-value" id="waitValue">8 <small>分钟</small></div></div>
           <div class="stat-block"><div class="stat-label" id="energyAdviceLabel">建议补能</div><div class="stat-value" id="energyAdviceValue">— <small>kWh</small></div></div>
+          <div class="stat-block"><div class="stat-label">预计价格</div><div class="stat-value" id="stationPriceValue">— <small>待确认</small></div></div>
         </div>
-        <div class="forecast-card">
+        <div class="forecast-card" data-reviewer-only>
           <div class="forecast-head"><strong>未来 30 分钟站点预测</strong><span class="forecast-status" id="forecastStatus">5 分钟粒度</span></div>
           <svg class="forecast-chart" id="forecastChart" viewBox="0 0 270 116" role="img" aria-label="未来三十分钟 P50 与 P90 排队时间预测折线图" preserveAspectRatio="none">
             <g aria-hidden="true">
@@ -3977,25 +4575,25 @@
               <circle class="forecast-point" cx="264" cy="35" r="3"></circle>
             </g>
           </svg>
-          <div class="forecast-legend" id="forecastLegend"><span><i></i>P50 典型等待</span><span><i></i>P90 尾部风险</span></div>
-          <div class="forecast-source" id="forecastMeta"><i data-lucide="database"></i><span>真实站点与路线 · 当前负载、价格及预测为本次仿真；入围后替换为能链脱敏数据。</span></div>
+          <div class="forecast-legend" id="forecastLegend"><span><i></i><span data-reviewer-copy="P50 典型等待" data-user-copy="典型等待">P50 典型等待</span></span><span><i></i><span data-reviewer-copy="P90 尾部风险" data-user-copy="拥堵风险">P90 尾部风险</span></span></div>
+          <div class="forecast-source" id="forecastMeta" data-reviewer-only><i data-lucide="database"></i><span>真实站点与路线 · 当前负载、价格及预测为本次仿真；入围后替换为能链脱敏数据。</span></div>
         </div>
         <div class="evidence-list">
           <div class="evidence-row"><i data-lucide="check"></i><span>绕行较小，预计 19:08 抵达机场</span></div>
           <div class="evidence-row"><i data-lucide="check"></i><span>预计离站电量 54%，覆盖剩余行程</span></div>
           <div class="evidence-row"><i data-lucide="trending-down"></i><span>相较最快方案，等待尾部风险更低</span></div>
         </div>
-        <div class="stop-timeline" id="stopTimeline" hidden></div>
+        <div class="stop-timeline" id="stopTimeline" hidden data-reviewer-only></div>
         <div class="arrival-loop" id="serviceFlow" aria-label="非油服务智能推荐">
-          <div class="arrival-head"><div><strong>非油服务智能推荐</strong><small id="serviceDwellTime">根据预计驻留时间匹配</small></div><span class="concept-badge">高德 POI · 演示停留时长</span></div>
+          <div class="arrival-head"><div><strong>非油服务智能推荐</strong><small id="serviceDwellTime">根据预计驻留时间匹配</small></div><span class="concept-badge" data-reviewer-only>高德 POI · 演示停留时长</span></div>
           <div class="service-recommendations" id="serviceRecommendations"></div>
           <div class="arrival-foot"><span id="serviceStatus">选择一个服务，可加入到站计划</span><button class="arrival-feedback-button" id="serviceFeedbackButton">模拟预约服务</button></div>
         </div>
-        <div class="demo-note" id="stationDataNote">等待、实时负载和价格为演示模拟数据；站点名称与位置来自地图 POI。</div>
+        <div class="demo-note" id="stationDataNote" data-reviewer-only>等待、实时负载和价格为演示模拟数据；站点名称与位置来自地图 POI。</div>
       </section>
       <button class="panel-reveal reveal-right" id="expandInsight" aria-label="展开站点详情" hidden><span>站点详情</span><i data-lucide="panel-right-open"></i></button>
 
-      <section class="operator-panel" id="operatorPanel" aria-label="运营视图">
+      <section class="operator-panel" id="operatorPanel" aria-label="运营视图" data-reviewer-only>
         <div class="operator-head">
           <div>
             <div class="eyebrow">Operator intelligence</div>
@@ -4089,7 +4687,7 @@
         </section>
       </section>
 
-      <section class="validation-panel" id="validationPanel" aria-label="策略验证">
+      <section class="validation-panel" id="validationPanel" aria-label="策略验证" data-reviewer-only>
         <div class="validation-head">
           <div>
             <div class="eyebrow">Evidence view</div>
@@ -4118,7 +4716,7 @@
         <div class="validation-foot"><p id="validationFootText">尚未运行。结果将在固定种子下由当前站点输入生成。</p><span class="source-badge" id="validationSourceBadge">可复现实验 / 非真实经营 KPI</span></div>
       </section>
 
-      <div class="evidence-backdrop" id="validationEvidenceBackdrop" hidden>
+      <div class="evidence-backdrop" id="validationEvidenceBackdrop" hidden data-reviewer-only>
         <section class="evidence-dialog" role="dialog" aria-modal="true" aria-labelledby="validationEvidenceTitle">
           <div class="evidence-dialog-head"><div><div class="eyebrow">Reproducible methodology</div><h3 id="validationEvidenceTitle">本次验证的计算依据</h3><p>展示本次仿真的输入、固定随机种子、策略规则与指标公式；同一输入和种子可复现同一结果。</p></div><div class="validation-head-actions"><button class="validation-evidence-button" id="validationRerunButton" type="button"><i data-lucide="rotate-cw"></i>重新运行</button><button class="close-button" id="closeValidationEvidence" aria-label="关闭计算依据"><i data-lucide="x"></i></button></div></div>
           <div class="evidence-summary" id="validationEvidenceSummary"></div>
@@ -4166,23 +4764,48 @@
       <div class="toast" id="toast"><i data-lucide="check-circle-2"></i><span id="toastText">操作已完成</span></div>
     </div>
 
-    <div class="demo-notice-backdrop" id="updateNoticeBackdrop">
-      <section class="update-notice" role="dialog" aria-modal="true" aria-labelledby="updateNoticeTitle">
-        <span class="update-notice-mark"><i data-lucide="sparkles"></i></span>
-        <h2 id="updateNoticeTitle">本次更新</h2>
-        <p class="update-notice-sub">FlowTwin · 能链 AI 油电一体化补能协同 Demo</p>
-        <ul class="update-list">
-          <li class="update-item"><i data-lucide="git-compare-arrows"></i><span><b>预测口径对齐</b>：模型描述照代码重写，油价/电价/等待分位系数与天气因子统一，不再两页两套口径。</span></li>
-          <li class="update-item"><i data-lucide="bar-chart-3"></i><span><b>长途 P90 卷积</b>：各站等待按独立性卷积，不再把各站最差 10% 直接相加虚高。</span></li>
-          <li class="update-item"><i data-lucide="filter"></i><span><b>站点过滤</b>：纯电方案不再出现"加油站"补能点，服务区兜底候选补上区县位置。</span></li>
-          <li class="update-item"><i data-lucide="git-branch"></i><span><b>混动分支</b>：电分支够不着最近站时自动转油，失败原因如实说明，不再误报"未检索到充电站"。</span></li>
-          <li class="update-item"><i data-lucide="map-pin"></i><span><b>运营页去硬编码</b>：标题、休息提示、目的地建议随当前行程动态，不再写死北京。</span></li>
-          <li class="update-item"><i data-lucide="receipt"></i><span><b>支付电子收据</b>：分项明细（量×单价=能源费−优惠=实付），并打通运营引流优惠闭环。</span></li>
-          <li class="update-item"><i data-lucide="cloud-rain"></i><span><b>天气接入</b>：高德实况天气影响预测，雨雪天峰值等待上升，服务建议优先室内。</span></li>
-        </ul>
-        <div class="update-foot"><i data-lucide="info"></i><span>可输入全国可驾车目的地；站点价格/占用率/等待为演示仿真数据，天气与路线为高德实况。</span></div>
-        <div class="update-notice-action"><button id="updateNoticeConfirm" type="button"><span>知道了，开始体验</span><i data-lucide="arrow-right"></i></button></div>
-      </section>
+    <div class="settings-backdrop" id="settingsBackdrop" hidden>
+      <aside class="settings-panel" id="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
+        <div class="settings-head">
+          <div>
+            <div class="eyebrow">FlowTwin controls</div>
+            <h2 id="settingsTitle">设置</h2>
+          </div>
+          <button class="close-button" id="settingsCloseButton" type="button" aria-label="关闭设置"><i data-lucide="x"></i></button>
+        </div>
+
+        <section class="settings-section" aria-labelledby="displayModeTitle">
+          <div class="settings-section-head"><h3 id="displayModeTitle">显示模式</h3><span>随时切换，刷新后保留</span></div>
+          <div class="display-mode-switch" role="radiogroup" aria-label="显示模式">
+            <button type="button" class="display-mode-option active" data-display-mode-option="reviewer" role="radio" aria-checked="true">
+              <strong>评审模式</strong><small>保留来源、预测过程、运营与验证</small>
+            </button>
+            <button type="button" class="display-mode-option" data-display-mode-option="user" role="radio" aria-checked="false">
+              <strong>用户模式</strong><small>只看出行、路线、补能、等待、价格与服务建议</small>
+            </button>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="versionTitle">
+          <div class="settings-section-head"><h3 id="versionTitle">版本</h3><span id="versionInfoStatus" role="status" aria-live="polite">等待读取</span></div>
+          <dl class="version-grid">
+            <div><dt>当前版本</dt><dd id="currentVersionValue">v1.1.0</dd></div>
+            <div><dt>短 commit</dt><dd id="currentCommitValue">—</dd></div>
+            <div><dt>构建来源</dt><dd id="currentBuildSourceValue">package.json</dd></div>
+          </dl>
+          <div class="version-check-row">
+            <button class="settings-action" id="checkVersionButton" type="button"><i data-lucide="refresh-cw"></i>检查更新</button>
+            <span class="version-check-status" id="versionCheckStatus" data-state="idle" role="status" aria-live="polite">尚未检查</span>
+          </div>
+          <a class="version-update-link" id="versionUpdateLink" href="#" target="_blank" rel="noopener" hidden>在 GitHub 查看新版本 <i data-lucide="external-link"></i></a>
+        </section>
+
+        <section class="settings-section settings-boundary" aria-labelledby="boundaryTitle">
+          <div class="settings-section-head"><h3 id="boundaryTitle">数据边界</h3></div>
+          <p>路线与地图可来自真实地图服务；站点等待、价格、负载和运营结果是本次仿真。安全余量、可达性、预计等待与价格仍会影响路线选择。</p>
+          <p class="settings-boundary-note">本页不展示密钥或内部配置，也不会在打开设置时触发 AI、飞书同步或 Webhook。</p>
+        </section>
+      </aside>
     </div>
 
     <div class="demo-notice-backdrop hidden" id="demoNoticeBackdrop">
@@ -4209,108 +4832,6 @@
     </div>
 
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.js"></script>
-    <script type="text/plain" id="legacy-preview-script">
-      const origin = [39.951, 116.491];
-      const destination = [39.509, 116.410];
-      const routes = {
-        fastest: [[39.951,116.491],[39.916,116.522],[39.853,116.541],[39.781,116.518],[39.700,116.473],[39.616,116.438],[39.556,116.421],[39.509,116.410]],
-        reliable: [[39.951,116.491],[39.917,116.507],[39.854,116.506],[39.789,116.492],[39.714,116.468],[39.646,116.445],[39.586,116.426],[39.509,116.410]],
-        cheapest: [[39.951,116.491],[39.913,116.478],[39.853,116.456],[39.786,116.444],[39.718,116.432],[39.650,116.414],[39.581,116.405],[39.509,116.410]]
-      };
-
-      const map = L.map('map', { zoomControl: false, attributionControl: false, preferCanvas: true });
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, opacity: 0.88 }).addTo(map);
-      map.fitBounds([origin, destination], { paddingTopLeft: [390, 90], paddingBottomRight: [40, 240] });
-
-      const routeLayers = {};
-      Object.entries(routes).forEach(([key, points]) => {
-        routeLayers[key] = L.polyline(points, {
-          color: key === 'reliable' ? '#4A7DF0' : '#8996A3',
-          weight: key === 'reliable' ? 6 : 4,
-          opacity: key === 'reliable' ? 0.96 : 0.6,
-          lineCap: 'round',
-          lineJoin: 'round',
-          dashArray: key === 'reliable' ? null : '9 10'
-        }).addTo(map);
-      });
-
-      const icon = (name, className) => L.divIcon({ className: 'flow-marker', iconSize: null, html: `<span class="${className}"><i data-lucide="${name}"></i></span>` });
-      L.marker(origin, { icon: icon('circle-dot', 'origin-marker'), keyboard: false }).addTo(map);
-      L.marker(destination, { icon: icon('plane-landing', 'destination-marker'), keyboard: false }).addTo(map);
-
-      const stationData = [
-        { name: '亦庄能源驿站', point: [39.789, 116.492], wait: '12 分钟', state: 'risk', detail: '高峰预测 · 绕行 0.4 km' },
-        { name: '大兴榆垡综合能源站', point: [39.646, 116.445], wait: '8 分钟', state: 'stable', detail: '推荐站点 · 绕行 0.8 km' },
-        { name: '机场东侧补能站', point: [39.556, 116.421], wait: '5 分钟', state: 'stable', detail: '到达前补能 · 绕行 1.2 km' }
-      ];
-
-      stationData.forEach((station, index) => {
-        const marker = L.marker(station.point, { icon: icon('zap', `station-marker ${station.state === 'risk' ? 'risk' : ''}`), keyboard: false }).addTo(map);
-        marker.bindPopup(`<div class="popup-title">${station.name}</div><div class="popup-meta">${station.detail}<br>预计等待 ${station.wait} · 演示状态</div>`, { closeButton: false, offset: [0, -9] });
-        marker.on('click', () => {
-          document.getElementById('stationTitle').textContent = station.name;
-          document.getElementById('waitValue').innerHTML = `${station.wait.replace(' 分钟','')} <small>分钟</small>`;
-          document.getElementById('insightPanel').classList.remove('hidden');
-        });
-      });
-
-      function refreshIcons() {
-        if (window.lucide) lucide.createIcons({ attrs: { 'stroke-width': 1.9 } });
-      }
-
-      function selectRoute(routeKey) {
-        Object.entries(routeLayers).forEach(([key, layer]) => {
-          layer.setStyle({
-            color: key === routeKey ? '#4A7DF0' : '#8996A3',
-            weight: key === routeKey ? 6 : 4,
-            opacity: key === routeKey ? 0.96 : 0.6,
-            dashArray: key === routeKey ? null : '9 10'
-          });
-        });
-        document.querySelectorAll('.route-option').forEach((button) => button.classList.toggle('selected', button.dataset.route === routeKey));
-        map.fitBounds(routeLayers[routeKey].getBounds(), { paddingTopLeft: [390, 90], paddingBottomRight: [40, 240], maxZoom: 11 });
-      }
-
-      document.querySelectorAll('.route-option').forEach((button) => button.addEventListener('click', () => selectRoute(button.dataset.route)));
-      document.getElementById('resetView').addEventListener('click', () => {
-        selectRoute('reliable');
-        map.fitBounds([origin, destination], { paddingTopLeft: [390, 90], paddingBottomRight: [40, 240] });
-      });
-      document.getElementById('closeInsight').addEventListener('click', () => document.getElementById('insightPanel').classList.add('hidden'));
-      document.getElementById('closeOperator').addEventListener('click', () => {
-        document.getElementById('operatorPanel').classList.remove('visible');
-        document.querySelector('[data-mode="driver"]').click();
-      });
-      document.getElementById('planButton').addEventListener('click', () => {
-        const button = document.getElementById('planButton');
-        button.querySelector('span').textContent = '方案已更新';
-        button.style.background = '#168F7E';
-        document.getElementById('planHint').textContent = '已根据当前约束筛选 3 条路线，最可靠方案满足 19:30 到达。';
-        setTimeout(() => {
-          button.querySelector('span').textContent = '生成补能方案';
-          button.style.background = '';
-        }, 2200);
-      });
-      document.getElementById('approveButton').addEventListener('click', (event) => {
-        event.currentTarget.innerHTML = '<i data-lucide="check"></i>已提交审批';
-        event.currentTarget.style.color = '#168F7E';
-        refreshIcons();
-      });
-
-      document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', () => {
-        const isOperator = button.dataset.mode === 'operator';
-        document.querySelectorAll('[data-mode]').forEach((item) => {
-          const active = item === button;
-          item.classList.toggle('active', active);
-          item.setAttribute('aria-selected', String(active));
-        });
-        document.getElementById('operatorPanel').classList.toggle('visible', isOperator);
-        document.getElementById('tripPanel').style.display = isOperator ? 'none' : '';
-        document.getElementById('insightPanel').classList.toggle('hidden', isOperator);
-      }));
-
-      refreshIcons();
-    </script>
     <script src="./runtime-config.js"></script>
     <script>window._AMapSecurityConfig = { securityJsCode: (window.FLOWTWIN_CONFIG || {}).securityJsCode || "" };</script>
     <script src="https://webapi.amap.com/loader.js"></script>

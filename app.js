@@ -94,6 +94,7 @@
     map: null,
     live: false,
     mode: "driver",
+    displayMode: "reviewer",
     selectedRoute: "reliable",
     routeSelectionTouched: false,
     origin: FALLBACK.origin,
@@ -155,6 +156,7 @@
     routeErrors: {},
     aiContext: null,
     aiActive: false,
+    lastRequestMode: "new_trip",
     forecastRequestVersion: 0,
     validationLoaded: false,
     validationPayload: null,
@@ -187,10 +189,74 @@
   };
 
   const ENERGY_TYPES = ["electric", "fuel", "hybrid"];
+  const DISPLAY_MODE_STORAGE_KEY = "FLOWTWIN_DISPLAY_MODE";
 
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   const byId = (id) => document.getElementById(id);
+
+  function normalizeDisplayMode(value) {
+    return value === "user" ? "user" : "reviewer";
+  }
+
+  function readDisplayMode() {
+    try {
+      return normalizeDisplayMode(window.localStorage.getItem(DISPLAY_MODE_STORAGE_KEY));
+    } catch (_) {
+      return "reviewer";
+    }
+  }
+
+  function isUserDisplayMode() {
+    return state.displayMode === "user";
+  }
+
+  function displayCopy(value) {
+    const text = String(value ?? "");
+    if (!isUserDisplayMode()) return text;
+    return text
+      .replace(/总等待\s*P90/g, "预计等待")
+      .replace(/P90\s*等待风险/g, "拥堵风险")
+      .replace(/P90\s*等待/g, "预计等待")
+      .replace(/P50\s*典型等待/g, "典型等待")
+      .replace(/\bP90\b/g, "拥堵风险")
+      .replace(/\bP50\b/g, "典型等待");
+  }
+
+  function syncStaticDisplayCopy() {
+    $$('[data-reviewer-copy]').forEach((element) => {
+      const reviewerCopy = element.dataset.reviewerCopy || element.textContent || "";
+      const userCopy = element.dataset.userCopy || displayCopy(reviewerCopy);
+      element.textContent = isUserDisplayMode() ? userCopy : reviewerCopy;
+    });
+    const chart = byId("forecastChart");
+    if (chart) {
+      chart.setAttribute("aria-label", isUserDisplayMode()
+        ? "未来三十分钟预计等待与拥堵风险预测折线图"
+        : "未来三十分钟 P50 与 P90 排队时间预测折线图");
+    }
+  }
+
+  function setDisplayMode(mode, options = {}) {
+    const next = normalizeDisplayMode(mode);
+    state.displayMode = next;
+    if (options.persist !== false) {
+      try { window.localStorage.setItem(DISPLAY_MODE_STORAGE_KEY, next); } catch (_) { /* ignore storage failures */ }
+    }
+    if (document.body) document.body.dataset.displayMode = next;
+    byId("app")?.setAttribute("data-display-mode", next);
+    $$('[data-display-mode-option]').forEach((button) => {
+      const active = button.dataset.displayModeOption === next;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-checked", String(active));
+    });
+    syncStaticDisplayCopy();
+    // User mode never leaves an operations/evidence view open after the entry
+    // points are hidden. Returning to driver keeps the safety and route panels
+    // available without duplicating a second DOM tree.
+    if (next === "user" && state.mode !== "driver") setMode("driver");
+    if (state.hasPlannedRoute) renderRouteCards();
+  }
 
   function refreshIcons() {
     if (window.lucide && typeof window.lucide.createIcons === "function") {
@@ -215,22 +281,169 @@
     });
   }
 
-  // 首屏"本次更新"公告：打开页面时先展示一次更新内容，关掉即进入 demo。
-  function initUpdateNotice() {
-    const backdrop = byId("updateNoticeBackdrop");
-    const confirm = byId("updateNoticeConfirm");
-    if (!backdrop || !confirm) return;
-    const close = () => {
-      backdrop.classList.add("hidden");
-      confirm.blur();
-    };
-    confirm.addEventListener("click", close);
-    backdrop.addEventListener("click", (event) => {
-      if (event.target === backdrop) close();
+  let settingsPreviousFocus = null;
+  let versionInfoLoading = null;
+
+  function settingsFocusableElements() {
+    const panel = byId("settingsPanel");
+    if (!panel) return [];
+    return Array.from(panel.querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"))
+      .filter((element) => !element.disabled && !element.hidden && element.offsetParent !== null);
+  }
+
+  function setVersionText(id, value) {
+    const element = byId(id);
+    if (element) element.textContent = String(value ?? "");
+  }
+
+  function safeGithubUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      if (url.protocol !== "https:" || url.hostname !== "github.com") return null;
+      return url.href;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function renderVersionInfo(payload) {
+    const version = String(payload?.version || "1.1.0").replace(/^v/i, "");
+    setVersionText("currentVersionValue", `v${version}`);
+    setVersionText("currentCommitValue", payload?.commit ? String(payload.commit).slice(0, 7) : "—");
+    const source = payload?.source || "package.json";
+    const commitSource = payload?.commitSource ? ` · ${payload.commitSource}` : "";
+    setVersionText("currentBuildSourceValue", `${source}${commitSource}`);
+  }
+
+  async function loadVersionInfo() {
+    if (versionInfoLoading) return versionInfoLoading;
+    versionInfoLoading = getJson("/api/version", 8000)
+      .then((payload) => {
+        renderVersionInfo(payload);
+        setVersionText("versionInfoStatus", "版本信息已读取");
+        return payload;
+      })
+      .catch(() => {
+        // The visible fallback is the shipped package version, not a claim
+        // about the remote checkout. Update checking has its own three states.
+        renderVersionInfo({ version: "1.1.0", source: "本地页面默认值" });
+        setVersionText("versionInfoStatus", "暂时无法读取服务版本信息");
+        return null;
+      })
+      .finally(() => { versionInfoLoading = null; });
+    return versionInfoLoading;
+  }
+
+  function renderVersionCheckState(stateName, message, payload = null) {
+    const status = byId("versionCheckStatus");
+    if (status) {
+      status.dataset.state = stateName;
+      status.textContent = message;
+    }
+    const link = byId("versionUpdateLink");
+    const url = stateName === "update" ? safeGithubUrl(payload?.remote?.url) : null;
+    if (link) {
+      if (url) {
+        link.href = url;
+        link.hidden = false;
+      } else {
+        link.removeAttribute("href");
+        link.hidden = true;
+      }
+    }
+  }
+
+  async function checkVersion() {
+    const button = byId("checkVersionButton");
+    if (button?.disabled) return;
+    if (button) {
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+    }
+    renderVersionCheckState("checking", "正在检查更新…");
+    try {
+      const payload = await getJson("/api/version/check", 8000);
+      renderVersionInfo(payload);
+      if (payload?.status === "up-to-date" || payload?.isLatest === true) {
+        renderVersionCheckState("latest", "已是最新", payload);
+      } else if (payload?.status === "update-available" || payload?.updateAvailable === true) {
+        renderVersionCheckState("update", "发现新版本", payload);
+      } else {
+        renderVersionCheckState("unavailable", "暂时无法检查", payload);
+      }
+    } catch (_) {
+      // A failed request is never treated as an old version.
+      renderVersionCheckState("unavailable", "暂时无法检查");
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+      }
+    }
+  }
+
+  function openSettings() {
+    const backdrop = byId("settingsBackdrop");
+    const panel = byId("settingsPanel");
+    const trigger = byId("settingsButton");
+    if (!backdrop || !panel) return;
+    settingsPreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger;
+    backdrop.hidden = false;
+    document.body.classList.add("settings-open");
+    trigger?.setAttribute("aria-expanded", "true");
+    window.setTimeout(() => {
+      const first = settingsFocusableElements()[0];
+      (first || panel).focus();
+    }, 0);
+    loadVersionInfo();
+  }
+
+  function closeSettings() {
+    const backdrop = byId("settingsBackdrop");
+    const trigger = byId("settingsButton");
+    if (!backdrop || backdrop.hidden) return;
+    backdrop.hidden = true;
+    document.body.classList.remove("settings-open");
+    trigger?.setAttribute("aria-expanded", "false");
+    const previous = settingsPreviousFocus;
+    settingsPreviousFocus = null;
+    if (previous && typeof previous.focus === "function" && document.contains(previous)) previous.focus();
+    else trigger?.focus();
+  }
+
+  function handleSettingsKeydown(event) {
+    const backdrop = byId("settingsBackdrop");
+    if (!backdrop || backdrop.hidden) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeSettings();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = settingsFocusableElements();
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function initSettings() {
+    byId("settingsButton")?.addEventListener("click", openSettings);
+    byId("settingsCloseButton")?.addEventListener("click", closeSettings);
+    byId("settingsBackdrop")?.addEventListener("click", (event) => {
+      if (event.target === byId("settingsBackdrop")) closeSettings();
     });
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && !backdrop.classList.contains("hidden")) close();
-    }, { once: false });
+    byId("checkVersionButton")?.addEventListener("click", checkVersion);
+    $$('[data-display-mode-option]').forEach((button) => {
+      button.addEventListener("click", () => setDisplayMode(button.dataset.displayModeOption));
+    });
+    document.addEventListener("keydown", handleSettingsKeydown);
   }
 
   function setMapStatus(message, type) {
@@ -260,9 +473,10 @@
   function fitIntentInput() {
     const input = byId("intentInput");
     if (!input || input.tagName !== "TEXTAREA") return;
-    const maxHeight = 64;
+    const minHeight = 54;
+    const maxHeight = 104;
     input.style.height = "auto";
-    const next = Math.min(Math.max(input.scrollHeight, 42), maxHeight);
+    const next = Math.min(Math.max(input.scrollHeight, minHeight), maxHeight);
     input.style.height = `${next}px`;
     input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
   }
@@ -385,10 +599,9 @@
     if (!button) return;
     button.classList.toggle("recording", voiceIntent.active);
     button.setAttribute("aria-pressed", voiceIntent.active ? "true" : "false");
-    button.title = voiceIntent.active ? "停止录音" : "语音输入";
-    const icon = button.querySelector("i, svg");
-    if (icon && icon.tagName === "I") icon.setAttribute("data-lucide", voiceIntent.active ? "square" : "mic");
-    refreshIcons();
+    button.setAttribute("aria-label", voiceIntent.active ? "正在录音，再次点击结束" : "开始语音输入");
+    button.title = voiceIntent.active ? "正在录音 · 再次点击结束" : "语音输入";
+    button.dataset.recording = voiceIntent.active ? "true" : "false";
   }
 
   async function stopVoiceIntent() {
@@ -546,6 +759,8 @@
   }
 
   function setPlanningVisibility(hasPlan) {
+    byId("app")?.classList.toggle("has-plan", Boolean(hasPlan));
+    if (hasPlan) byId("intentInput")?.blur();
     const routeSheet = byId("routeSheet");
     const insightPanel = byId("insightPanel");
     const activeSummary = byId("activeRouteSummary");
@@ -577,22 +792,100 @@
     if (!hasPlan) {
       setAiReply("");
       setAiStatus("AI 大模型已接入", "idle");
-      setText("planHint", "输入自然语言需求，或直接点击体验预设行程。支持全国可驾车目的地。");
-    } else {
-      setText("planHint", "可修改上方需求或顶部出行状态，再次生成路线与补能方案。");
     }
+    updateComposerActionLabel();
   }
 
   function extractDestinationFromInput(value) {
     const text = String(value || "").trim();
     const directMatches = Array.from(text.matchAll(/(?:前往|去|抵达|目的地(?:是)?|到(?!达))\s*([^，,。；;\n]{2,40})/g));
     const direct = String(directMatches.at(-1)?.[1] || "").trim().replace(/(?:然后|并且|最好).*$/, "");
-    if (direct) return direct;
+    // A follow-up such as “中途想去吃麦当劳” contains “去”, but the
+    // following words describe a service stop rather than a new destination.
+    if (direct && !/^(?:吃|用餐|餐饮|餐厅|咖啡|休息|洗车|加油|充电|补能|麦当劳|肯德基|星巴克)/.test(direct)) return direct;
     const knownPlaces = ["上海东方明珠广播电视塔", "东方明珠广播电视塔", "东方明珠", "北京大兴国际机场", "大兴国际机场", "大兴机场", "首都国际机场", "首都机场", "北京南站", "北京西站", "北京站", "北京朝阳站", "天津滨海国际机场", "上海虹桥站", "上海浦东国际机场", "广州南站", "深圳北站"];
     return knownPlaces
       .map((place) => ({ place, index: text.lastIndexOf(place) }))
       .filter((item) => item.index >= 0)
       .sort((a, b) => b.index - a.index)[0]?.place || null;
+  }
+
+  function hasSupplementCue(value) {
+    return /中途|途中|路上|顺便|另外|还想|再加|补充|加上|吃饭|吃点|吃个|用餐|午饭|午餐|晚饭|晚餐|早餐|餐厅|咖啡|休息|洗车|加油|充电|补能|少走|不走|尽量|再安排/.test(String(value || ""));
+  }
+
+  function hasExplicitNewTripCue(value) {
+    return /改(?:去|到|成)|换(?:去|到|成)|换个目的地|重新(?:规划|安排|去)|新行程|另一个目的地|目的地(?:是|改|换)|(?:^|[，。；\s])我(?:想|要)去/.test(String(value || ""));
+  }
+
+  function resolveRequestMode(value, parsed = {}) {
+    if (!state.hasPlannedRoute) return "new_trip";
+    const text = String(value || "").trim();
+    const explicitDestination = extractDestinationFromInput(text);
+    const supplementOnly = !explicitDestination && hasSupplementCue(text);
+    if (supplementOnly) return "supplement";
+    if (hasExplicitNewTripCue(text) || explicitDestination) return "new_trip";
+    if (parsed.requestMode === "supplement" || parsed.requestMode === "new_trip") return parsed.requestMode;
+    return hasSupplementCue(text) ? "supplement" : "new_trip";
+  }
+
+  function composerActionLabel() {
+    if (!state.hasPlannedRoute) return "开始规划";
+    return resolveRequestMode(byId("intentInput")?.value || "", {}) === "supplement"
+      ? "补充到行程"
+      : "重新规划";
+  }
+
+  function composerAriaLabel() {
+    if (!state.hasPlannedRoute) return "提交新行程规划";
+    return resolveRequestMode(byId("intentInput")?.value || "", {}) === "supplement"
+      ? "提交补充行程"
+      : "提交重新规划";
+  }
+
+  function updateComposerActionLabel() {
+    const button = byId("composerSubmitButton");
+    if (!button) return;
+    button.setAttribute("aria-label", state.aiActive ? "正在提交行程规划" : composerAriaLabel());
+    button.title = state.aiActive ? "正在提交行程规划" : composerActionLabel();
+  }
+
+  function setComposerSubmitting(active) {
+    const button = byId("composerSubmitButton");
+    if (!button) return;
+    button.classList.toggle("is-loading", Boolean(active));
+    button.disabled = Boolean(active);
+    button.setAttribute("aria-busy", active ? "true" : "false");
+    updateComposerActionLabel();
+  }
+
+  function mergeSupplementIntent(parsed, payload, value) {
+    const currentServices = Array.isArray(state.aiContext?.services) ? state.aiContext.services : [];
+    const parsedServices = Array.isArray(parsed?.services) ? parsed.services : [];
+    const hasEnergyCue = /纯电|纯电动|电车|电动车|充电|燃油|油车|加油|混动|插混|油电/.test(String(value || ""));
+    const hasPriorityCue = /不能迟到|准时|赶时间|最快|尽快|便宜|省钱|低成本|不想等|少等|等待/.test(String(value || ""));
+    const hasDetourCue = /最多|不超过|不超|允许|绕行|绕路/.test(String(value || ""));
+    const currentDeadline = state.deadlineEnabled ? formatClock(state.deadlineMinutes) : null;
+    const currentReserve = state.arrivalReserveEnabled ? state.minArrivalSoc : null;
+    const parsedEnergy = parsed?.energyType && parsed.energyType !== "unknown" ? parsed.energyType : state.energyType;
+    return Object.assign({}, parsed, {
+      requestMode: "supplement",
+      // A supplement never turns “吃麦当劳” into the trip destination. Keep
+      // the existing coordinates so the same route is recalculated with the
+      // added service stop.
+      destination: state.destinationName,
+      destinationLocation: state.destination,
+      origin: state.originName,
+      originLocation: state.origin,
+      arrivalDeadline: parsed?.arrivalDeadline || currentDeadline,
+      minArrivalSoc: parsed?.minArrivalSoc ?? currentReserve,
+      energyType: hasEnergyCue ? parsedEnergy : state.energyType,
+      priority: hasPriorityCue ? (parsed?.priority || state.priority) : state.priority,
+      maxDetourKm: hasDetourCue
+        ? (parsed?.maxDetourKm ?? state.maxDetourKm)
+        : (state.detourExplicit ? state.maxDetourKm : null),
+      services: Array.from(new Set([...currentServices, ...parsedServices]))
+    });
   }
 
   function localIntentFallback(value) {
@@ -611,6 +904,7 @@
       priority: value.includes("便宜") || value.includes("省") ? "cost" : value.includes("快") ? "time" : "reliable",
       maxDetourKm: detourMatch ? Math.max(0, Math.min(50, Number(detourMatch[1]))) : null,
       services: ["餐饮", "休息"].filter((service) => value.includes(service)),
+      requestMode: resolveRequestMode(value, {}),
       clarificationNeeded: !destination
     };
   }
@@ -656,7 +950,7 @@
     if (pointsGroup) pointsGroup.innerHTML = p90.map((value, index) => {
       const x = 24 + (240 * index / Math.max(1, p90.length - 1));
       const y = 98 - (76 * Math.min(maxValue, Math.max(0, value)) / maxValue);
-      return `<circle class="forecast-point" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3"><title>+${points[index].minute || 0} 分钟 · P90 ${value.toFixed(1)} 分钟</title></circle>`;
+      return `<circle class="forecast-point" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3"><title>${displayCopy(`+${points[index].minute || 0} 分钟 · P90 ${value.toFixed(1)} 分钟`)}</title></circle>`;
     }).join("");
     const status = byId("forecastStatus");
     if (status) status.textContent = `模型预测 · ${points.length * 5 - 5} 分钟`;
@@ -2442,17 +2736,17 @@
     const tag = button.querySelector(".option-tag");
     const name = button.querySelector(".option-name-text");
     button.classList.toggle("infeasible", !record.feasible);
-    if (name) name.textContent = record.displayName || { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }[record.key];
+    if (name) name.textContent = displayCopy(record.displayName || { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }[record.key]);
     if (strong) strong.textContent = formatClock(record.arrival);
     const serviceName = record.servicePlan?.name || "";
     if (metrics) {
-      metrics.innerHTML = record.directTrip
+      metrics.innerHTML = displayCopy(record.directTrip
         ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>直达 <b>无需补能</b></span><span>到达 <b>${record.arrivalSoc}%</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span>`
         : record.serviceOnly
           ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>服务 <b>${serviceName || "已加入"}</b></span><span>到达 <b>${record.arrivalSoc}%</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
         : record.multiStop
             ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>补能 <b>${record.stopCount} 次</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>P90 <b>${record.p90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
-            : `<span>用时 <b>${formatDuration(record.total)}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>P50 <b>${record.station?.p50 ?? "—"}分</b></span><span>P90 <b>${record.station?.p90 ?? "—"}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`;
+            : `<span>用时 <b>${formatDuration(record.total)}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>P50 <b>${record.station?.p50 ?? "—"}分</b></span><span>P90 <b>${record.station?.p90 ?? "—"}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`);
     }
     if (tag) {
       if (record.directTrip) tag.textContent = "无需补能";
@@ -2475,7 +2769,7 @@
     const unconfirmedEquipment = (stations) => stations.some((station) => station && (station.serviceAreaCandidate || station.provisionalCorridor))
       ? " · 补能设施待确认"
       : "";
-    if (stationLine) stationLine.textContent = record.directTrip
+    if (stationLine) stationLine.textContent = displayCopy(record.directTrip
       ? `无需${isFuelActive() ? "加油" : "补能"} · 直达 ${state.destinationName} · 到达 ${record.arrivalSoc}%`
       : record.serviceOnly
         ? `服务停靠 · ${serviceName || "沿线服务"} · ETA 已按真实路线重算`
@@ -2483,7 +2777,7 @@
         ? `连续${isFuelActive() ? "加油" : "补能"} ${record.stopCount} 次${serviceName ? ` · 含 ${serviceName}` : ""} · ${record.stops.map((stop) => stop.name).join(" → ")} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment(record.stops || [])}`
       : !record.canReachStation
         ? (record.planningFailure || `当前余量不足以安全抵达候选${isFuelActive() ? "加油站" : "充电站"} · 不建议执行`)
-        : `${isFuelActive() ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"}${serviceName ? ` · 含 ${serviceName}` : ""} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment([record.station])}`;
+        : `${isFuelActive() ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"}${serviceName ? ` · 含 ${serviceName}` : ""} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment([record.station])}`);
     if (reason) {
       // 该策略的高德查询没返回独立路线，这里复用的是本次行程另一条真实路线。
       // 必须说出来，否则三张卡片看着像三条不同的路线。
@@ -2492,18 +2786,18 @@
         : "";
       const withNote = (text) => (policyNote ? `${text}${policyNote}` : text);
       if (record.directTrip) {
-        reason.textContent = withNote(`当前${isFuelActive() ? "油量" : "电量"}可满足${arrivalReserveDescription(record)}，不引入额外补能停靠。`);
+        reason.textContent = displayCopy(withNote(`当前${isFuelActive() ? "油量" : "电量"}可满足${arrivalReserveDescription(record)}，不引入额外补能停靠。`));
         return;
       }
       if (record.serviceOnly) {
-        reason.textContent = withNote(`已加入 ${serviceName || "沿线服务"} · 预计额外 ${record.servicePlan?.extraMinutes || 0} 分钟 · 到达余量 ${record.arrivalSoc}%。`);
+        reason.textContent = displayCopy(withNote(`已加入 ${serviceName || "沿线服务"} · 预计额外 ${record.servicePlan?.extraMinutes || 0} 分钟 · 到达余量 ${record.arrivalSoc}%。`));
         return;
       }
       if (record.multiStop) {
         if (!record.feasible) {
-          reason.textContent = withNote(record.key === "cheapest"
+          reason.textContent = displayCopy(withNote(record.key === "cheapest"
             ? `高德低费用道路可将通行费降至 ¥${Math.round(record.roadTolls || 0)}，但预计晚到 ${record.lateMinutes} 分钟，不建议在当前时限下执行。`
-            : `该补能策略未同时满足时限、到达余量或绕行约束，已保留为风险备选。`);
+            : `该补能策略未同时满足时限、到达余量或绕行约束，已保留为风险备选。`));
           return;
         }
         const summaries = {
@@ -2514,17 +2808,17 @@
             : `费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}；优先在较低模拟站价处补能。`
         };
         const baseReason = summaries[record.key] || `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：总等待 P90 ${record.p90Wait} 分钟。`;
-        reason.textContent = withNote(serviceName ? `${baseReason} 已含服务停靠 ${serviceName}。` : baseReason);
+        reason.textContent = displayCopy(withNote(serviceName ? `${baseReason} 已含服务停靠 ${serviceName}。` : baseReason));
         return;
       }
       if (!record.canReachStation) {
-        reason.textContent = withNote(record.planningFailure || "候选站首段路程超出当前安全可达距离，已拦截该方案。");
+        reason.textContent = displayCopy(withNote(record.planningFailure || "候选站首段路程超出当前安全可达距离，已拦截该方案。"));
         return;
       }
       if (!record.detourWithinLimit) {
         // 城际行程放宽后的上限和用户看到的 8 km 不是一回事，要报实际用的那个，
         // 否则"超过 ≤8 km 约束"会去解释一条按 25 km 校验过的路线。
-        reason.textContent = withNote(`实际绕行 ${Number(record.detour || 0).toFixed(1)} km，超过“绕行≤${activeDetourLimitKm(record)} km”约束。`);
+        reason.textContent = displayCopy(withNote(`实际绕行 ${Number(record.detour || 0).toFixed(1)} km，超过“绕行≤${activeDetourLimitKm(record)} km”约束。`));
         return;
       }
       const reasons = {
@@ -2532,7 +2826,7 @@
         reliable: record.isActualCheapest ? `总成本最低 ¥${Math.round(record.cost)} · P90 ${record.station.p90} 分钟 · ${Math.round(record.onTime)}% 准时` : record.stableCollision ? `路线与站点的可解释备选 · P90 ${record.station.p90} 分钟 · ${Math.round(record.onTime)}% 准时` : record.feasible ? `P90 ${record.station.p90} 分钟 · 负载 ${(record.station.occupancy * 100).toFixed(0)}% · ${Math.round(record.onTime)}% 准时` : `风险备选，但超过到达时限 ${record.lateMinutes} 分钟`,
         cheapest: record.costBackup ? `路线与站点的可解释备选 · 绕行 ${record.station.detour} km · P90 ${record.station.p90} 分钟` : record.feasible ? `总成本最低 · 绕行 ${record.station.detour} km · 预计节省 ¥${Math.max(1, Math.round(state.routeRecords.fastest.cost - record.cost))}` : `成本备选，但超过到达时限，不建议执行`
       };
-      reason.textContent = withNote(reasons[record.key]);
+      reason.textContent = displayCopy(withNote(reasons[record.key]));
     }
   }
 
@@ -2943,24 +3237,34 @@
     timeline.innerHTML = `<div class="stop-timeline-head"><strong>分段补能账本</strong><span>${verificationNote}</span></div>${record.stops.map((stop) => `<div class="stop-timeline-item"><b>${stop.sequence}</b><div><strong title="${escapeHtml(stop.name)}">${escapeHtml(stop.name)}</strong><small>到站 ${stop.arrivalSoc}% → 补至 ${stop.targetSoc}% · ${stop.legDistanceKm} km${stop.provisionalCorridor ? " · 设备待确认" : ""}</small></div><span>+${stop.energyAmount}${record.energyUnit}</span></div>`).join("")}`;
   }
 
+  function syncInsightDisplayCopy() {
+    if (!isUserDisplayMode()) return;
+    $$(".evidence-row span").forEach((element) => {
+      element.textContent = displayCopy(element.textContent);
+    });
+  }
+
   function updateInsight(record) {
     if (!record) return;
     if (record.directTrip) {
       renderStopTimeline(null);
       renderDirectTripInsight(record);
       updateServiceNudge(record);
+      syncInsightDisplayCopy();
       return;
     }
     if (record.serviceOnly) {
       renderStopTimeline(null);
       renderServiceOnlyInsight(record);
       updateServiceNudge(null);
+      syncInsightDisplayCopy();
       return;
     }
     if (!record.station) {
       renderStopTimeline(null);
       renderNoStationInsight(record);
       updateServiceNudge(null);
+      syncInsightDisplayCopy();
       return;
     }
     selectStation(record.station, false);
@@ -2992,6 +3296,7 @@
     }
     renderServiceRecommendations(record);
     updateServiceNudge(record);
+    syncInsightDisplayCopy();
   }
 
   function setInsightBadge(label, risk) {
@@ -3006,13 +3311,15 @@
     highlightSelectedStation();
     setText("stationTitle", "本次行程无需补能");
     const subtitle = byId("stationSubtitle");
-    if (subtitle) subtitle.innerHTML = `当前${isFuelActive() ? "油量" : "电量"}可直达 ${state.destinationName} · <span class="source-badge">真实路线 / 能耗模型计算</span>`;
+    if (subtitle) subtitle.innerHTML = `当前${isFuelActive() ? "油量" : "电量"}可直达 ${state.destinationName}<span class="source-badge"> · 真实路线 / 能耗模型计算</span>`;
     setInsightBadge("直达可行", false);
     const wait = byId("waitValue");
     if (wait) wait.innerHTML = `0 <small>分钟</small>`;
     setText("energyAdviceLabel", "到达余量");
     const advice = byId("energyAdviceValue");
     if (advice) advice.innerHTML = `${record.arrivalSoc} <small>%</small>`;
+    const price = byId("stationPriceValue");
+    if (price) price.innerHTML = "— <small>无需补能</small>";
     const forecastCard = byId("forecastChart")?.closest(".forecast-card");
     if (forecastCard) forecastCard.style.display = "none";
     const evidence = $$(".evidence-row span");
@@ -3034,13 +3341,15 @@
     highlightSelectedStation();
     setText("stationTitle", record.servicePlan?.name || "沿线服务停靠");
     const subtitle = byId("stationSubtitle");
-    if (subtitle) subtitle.innerHTML = `已加入预计 ${record.servicePlan?.durationMinutes || 0} 分钟的服务停靠 · <span class="source-badge">${record.servicePlan?.source || "高德真实 POI / 演示服务时长"}</span>`;
+    if (subtitle) subtitle.innerHTML = `已加入预计 ${record.servicePlan?.durationMinutes || 0} 分钟的服务停靠<span class="source-badge"> · ${record.servicePlan?.source || "高德真实 POI / 演示服务时长"}</span>`;
     setInsightBadge("服务已加入", false);
     const wait = byId("waitValue");
     if (wait) wait.innerHTML = `${record.servicePlan?.extraMinutes || 0} <small>额外分钟</small>`;
     setText("energyAdviceLabel", "到达余量");
     const advice = byId("energyAdviceValue");
     if (advice) advice.innerHTML = `${record.arrivalSoc} <small>%</small>`;
+    const price = byId("stationPriceValue");
+    if (price) price.innerHTML = "— <small>服务停靠</small>";
     const forecastCard = byId("forecastChart")?.closest(".forecast-card");
     if (forecastCard) forecastCard.style.display = "none";
     const evidence = $$(".evidence-row span");
@@ -3057,13 +3366,15 @@
     const hasLongTripFailure = Boolean(record.planningFailure);
     setText("stationTitle", hasLongTripFailure ? "未生成可执行长途方案" : "未找到安全可达补能站");
     const subtitle = byId("stationSubtitle");
-    if (subtitle) subtitle.innerHTML = `${record.planningFailure || "当前约束下没有通过首段可达性校验的站点"} · <span class="source-badge">已阻止生成虚假可行方案</span>`;
+    if (subtitle) subtitle.innerHTML = `${record.planningFailure || "当前约束下没有通过首段可达性校验的站点"}<span class="source-badge"> · 已阻止生成虚假可行方案</span>`;
     setInsightBadge("需调整出行条件", true);
     const wait = byId("waitValue");
     if (wait) wait.innerHTML = `— <small>分钟</small>`;
     setText("energyAdviceLabel", "安全可达");
     const advice = byId("energyAdviceValue");
     if (advice) advice.innerHTML = `不足 <small>请先补能</small>`;
+    const price = byId("stationPriceValue");
+    if (price) price.innerHTML = "— <small>暂无站点</small>";
     const forecastCard = byId("forecastChart")?.closest(".forecast-card");
     if (forecastCard) forecastCard.style.display = "none";
     const evidence = $$(".evidence-row span");
@@ -3806,7 +4117,7 @@
     const adviceValue = byId("energyAdviceValue");
     if (title) title.textContent = station.name;
     if (wait) wait.innerHTML = `${station.p90} <small>分钟</small>`;
-    if (subtitle) subtitle.innerHTML = `额外里程 ${station.detour} km · ${station.type === "加油站" ? "油品服务" : "直流快充"} · <span class="source-badge">${station.source} · 演示预测状态</span>`;
+    if (subtitle) subtitle.innerHTML = `额外里程 ${station.detour} km · ${station.type === "加油站" ? "油品服务" : "直流快充"}<span class="source-badge"> · ${station.source} · 演示预测状态</span>`;
     if (badge) {
       badge.innerHTML = `<i data-lucide="${station.status === "forecast-risk" ? "triangle-alert" : "check-circle-2"}"></i>${station.riskLabel}`;
       badge.classList.toggle("risk", station.status === "forecast-risk");
@@ -3816,6 +4127,10 @@
     if (adviceValue) adviceValue.innerHTML = stationRecord
       ? `${stationRecord.energyAmount} <small>${stationRecord.energyUnit}</small>`
       : isFuelActive() ? "— <small>L</small>" : "— <small>kWh</small>";
+    const priceValue = byId("stationPriceValue");
+    if (priceValue) priceValue.innerHTML = Number.isFinite(Number(station.price))
+      ? `¥${Number(station.price).toFixed(2)} <small>/${station.priceUnit || (isFuelActive() ? "L" : "kWh")}</small>`
+      : "— <small>待确认</small>";
     requestForecast(station);
     refreshIcons();
     if (showPanel !== false) {
@@ -3918,7 +4233,6 @@
     setAiStatus("出发地未定位", "unresolved");
     setAiReply(message);
     setText("aiReplyMeta", "未生成路线");
-    setText("planHint", "请修改出发地后再次 AI 智能规划；未定位时不会改用默认起点。");
     showToast(message, 4600);
   }
 
@@ -3930,7 +4244,6 @@
     setAiStatus("目的地未定位", "unresolved");
     setAiReply(message);
     setText("aiReplyMeta", "未生成路线");
-    setText("planHint", "请修改目的地后再次 AI 智能规划；未定位时不会生成默认机场路线。");
     showToast(message, 4600);
   }
 
@@ -3944,10 +4257,7 @@
     readManualControls();
     state.hybridFailedBranches = new Set();
     state.aiActive = true;
-    const button = byId("planButton");
-    const label = button?.querySelector("span");
-    if (button) button.disabled = true;
-    if (label) label.textContent = "正在理解出行需求…";
+    setComposerSubmitting(true);
     setAiStatus("AI 正在理解", "loading");
     setAiReply("正在把你的自然语言要求拆解为路线约束……");
     try {
@@ -3964,6 +4274,10 @@
           priority: state.priority,
           maxDetourKm: state.maxDetourKm,
           services: state.aiContext?.services || [],
+          hasPlannedRoute: state.hasPlannedRoute,
+          currentOrigin: state.hasPlannedRoute ? state.originName : null,
+          currentDestination: state.hasPlannedRoute ? state.destinationName : null,
+          currentServices: state.hasPlannedRoute ? (state.aiContext?.services || []) : [],
           explicitDestination: options.explicitDestination || null,
           destinationLocation: options.destinationLocation || null
         }
@@ -3974,22 +4288,34 @@
         payload.destinationLocation = options.destinationLocation;
         parsed.destinationLocation = options.destinationLocation;
       }
+      const requestMode = resolveRequestMode(value, parsed);
+      state.lastRequestMode = requestMode;
+      const parsedForApply = requestMode === "supplement" && state.hasPlannedRoute
+        ? mergeSupplementIntent(parsed, payload, value)
+        : parsed;
+      const payloadForApply = requestMode === "supplement" && state.hasPlannedRoute
+        ? Object.assign({}, payload, {
+            destinationLocation: parsedForApply.destinationLocation,
+            originLocation: parsedForApply.originLocation
+          })
+        : payload;
       const candidates = payload.destinationCandidates || parsed.destinationCandidates || [];
       // Always pause for a short pick list when the backend flags ambiguity or
       // when several named candidates exist without an exact committed location.
-      const needsPick = payload.destinationNeedsPick === true
-        || ((!payload.destinationLocation && !options.destinationLocation) && Array.isArray(candidates) && candidates.length >= 2);
+      const needsPick = requestMode !== "supplement" && (
+        payload.destinationNeedsPick === true
+        || ((!payload.destinationLocation && !options.destinationLocation) && Array.isArray(candidates) && candidates.length >= 2)
+      );
       if (needsPick && Array.isArray(candidates) && candidates.length >= 2) {
         setPlanningVisibility(false);
         setAiStatus("请选择目的地", "unresolved");
         setAiReply(`“${parsed.destination || "该地点"}”找到 ${candidates.length} 个可能目的地，请点选一个继续规划。`);
         setText("aiReplyMeta", "目的地待确认");
-        setText("planHint", "地点不完全吻合时，请先从列表选择准确目的地。");
         showDestinationCandidates(candidates);
         showToast("请先选择一个目的地", 3200);
         return;
       }
-      const applied = applyParsedIntent(parsed, payload);
+      const applied = applyParsedIntent(parsedForApply, payloadForApply);
       if (!applied.ok) {
         if (applied.originUnresolved) {
           showUnresolvedOrigin(applied.origin);
@@ -4007,8 +4333,7 @@
         return;
       }
       clearDestinationCandidates();
-      setAiReply(payload.assistantReply || parsed.assistantReply || "已识别出行约束，正在计算真实路线和补能站。 ");
-      if (label) label.textContent = "正在比较路线与站点…";
+      setAiReply(payload.assistantReply || parsedForApply.assistantReply || "已识别出行约束，正在计算真实路线和补能站。 ");
       await recomputePlan({ manageButton: false, silent: true });
       setPlanningVisibility(true);
       // The backend reports *why* the model was skipped (quota / auth / timeout…).
@@ -4025,7 +4350,15 @@
       const parsed = localIntentFallback(value);
       if (options.explicitDestination) parsed.destination = options.explicitDestination;
       if (options.destinationLocation) parsed.destinationLocation = options.destinationLocation;
-      const applied = applyParsedIntent(parsed, options.destinationLocation ? { destinationLocation: options.destinationLocation } : {});
+      const requestMode = resolveRequestMode(value, parsed);
+      state.lastRequestMode = requestMode;
+      const parsedForApply = requestMode === "supplement" && state.hasPlannedRoute
+        ? mergeSupplementIntent(parsed, {}, value)
+        : parsed;
+      const payloadForApply = options.destinationLocation
+        ? { destinationLocation: options.destinationLocation }
+        : { destinationLocation: parsedForApply.destinationLocation, originLocation: parsedForApply.originLocation };
+      const applied = applyParsedIntent(parsedForApply, payloadForApply);
       if (!applied.ok) {
         if (applied.originUnresolved) showUnresolvedOrigin(applied.origin);
         else showUnresolvedDestination(applied.destination);
@@ -4033,7 +4366,6 @@
       }
       setAiStatus("本地降级", "fallback");
       setAiReply("模型连接暂时不可用，已按本地规则保留核心规划能力。");
-      if (label) label.textContent = "正在比较路线与站点…";
       await recomputePlan({ manageButton: false, silent: true });
       setPlanningVisibility(true);
       setAiReply(planningCompletionMessage());
@@ -4041,8 +4373,7 @@
       showToast("模型连接失败，已切换本地规则", 3600);
     } finally {
       state.aiActive = false;
-      if (button) button.disabled = false;
-      if (label) label.textContent = state.hasPlannedRoute ? "再次 AI 智能规划" : "开始 AI 智能规划";
+      setComposerSubmitting(false);
     }
   }
 
@@ -4222,7 +4553,7 @@
 
   function setText(id, value) {
     const element = byId(id);
-    if (element) element.textContent = value;
+    if (element) element.textContent = displayCopy(value);
   }
 
   function renderOperatorSimulation(payload) {
@@ -4672,13 +5003,7 @@
 
   async function recomputePlan(options = {}) {
     const manageButton = options.manageButton !== false;
-    const button = byId("planButton");
-    const label = button ? button.querySelector("span") : null;
-    if (button && manageButton) {
-      button.disabled = true;
-      if (label) label.textContent = "正在综合路线与站点…";
-      button.style.opacity = "0.78";
-    }
+    if (manageButton) setComposerSubmitting(true);
     state.routeSelectionTouched = false;
     state.selectedRoute = "reliable";
     state.multiStopRouteRecords = null;
@@ -4702,11 +5027,7 @@
         renderStationSummary();
         setMapStatus("高德路线服务未返回本次行程的可行路线，未生成方案", "error");
         setText("mapAttribution", "高德地图 · 路线不可用");
-        if (button && manageButton) {
-          button.disabled = false;
-          if (label) label.textContent = "重新尝试 AI 规划";
-          button.style.opacity = "1";
-        }
+        if (manageButton) setComposerSubmitting(false);
         showToast("未生成虚假路线：高德未返回本次行程的可行路线，请稍后重试", 4200);
         return;
       }
@@ -4728,11 +5049,7 @@
     }
     state.hasPlannedRoute = true;
     renderRouteCards();
-    if (button && manageButton) {
-      button.disabled = false;
-      if (label) label.textContent = state.hasPlannedRoute ? "再次 AI 智能规划" : "开始 AI 智能规划";
-      button.style.opacity = "1";
-    }
+    if (manageButton) setComposerSubmitting(false);
     if (!options.silent) showToast("补能方案已根据当前约束重新计算");
   }
 
@@ -4813,7 +5130,8 @@
   function begin() {
     refreshIcons();
     initDemoNotice();
-    initUpdateNotice();
+    initSettings();
+    setDisplayMode(readDisplayMode(), { persist: false });
     initFallback();
     setPlanningVisibility(false);
     fitIntentInput();
@@ -4852,14 +5170,15 @@
       state.manualDeadlineOverride = null;
       state.manualArrivalReserveOverride = null;
       fitIntentInput();
+      updateComposerActionLabel();
     });
     byId("voiceIntentButton")?.addEventListener("click", () => { toggleVoiceIntent(); });
+    byId("composerSubmitButton")?.addEventListener("click", parseIntent);
     byId("destinationCandidates")?.addEventListener("click", (event) => {
       const button = event.target.closest("[data-candidate-index]");
       if (!button) return;
       pickDestinationCandidate(button.dataset.candidateIndex);
     });
-    byId("planButton").addEventListener("click", parseIntent);
     $$('[data-energy-type]').forEach((button) => button.addEventListener("click", () => setEnergyType(button.dataset.energyType)));
     [byId("topEnergyPercentInput"), byId("departureTimeInput"), byId("deadlineInput"), byId("minArrivalSocInput")].filter(Boolean).forEach((input) => input.addEventListener("change", () => {
       readManualControls({ markArrivalOverrides: input.id === "deadlineInput" || input.id === "minArrivalSocInput" });
