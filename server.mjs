@@ -18,10 +18,13 @@ import {
   getFeishuSyncStatus,
   approveFeishuStrategy
 } from "./lib/feishu-bitable.mjs";
+import { createVersionChecker, loadVersionInfo, resolveVersionRoute } from "./lib/version.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const config = await loadConfig({ root });
 const port = config.port;
+const versionInfo = await loadVersionInfo({ root });
+const versionChecker = createVersionChecker({ localVersion: versionInfo });
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -476,6 +479,13 @@ createServer(async (request, response) => {
   try {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
     if (request.method === "OPTIONS") return json(response, 204, {});
+    const versionRoute = await resolveVersionRoute({
+      method: request.method,
+      pathname: requestUrl.pathname,
+      versionInfo,
+      checkVersion: () => versionChecker.check()
+    });
+    if (versionRoute) return json(response, versionRoute.status, versionRoute.body);
     if (requestUrl.pathname === "/api/health") return json(response, 200, {
       ok: true,
       service: "FlowTwin",
