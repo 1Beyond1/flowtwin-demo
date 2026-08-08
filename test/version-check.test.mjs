@@ -104,6 +104,153 @@ test("when there is no release, main commit is compared", async () => {
   assert.equal(result.updateAvailable, false);
   assert.equal(result.checkSource, "github-main");
   assert.equal(result.remoteCommit, localVersion.commit);
+  assert.equal(result.relation, "identical");
+  assert.equal(result.aheadBy, 0);
+  assert.equal(result.behindBy, 0);
+});
+
+function compareResponse({ status, baseSha, headSha, aheadBy, behindBy, htmlUrl = "https://github.com/1Beyond1/flowtwin-demo/compare" }) {
+  return githubResponse({
+    status,
+    ahead_by: aheadBy,
+    behind_by: behindBy,
+    base_commit: { sha: baseSha },
+    head_commit: { sha: headSha },
+    html_url: htmlUrl
+  });
+}
+
+test("without a release, a main commit ahead of local is reported as an available update", async () => {
+  const remoteCommit = "fedcba9876543210fedcba9876543210fedcba98";
+  const calls = [];
+  const result = await checkGitHubVersion({
+    localVersion,
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      if (calls.length === 1) return githubResponse(null, 404);
+      if (calls.length === 2) return githubResponse({ sha: remoteCommit, html_url: "https://github.com/1Beyond1/flowtwin-demo/commit/fedcba9" });
+      return compareResponse({ status: "ahead", baseSha: localVersion.commit, headSha: remoteCommit, aheadBy: 3, behindBy: 0 });
+    }
+  });
+  assert.equal(calls.length, 3);
+  assert.match(calls[2], /compare\/0123456789abcdef0123456789abcdef01234567\.\.\.main$/);
+  assert.equal(result.status, "update-available");
+  assert.equal(result.updateAvailable, true);
+  assert.equal(result.isLatest, false);
+  assert.equal(result.relation, "ahead");
+  assert.equal(result.aheadBy, 3);
+  assert.equal(result.behindBy, 0);
+});
+
+test("without a release, a local commit ahead of main is not reported as an update", async () => {
+  const remoteCommit = "fedcba9876543210fedcba9876543210fedcba98";
+  let calls = 0;
+  const result = await checkGitHubVersion({
+    localVersion,
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return githubResponse(null, 404);
+      if (calls === 2) return githubResponse({ sha: remoteCommit });
+      return compareResponse({ status: "behind", baseSha: localVersion.commit, headSha: remoteCommit, aheadBy: 0, behindBy: 2 });
+    }
+  });
+  assert.equal(result.status, "up-to-date");
+  assert.equal(result.updateAvailable, false);
+  assert.equal(result.isLatest, true);
+  assert.equal(result.relation, "behind");
+  assert.equal(result.aheadBy, 0);
+  assert.equal(result.behindBy, 2);
+});
+
+test("an identical compare result remains up to date", async () => {
+  const remoteCommit = "fedcba9876543210fedcba9876543210fedcba98";
+  let calls = 0;
+  const result = await checkGitHubVersion({
+    localVersion,
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return githubResponse(null, 404);
+      if (calls === 2) return githubResponse({ sha: remoteCommit });
+      return compareResponse({ status: "identical", baseSha: localVersion.commit, headSha: remoteCommit, aheadBy: 0, behindBy: 0 });
+    }
+  });
+  assert.equal(result.status, "up-to-date");
+  assert.equal(result.updateAvailable, false);
+  assert.equal(result.isLatest, true);
+  assert.equal(result.relation, "identical");
+});
+
+test("diverged history is unavailable instead of being reported as an update", async () => {
+  const remoteCommit = "fedcba9876543210fedcba9876543210fedcba98";
+  let calls = 0;
+  const result = await checkGitHubVersion({
+    localVersion,
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return githubResponse(null, 404);
+      if (calls === 2) return githubResponse({ sha: remoteCommit });
+      return compareResponse({ status: "diverged", baseSha: localVersion.commit, headSha: remoteCommit, aheadBy: 2, behindBy: 4 });
+    }
+  });
+  assert.equal(result.checked, false);
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.updateAvailable, null);
+  assert.equal(result.reason, "GITHUB_COMPARE_DIVERGED");
+});
+
+test("an unknown local commit is unavailable", async () => {
+  const remoteCommit = "fedcba9876543210fedcba9876543210fedcba98";
+  let calls = 0;
+  const result = await checkGitHubVersion({
+    localVersion,
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return githubResponse(null, 404);
+      if (calls === 2) return githubResponse({ sha: remoteCommit });
+      return githubResponse({ message: "Not Found" }, 404);
+    }
+  });
+  assert.equal(result.checked, false);
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.updateAvailable, null);
+  assert.equal(result.reason, "GITHUB_NOT_FOUND");
+});
+
+test("compare timeout and rate limit are unavailable", async () => {
+  const remoteCommit = "fedcba9876543210fedcba9876543210fedcba98";
+  for (const scenario of ["timeout", "rate-limit"]) {
+    let calls = 0;
+    const result = await checkGitHubVersion({
+      localVersion,
+      fetchImpl: async () => {
+        calls += 1;
+        if (calls === 1) return githubResponse(null, 404);
+        if (calls === 2) return githubResponse({ sha: remoteCommit });
+        if (scenario === "timeout") throw Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+        return githubResponse({ message: "API rate limit exceeded" }, 429);
+      }
+    });
+    assert.equal(result.checked, false);
+    assert.equal(result.status, "unavailable");
+    assert.equal(result.updateAvailable, null);
+    assert.equal(result.reason, scenario === "timeout" ? "GITHUB_TIMEOUT" : "GITHUB_RATE_LIMITED");
+  }
+});
+
+test("repository input cannot redirect the version check to an external URL", async () => {
+  let calls = 0;
+  const result = await checkGitHubVersion({
+    repo: "https://attacker.example/repo",
+    localVersion,
+    fetchImpl: async () => {
+      calls += 1;
+      return githubResponse(null, 200);
+    }
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.checked, false);
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.reason, "GITHUB_REPOSITORY_INVALID");
 });
 
 test("GitHub timeout degrades to unknown, never to an old-version result", async () => {
