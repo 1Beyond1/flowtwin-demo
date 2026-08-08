@@ -2571,6 +2571,45 @@
     return Math.max(state.maxDetourKm, Math.min(30, Math.max(intercityFloorKm, baseDistanceKm * 0.015)));
   }
 
+  // The forecast panel keeps a full 30--240 minute point series for every
+  // visible station. That is useful in the browser, but sending those series
+  // back to /api/longtrip can turn a national corridor request into hundreds
+  // of kilobytes and hit the server's request-size guard before the planner
+  // runs. The server regenerates the same deterministic forecast from these
+  // scalar inputs, so the planning request must carry the station geometry and
+  // model inputs only. In particular, do not drop progressKm/routeProgress or
+  // provisionalCorridor: the former orders the sequence and the latter keeps
+  // the explicit fallback boundary intact when the route is revalidated.
+  function compactLongTripStation(station = {}) {
+    const fields = [
+      "id", "name", "type", "location", "address", "source", "sourceLabel", "stationSource",
+      "progressKm", "routeProgress", "detourKm", "detour", "price", "wait", "p50", "p90",
+      "occupancy", "capacity", "arrivalRate", "serviceRate", "trend",
+      "estimatedChargePowerKw", "estimatedRefuelRateLpm", "arrivalOffsetMinutes", "arrivalMinute",
+      "arrivalAtMinutes", "provisionalCorridor", "serviceAreaCandidate"
+    ];
+    const compact = {};
+    fields.forEach((key) => {
+      const value = station[key];
+      if (value === undefined || value === null) return;
+      if (Array.isArray(value)) {
+        if (value.length <= 4 && value.every((item) => Number.isFinite(Number(item)))) compact[key] = value.map(Number);
+        return;
+      }
+      if (["id", "name", "type", "address", "source", "sourceLabel", "stationSource"].includes(key)) {
+        compact[key] = String(value).slice(0, 180);
+        return;
+      }
+      if (typeof value === "boolean") {
+        compact[key] = value;
+        return;
+      }
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) compact[key] = numeric;
+    });
+    return compact;
+  }
+
   // 界面上凡是要说"绕行上限是多少"的地方，都必须说这条路线真正被校验时用的那个
   // 数：城际行程放宽后仍然写 state.maxDetourKm，就是在用一个没生效的约束解释结果。
   function activeDetourLimitKm(record) {
@@ -2735,7 +2774,7 @@
     // POIs back in can repeatedly select an unverified urban station instead.
     const planningStations = stationsForActiveBranch(state.provisionalCorridorActive
       ? state.stations.filter((station) => station.provisionalCorridor)
-      : state.stations);
+      : state.stations).map(compactLongTripStation);
     try {
       const proposal = await postJson("/api/longtrip", {
         distanceKm: base.distance,
@@ -2756,8 +2795,20 @@
         useForecast: true
       }, 20000);
       return proposal;
-    } catch {
-      return null;
+    } catch (error) {
+      // Do not silently fall through to the old single-stop estimator when the
+      // multi-stop API itself was unavailable (for example a 413 caused by an
+      // accidentally oversized forecast payload). A single stop is not a
+      // safe substitute for a national trip and must never be presented as
+      // one.
+      state.multiStopPlanningMeta = {
+        candidatesConsidered: planningStations.length,
+        maxStops: 6,
+        reason: "PLANNER_UNAVAILABLE",
+        error: error?.message || "LONGTRIP_API_UNAVAILABLE",
+        failure: "多站规划服务暂时不可用，未把单站估算冒充为全程补能方案。请稍后重试。"
+      };
+      return { plans: [], candidatesConsidered: planningStations.length, maxStops: 6, reason: "PLANNER_UNAVAILABLE" };
     }
   }
 
