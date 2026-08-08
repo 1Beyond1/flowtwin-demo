@@ -168,7 +168,16 @@
     vehiclePlate: "京A·FT2026",
     paymentState: "authorized",
     paymentReceipt: null,
-    weather: null
+    weather: null,
+    // User-authored intermediate stops are kept separately from energy/service
+    // stops.  They are resolved by AMap and merged into every subsequent road
+    // segment request; the language model never supplies route geometry.
+    tripWaypoints: [],
+    actionJournal: [],
+    lastAction: null,
+    lastActionSummary: "",
+    stationForecastRequestVersion: 0,
+    stationForecastScenarioKey: null
   };
 
   // The first-run example intentionally leaves arrival time and reserve open.
@@ -811,7 +820,7 @@
   }
 
   function hasSupplementCue(value) {
-    return /中途|途中|路上|顺便|另外|还想|再加|补充|加上|吃饭|吃点|吃个|用餐|午饭|午餐|晚饭|晚餐|早餐|餐厅|咖啡|休息|洗车|加油|充电|补能|少走|不走|尽量|再安排/.test(String(value || ""));
+    return /中途|途中|路上|顺便|另外|还想|再加|补充|加上|吃饭|吃点|吃个|用餐|午饭|午餐|晚饭|晚餐|早餐|餐厅|咖啡|休息|洗车|加油|充电|补能|少走|不走|尽量|再安排|最晚|截止|到达[^%]{0,20}\d+\s*%|保留[^%]{0,12}\d+\s*%|绕行[^\d]{0,4}\d+|纯电|燃油|油车|混动|插混|便宜|省钱|最快|准时/.test(String(value || ""));
   }
 
   function hasExplicitNewTripCue(value) {
@@ -909,6 +918,237 @@
     };
   }
 
+  const ACTION_SERVICE_LABELS = {
+    餐饮: "餐饮",
+    洗车: "洗车",
+    休息: "休息",
+    补能: "补能"
+  };
+
+  function actionServiceLabel(action) {
+    const value = String(action?.service || action?.target || "").trim();
+    if (ACTION_SERVICE_LABELS[value]) return ACTION_SERVICE_LABELS[value];
+    if (/餐|饭|吃|咖啡|喝/.test(value)) return "餐饮";
+    if (/洗车/.test(value)) return "洗车";
+    if (/休息|卫生间/.test(value)) return "休息";
+    if (/充电|加油|补能/.test(value)) return "补能";
+    return null;
+  }
+
+  function actionSummary(action) {
+    if (!action) return "";
+    if (action.type === "ADD_SERVICE") return `补充${action.name || actionServiceLabel(action) || "服务停靠"}`;
+    if (action.type === "ADD_WAYPOINT") return `补充途经${action.location}`;
+    if (action.type === "REMOVE_STOP") return `移除${action.name || action.target || "停靠点"}`;
+    if (action.type === "CHANGE_DESTINATION") return `修改目的地为${action.destination}`;
+    if (action.type === "NEW_TRIP") return `开始前往${action.destination}的新行程`;
+    if (action.type === "UPDATE_CONSTRAINT") {
+      const labels = { arrivalDeadline: "到达时间", minArrivalSoc: "到达余量", maxDetourKm: "绕行上限", energyType: "动力类型", priority: "路线偏好" };
+      return `修改${labels[action.constraint] || "行程条件"}`;
+    }
+    return "补充行程条件";
+  }
+
+  function actionModeLabel(actions, requestMode = state.lastRequestMode) {
+    const list = Array.isArray(actions) ? actions : [];
+    if (list.some((action) => action.type === "NEW_TRIP" || action.type === "CHANGE_DESTINATION")) return "开始新行程";
+    if (list.some((action) => action.type === "UPDATE_CONSTRAINT")) return "修改行程约束";
+    if (list.length || requestMode === "supplement") return "补充行程";
+    return "开始规划";
+  }
+
+  function recordActionJournal(actions, outcome = {}) {
+    const list = Array.isArray(actions) ? actions.filter(Boolean) : [];
+    if (!list.length && !outcome.summary) {
+      state.lastAction = null;
+      state.lastActionSummary = "";
+      return;
+    }
+    const entries = list.map((action) => ({
+      type: action.type,
+      summary: actionSummary(action),
+      status: outcome.failed?.includes(action) ? "failed" : "applied"
+    }));
+    state.actionJournal = state.actionJournal.concat(entries.map((entry) => Object.assign(entry, { at: new Date().toISOString() }))).slice(-12);
+    state.lastAction = list.at(-1) || null;
+    state.lastActionSummary = outcome.summary || entries.map((entry) => entry.summary).join("；");
+  }
+
+  function clearSupplementalStopsForNewTrip() {
+    state.tripWaypoints = [];
+    state.activeServicePlan = null;
+    state.selectedService = null;
+    state.serviceSuggestion = null;
+    state.serviceRouteOverrides = {};
+    state.serviceSuggestionDismissed = new Set();
+    state.aiContext = null;
+    state.weather = null;
+    // Deadline, arrival reserve and detour caps belong to the previous trip
+    // unless the new request states them again.  The vehicle's current clock
+    // and energy remain global top-bar state; trip-specific hard constraints do
+    // not silently leak into a new destination.
+    state.deadlineEnabled = false;
+    state.arrivalReserveEnabled = false;
+    state.manualDeadlineOverride = null;
+    state.manualArrivalReserveOverride = null;
+    state.detourExplicit = false;
+    state.maxDetourKm = 8;
+    state.stationForecastScenarioKey = null;
+    state.stationForecastRequestVersion += 1;
+    syncManualControls();
+  }
+
+  function geocodeWaypoint(query) {
+    const text = String(query || "").trim();
+    if (!text || !state.AMap?.Geocoder) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const geocoder = new state.AMap.Geocoder({ city: "全国" });
+      geocoder.getLocation(text, (status, result) => {
+        const geocodes = status === "complete" && Array.isArray(result?.geocodes) ? result.geocodes : [];
+        const match = geocodes.find((item) => parseLocation(item.location));
+        if (!match) return resolve(null);
+        resolve({
+          name: text,
+          address: match.formattedAddress || match.address || text,
+          location: parseLocation(match.location),
+          source: "高德地理编码"
+        });
+      });
+    });
+  }
+
+  async function addTripWaypoint(action) {
+    const query = String(action?.location || "").trim();
+    if (!query) return { ok: false, message: "途经点名称为空" };
+    const existing = state.tripWaypoints.filter((waypoint) => waypoint.name === query || waypoint.address?.includes(query));
+    if (existing.length) return { ok: true, waypoint: existing[0], duplicate: true };
+    const resolved = await geocodeWaypoint(query);
+    if (!resolved) return { ok: false, message: `未能定位途经点“${query}”，没有加入行程` };
+    const waypoint = Object.assign(resolved, {
+      id: `waypoint-${stableHash(`${query}-${resolved.location.join(",")}`)}`,
+      kind: "waypoint",
+      userOrder: state.tripWaypoints.length
+    });
+    state.tripWaypoints.push(waypoint);
+    return { ok: true, waypoint };
+  }
+
+  function removeStopAction(action) {
+    const target = String(action?.target || "").trim();
+    const requestedName = String(action?.name || "").trim();
+    const serviceLabel = actionServiceLabel(action);
+    const active = state.activeServicePlan;
+    const activeLabel = active?.serviceLabel || (active?.serviceType === "meal" || active?.serviceType === "coffee" ? "餐饮" : active?.serviceType === "rest" ? "休息" : null);
+    const nameMatches = !requestedName || !active?.name || active.name.includes(requestedName) || requestedName.includes(active.name);
+    if (active && ((serviceLabel && activeLabel === serviceLabel) || (target && active.name?.includes(target)) || (requestedName && nameMatches))) {
+      state.activeServicePlan = null;
+      state.selectedService = null;
+      state.serviceRouteOverrides = {};
+      if (state.aiContext) state.aiContext.services = (state.aiContext.services || []).filter((item) => item !== serviceLabel);
+      return { ok: true, message: `已移除${active.name}` };
+    }
+    if (serviceLabel) {
+      const services = Array.isArray(state.aiContext?.services) ? state.aiContext.services : [];
+      if (services.includes(serviceLabel)) {
+        state.aiContext.services = services.filter((item) => item !== serviceLabel);
+        return { ok: true, message: `已取消${serviceLabel}服务要求` };
+      }
+      return { ok: false, message: `当前行程没有已加入的${serviceLabel}停靠` };
+    }
+    const candidates = state.tripWaypoints.filter((waypoint) => {
+      const haystack = `${waypoint.name || ""} ${waypoint.address || ""}`;
+      return haystack.includes(target) || target.includes(waypoint.name || "__missing__");
+    });
+    if (candidates.length > 1) return { ok: false, message: `“${target}”对应多个途经点，未自动删除` };
+    if (candidates.length === 1) {
+      state.tripWaypoints = state.tripWaypoints.filter((waypoint) => waypoint.id !== candidates[0].id);
+      state.tripWaypoints.forEach((waypoint, index) => { waypoint.userOrder = index; });
+      return { ok: true, message: `已移除途经${candidates[0].name}` };
+    }
+    return { ok: false, message: `没有找到可移除的停靠点“${target}”` };
+  }
+
+  function applyConstraintActions(actions) {
+    const failures = [];
+    (actions || []).filter((action) => action.type === "UPDATE_CONSTRAINT").forEach((action) => {
+      const value = action.value;
+      if (action.constraint === "arrivalDeadline") {
+        const minutes = clockToMinutes(value, Number.NaN);
+        if (!Number.isFinite(minutes)) return failures.push({ action, message: "到达时间格式无法识别" });
+        state.deadlineMinutes = minutes;
+        state.deadlineEnabled = true;
+        state.manualDeadlineOverride = true;
+      } else if (action.constraint === "minArrivalSoc") {
+        const reserve = Number(value);
+        if (!Number.isFinite(reserve)) return failures.push({ action, message: "到达余量格式无法识别" });
+        state.minArrivalSoc = Math.max(5, Math.min(100, reserve));
+        state.arrivalReserveEnabled = true;
+        state.manualArrivalReserveOverride = true;
+      } else if (action.constraint === "maxDetourKm") {
+        const detour = Number(value);
+        if (!Number.isFinite(detour)) return failures.push({ action, message: "绕行上限格式无法识别" });
+        state.maxDetourKm = Math.max(0, Math.min(50, detour));
+        state.detourExplicit = true;
+      } else if (action.constraint === "energyType" && ENERGY_TYPES.includes(action.value)) {
+        adoptEnergyType(action.value);
+      } else if (action.constraint === "priority" && action.value) {
+        state.priority = action.value;
+      }
+    });
+    syncManualControls();
+    updateEnergyControls();
+    return failures;
+  }
+
+  async function applyPreRouteActions(actions) {
+    const applied = [];
+    const failed = [];
+    for (const action of Array.isArray(actions) ? actions : []) {
+      if (action.type === "ADD_WAYPOINT") {
+        const result = await addTripWaypoint(action);
+        (result.ok ? applied : failed).push(action);
+        if (!result.ok) showToast(result.message, 3600);
+      } else if (action.type === "REMOVE_STOP") {
+        const result = removeStopAction(action);
+        (result.ok ? applied : failed).push(action);
+        if (!result.ok) showToast(result.message, 3600);
+      }
+    }
+    const constraintFailures = applyConstraintActions(actions);
+    constraintFailures.forEach(({ action, message }) => {
+      failed.push(action);
+      showToast(message, 3000);
+    });
+    return { applied, failed };
+  }
+
+  function inferLocalActions(value, parsed = {}) {
+    const text = String(value || "");
+    if (Array.isArray(parsed.actions) && parsed.actions.length) return parsed.actions;
+    const actions = [];
+    const serviceName = (text.match(/(?:吃|喝|去|找|到)\s*(麦当劳|肯德基|星巴克|瑞幸|汉堡王|必胜客|海底捞|老乡鸡|德克士|喜茶|奈雪|全家|便利蜂)/) || [])[1];
+    if (/(中途|途中|路上|顺便|另外|还想|再加|补充|加上)/.test(text) && /(吃|饭|餐|咖啡|休息|洗车)/.test(text)) {
+      actions.push({ type: "ADD_SERVICE", service: /咖啡/.test(text) ? "餐饮" : /休息/.test(text) ? "休息" : /洗车/.test(text) ? "洗车" : "餐饮", ...(serviceName ? { name: serviceName } : {}) });
+    }
+    const waypoint = text.match(/(?:途经|经过|路过)\s*([^，,。；;\s]{2,24})/);
+    if (waypoint) actions.push({ type: "ADD_WAYPOINT", location: waypoint[1] });
+    if (/(取消|不要|移除|删掉).*(餐饮|吃饭|咖啡|休息|洗车)/.test(text)) actions.push({ type: "REMOVE_STOP", target: /洗车/.test(text) ? "洗车" : /休息/.test(text) ? "休息" : "餐饮" });
+    const deadlineMatch = text.match(/(\d{1,2})\s*[:：]\s*(\d{2})\s*(?:前|之前|到达|截止)/);
+    if (deadlineMatch) actions.push({ type: "UPDATE_CONSTRAINT", constraint: "arrivalDeadline", value: `${String(Number(deadlineMatch[1])).padStart(2, "0")}:${deadlineMatch[2]}` });
+    const reserveMatch = text.match(/(?:到达|抵达|终点|最后)[^%]{0,50}?(?:至少|要有|保持|保留|不低于|大于|超过|以上|剩余)[^%]{0,12}?(\d{1,3})\s*%/i);
+    if (reserveMatch) actions.push({ type: "UPDATE_CONSTRAINT", constraint: "minArrivalSoc", value: Number(reserveMatch[1]) });
+    const detourMatch = text.match(/(?:最多|不超过|不超|允许)[^\d]{0,5}(\d+(?:\.\d+)?)\s*(?:公里|千米|km|KM)/);
+    if (detourMatch) actions.push({ type: "UPDATE_CONSTRAINT", constraint: "maxDetourKm", value: Number(detourMatch[1]) });
+    if (/混动|插混|混合动力|油电/.test(text)) actions.push({ type: "UPDATE_CONSTRAINT", constraint: "energyType", value: "hybrid" });
+    else if (/加油|燃油|油车/.test(text)) actions.push({ type: "UPDATE_CONSTRAINT", constraint: "energyType", value: "fuel" });
+    else if (/纯电|纯电动|电车|充电/.test(text)) actions.push({ type: "UPDATE_CONSTRAINT", constraint: "energyType", value: "electric" });
+    if (/便宜|省钱|低成本/.test(text)) actions.push({ type: "UPDATE_CONSTRAINT", constraint: "priority", value: "cost" });
+    else if (/最快|尽快/.test(text)) actions.push({ type: "UPDATE_CONSTRAINT", constraint: "priority", value: "time" });
+    else if (/准时|不能迟到|不想迟到/.test(text)) actions.push({ type: "UPDATE_CONSTRAINT", constraint: "priority", value: "reliable" });
+    if (!state.hasPlannedRoute && parsed.destination) actions.push({ type: "NEW_TRIP", destination: parsed.destination });
+    return actions;
+  }
+
   function clockToMinutes(value, fallback) {
     const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
     return match ? Number(match[1]) * 60 + Number(match[2]) : fallback;
@@ -927,6 +1167,46 @@
     const row = byId("parsedRow");
     if (row) row.innerHTML = chips.map((chip) => `<span class="parsed-chip"></span>`).join("");
     if (row) Array.from(row.children).forEach((child, index) => { child.textContent = chips[index]; });
+  }
+
+  // The current backend returns an arrival-time `prediction`. Older local
+  // processes may still return only `forecast[]`; selecting the point here
+  // keeps the front end on one ETA-based wait value while that process is
+  // being restarted, without treating the fallback as live data.
+  function selectForecastPointForArrival(entry, offsetMinutes) {
+    const points = Array.isArray(entry?.forecast)
+      ? entry.forecast.map((point, index) => Object.assign({}, point, { minute: Number(point?.minute ?? index * 5) }))
+        .filter((point) => Number.isFinite(point.minute))
+        .sort((a, b) => a.minute - b.minute)
+      : [];
+    if (!points.length) return null;
+    const requested = Math.max(0, Number(offsetMinutes) || 0);
+    const exact = points.find((point) => Math.abs(point.minute - requested) < 1e-9);
+    if (exact) return exact;
+    if (requested <= points[0].minute) return Object.assign({}, points[0], { requestedOffsetMinutes: requested });
+    if (requested >= points.at(-1).minute) return Object.assign({}, points.at(-1), { requestedOffsetMinutes: requested });
+    const rightIndex = points.findIndex((point) => point.minute >= requested);
+    const left = points[Math.max(0, rightIndex - 1)];
+    const right = points[rightIndex];
+    const ratio = (requested - left.minute) / Math.max(0.0001, right.minute - left.minute);
+    const interpolate = (key) => {
+      const leftValue = Number(left[key]);
+      const rightValue = Number(right[key]);
+      return Number.isFinite(leftValue) && Number.isFinite(rightValue)
+        ? Number((leftValue + (rightValue - leftValue) * ratio).toFixed(3))
+        : left[key] ?? right[key];
+    };
+    return Object.assign({}, left, {
+      minute: requested,
+      requestedOffsetMinutes: requested,
+      occupancy: interpolate("occupancy"),
+      wait: interpolate("wait"),
+      p50: interpolate("p50"),
+      p90: interpolate("p90"),
+      arrivalRate: interpolate("arrivalRate"),
+      serviceRate: interpolate("serviceRate"),
+      risk: ratio < 0.5 ? left.risk : right.risk
+    });
   }
 
   function renderForecast(station, payload) {
@@ -953,11 +1233,11 @@
       return `<circle class="forecast-point" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3"><title>${displayCopy(`+${points[index].minute || 0} 分钟 · P90 ${value.toFixed(1)} 分钟`)}</title></circle>`;
     }).join("");
     const status = byId("forecastStatus");
-    if (status) status.textContent = `模型预测 · ${points.length * 5 - 5} 分钟`;
+    if (status) status.textContent = `${entry.simulation || entry.forecastSource === "simulation" ? "仿真预测" : "演示预测"} · ${entry.horizonMinutes || points.length * 5 - 5} 分钟`;
     const meta = byId("forecastMeta");
     if (meta) {
       const text = meta.querySelector("span") || meta;
-      text.textContent = `${entry.model || payload?.model || "可解释队列近似"} · ${entry.explanation || "基于当前负载和到达/服务率估计"}`;
+      text.textContent = `${entry.explanation || payload?.model || "可解释队列近似"}${entry.asOf ? ` · ${entry.asOf}` : ""}`;
     }
   }
 
@@ -1011,6 +1291,10 @@
     const requestId = ++state.forecastRequestVersion;
     const status = byId("forecastStatus");
     if (status) status.textContent = "正在计算…";
+    if (Array.isArray(station.forecast) && station.forecast.length) {
+      renderForecast(station, station);
+      return;
+    }
     try {
       const payload = await postJson("/api/forecast", {
         stations: [station],
@@ -1023,6 +1307,107 @@
       if (requestId === state.forecastRequestVersion && state.selectedStation?.id === station.id) renderForecast(station, payload);
     } catch (error) {
       if (status) status.textContent = "本地演示预测";
+    }
+  }
+
+  function plannerDeadlineOffset() {
+    if (!state.deadlineEnabled) return undefined;
+    const difference = Number(state.deadlineMinutes) - Number(state.departureMinutes);
+    return Math.max(0, difference < 0 ? difference + 24 * 60 : difference);
+  }
+
+  function forecastScenarioKey(baseRoute) {
+    return [
+      state.departureMinutes,
+      state.energyType,
+      state.hybridBranch,
+      state.destination?.join(","),
+      Number(baseRoute?.distance || 0).toFixed(1),
+      Number(state.weather?.weatherFactor || 1).toFixed(2)
+    ].join("|");
+  }
+
+  async function ensureStationForecasts(baseRoute) {
+    const stations = Array.isArray(state.stations) ? state.stations : [];
+    if (!stations.length || !baseRoute) return null;
+    const scenarioKey = forecastScenarioKey(baseRoute);
+    if (state.stationForecastScenarioKey === scenarioKey && stations.every((station) => Array.isArray(station.forecast) && station.forecast.length)) return null;
+    const requestId = ++state.stationForecastRequestVersion;
+    const duration = Math.max(30, Number(baseRoute.duration || 30));
+    const horizonMinutes = Math.min(240, Math.max(30, Math.ceil(duration / 5) * 5));
+    const inputStations = stations.map((station) => Object.assign({}, station, {
+      stationSource: station.source,
+      arrivalOffsetMinutes: Math.max(0, Number.isFinite(Number(station.routeProgress))
+        ? Number(station.routeProgress) * Number(baseRoute.duration || 0)
+        : 0)
+    }));
+    try {
+      const payload = await postJson("/api/forecast", {
+        stations: inputStations,
+        scenario: {
+          departureMinutes: state.departureMinutes,
+          weatherFactor: Number(state.weather?.weatherFactor) || 1,
+          // No front-end demand or traffic feed is configured yet. Explicit 1
+          // means “neutral simulation factor”, not invented live traffic data.
+          trafficFactor: 1,
+          demandFactor: 1,
+          horizonMinutes,
+          intervalMinutes: 5
+        }
+      }, 30000);
+      if (requestId !== state.stationForecastRequestVersion) return null;
+      const forecastById = new Map((payload.stations || []).map((entry) => [String(entry.id), entry]));
+      state.stations = stations.map((station) => {
+        const entry = forecastById.get(String(station.id));
+        if (!entry) return station;
+        const arrivalOffsetMinutes = Number.isFinite(Number(entry.arrivalOffsetMinutes))
+          ? Number(entry.arrivalOffsetMinutes)
+          : Math.max(0, Number(station.routeProgress || 0) * duration);
+        const prediction = (entry.prediction && Object.keys(entry.prediction).length)
+          ? entry.prediction
+          : (entry.arrivalForecast && Object.keys(entry.arrivalForecast).length)
+            ? entry.arrivalForecast
+            : selectForecastPointForArrival(entry, arrivalOffsetMinutes) || {};
+        const p50 = Number(prediction.p50 ?? entry.p50 ?? station.p50);
+        const p90 = Number(prediction.p90 ?? entry.p90 ?? station.p90);
+        const wait = Number(prediction.wait ?? entry.wait ?? station.wait);
+        const risk = prediction.risk || entry.baseline?.risk || (p90 >= 20 ? "forecast-risk" : "forecast-ready");
+        return Object.assign({}, station, {
+          stationSource: station.source,
+          forecast: entry.forecast,
+          prediction,
+          arrivalForecast: prediction,
+          arrivalOffsetMinutes,
+          arrivalMinute: Number.isFinite(Number(entry.arrivalMinute)) ? Number(entry.arrivalMinute) : state.departureMinutes + arrivalOffsetMinutes,
+          wait: Number.isFinite(wait) ? wait : station.wait,
+          p50: Number.isFinite(p50) ? p50 : station.p50,
+          p90: Number.isFinite(p90) ? p90 : station.p90,
+          forecastSource: entry.source || payload.source || "simulation",
+          forecastAsOf: entry.asOf || payload.asOf || null,
+          forecastConfidence: entry.confidence || payload.confidence || "simulation-only",
+          forecastHorizonMinutes: entry.horizonMinutes || payload.horizonMinutes || horizonMinutes,
+          forecastSimulation: entry.simulation === true || payload.simulation === true || entry.source === "simulation" || payload.source === "simulation",
+          status: risk,
+          riskLabel: risk === "forecast-risk" ? "预测风险" : "预测可用"
+        });
+      });
+      state.stationForecastScenarioKey = scenarioKey;
+      if (state.operatorOriginalStations.length) {
+        state.operatorOriginalStations = state.stations.map((station) => Object.assign({}, station));
+        state.operatorBefore = computeOperatorSnapshot(state.stations);
+        renderOperatorMetrics(state.operatorBefore, false);
+        populateOperatorTargetSelect();
+      }
+      if (state.selectedStation) {
+        state.selectedStation = state.stations.find((station) => station.id === state.selectedStation.id) || state.selectedStation;
+        selectStation(state.selectedStation, false);
+      }
+      highlightSelectedStation();
+      return payload;
+    } catch {
+      // Forecast is an enrichment layer. Existing deterministic station fields
+      // remain usable, and the UI continues to label them as demonstration data.
+      return null;
     }
   }
 
@@ -1452,7 +1837,10 @@
       name: displayName,
       address: rawAddress || poi.name || "沿线补能站点",
       location,
-      type: type === "fuel" ? "加油站" : "充电站",
+       // Energy POIs use the Chinese network labels; service searches retain
+       // their semantic type so an explicit “麦当劳/咖啡/休息” action can be
+       // matched and ranked without confusing a restaurant with a charger.
+       type: type === "fuel" ? "加油站" : type === "electric" || serviceArea ? "充电站" : type,
       tel: poi.tel || "",
       distance: Number(poi.distance) || null,
       serviceAreaCandidate: serviceArea,
@@ -1659,6 +2047,7 @@
 
   function queryDriving(key, policy, station) {
     if (station?.location) return queryServerRoute(key, station);
+    if (state.tripWaypoints.length) return queryRouteSequence(key, [], { includeTripWaypoints: true });
     return new Promise((resolve) => {
       if (!state.AMap) return resolve(null);
       const driving = new state.AMap.Driving({ policy, ferry: 1, map: null, panel: false });
@@ -1842,6 +2231,8 @@
   async function queryStations() {
     if (!state.AMap) return;
     state.provisionalCorridorActive = false;
+    state.stationForecastScenarioKey = null;
+    state.stationForecastRequestVersion += 1;
     const route = corridorReferenceRoute();
     const path = route.path;
     const centers = stationSearchCenters(path, route.distance);
@@ -1981,21 +2372,6 @@
     return sorted[0] || null;
   }
 
-  function chooseDistinctStations() {
-    const selected = {};
-    const used = new Set();
-    ["fastest", "reliable"].forEach((key) => {
-      const station = chooseStationForRouteExcluding(key, used);
-      if (station) {
-        selected[key] = station;
-        used.add(station.id);
-      }
-    });
-    const cheapest = chooseStationForRouteExcluding("cheapest", new Set());
-    if (cheapest) selected.cheapest = cheapest;
-    return selected;
-  }
-
   async function queryServerLeg(key, origin, destination) {
     const params = new URLSearchParams({
       origin: formatRouteCoordinate(origin),
@@ -2016,8 +2392,55 @@
     }
   }
 
-  async function queryRouteSequence(key, stops) {
-    const locations = [state.origin].concat(stops.map((station) => station.location), [state.destination]);
+  function routeStopsWithTripWaypoints(stops = [], includeTripWaypoints = true) {
+    const baseStops = (Array.isArray(stops) ? stops : []).map((stop, index) => Object.assign({}, stop, {
+      routeProgress: Number.isFinite(Number(stop?.routeProgress))
+        ? Number(stop.routeProgress)
+        : routeProgress(stop.location, corridorReferenceRoute().path),
+      _routeOrder: index
+    }));
+    if (!includeTripWaypoints || !state.tripWaypoints.length) {
+      return baseStops.sort((a, b) => a.routeProgress - b.routeProgress || a._routeOrder - b._routeOrder);
+    }
+    const waypoints = state.tripWaypoints.map((waypoint, index) => Object.assign({}, waypoint, {
+      kind: "waypoint",
+      userOrder: Number.isFinite(Number(waypoint.userOrder)) ? Number(waypoint.userOrder) : index,
+      routeProgress: routeProgress(waypoint.location, corridorReferenceRoute().path),
+      _routeOrder: -1000 + index
+    }));
+    return baseStops.concat(waypoints).sort((a, b) => {
+      if (a.kind === "waypoint" && b.kind === "waypoint") return a.userOrder - b.userOrder;
+      return a.routeProgress - b.routeProgress || a._routeOrder - b._routeOrder;
+    });
+  }
+
+  // A policy can return the same physical road corridor as another policy. Keep
+  // a stable identity for that corridor so objective labels can overlap instead
+  // of inventing a second route only to make the cards look different.
+  function routeIdentity(route, stops = []) {
+    const path = Array.isArray(route?.path) ? route.path : [];
+    const sample = [path[0], path[Math.floor(path.length / 2)], path.at(-1)]
+      .map((point) => {
+        const parsed = parseLocation(point);
+        return parsed ? `${Number(parsed[0]).toFixed(4)},${Number(parsed[1]).toFixed(4)}` : "";
+      })
+      .join("|");
+    const stopList = Array.isArray(stops) && stops.length ? stops : (route?.waypoints || []);
+    const stopIdentity = stopList
+      .map((stop) => stop?.id || `${Number(stop?.location?.[0]).toFixed(4)},${Number(stop?.location?.[1]).toFixed(4)}`)
+      .join(",");
+    return [
+      Number(route?.distance || 0).toFixed(1),
+      Number(route?.duration || 0).toFixed(1),
+      Number(route?.tolls || 0).toFixed(1),
+      sample,
+      stopIdentity
+    ].join(";");
+  }
+
+  async function queryRouteSequence(key, stops, options = {}) {
+    const routeStops = routeStopsWithTripWaypoints(stops, options.includeTripWaypoints !== false);
+    const locations = [state.origin].concat(routeStops.map((station) => station.location), [state.destination]);
     // Keep a small amount of concurrency instead of sending every long-trip
     // leg at once. This avoids transient route-service throttling while still
     // keeping multi-stop planning responsive.
@@ -2036,6 +2459,8 @@
       key,
       path,
       legs,
+      waypoints: routeStops,
+      viaWaypoints: routeStops.filter((stop) => stop.kind === "waypoint"),
       distance: legs.reduce((sum, leg) => sum + Number(leg.distance || 0), 0),
       duration: legs.reduce((sum, leg) => sum + Number(leg.duration || 0), 0),
       tolls: legs.reduce((sum, leg) => sum + Number(leg.tolls || 0), 0),
@@ -2087,10 +2512,6 @@
     const targetArrivalSoc = effectiveArrivalReserveSoc(profile);
     const targetEnergy = profile.capacity * targetArrivalSoc / 100;
     const safetyEnergy = profile.capacity * profile.safetyReservePercent / 100;
-    // The reliable option uses a simulated slot-reservation / staggered-arrival
-    // policy. It trades a small coordination overhead for a lower P90 queue
-    // risk; the current route may still share the same safe road corridor.
-    const reservationMinutesPerStop = key === "reliable" ? 4 : 0;
     const legs = route.legs || [];
     if (legs.length !== waypoints.length + 1) return null;
     let energy = profile.capacity * state.energyPercent / 100;
@@ -2110,9 +2531,12 @@
         elapsedMinutes += Math.max(0, Number(waypoint.durationMinutes || 0));
         continue;
       }
+      if (waypoint.kind === "waypoint") continue;
+      const energyWaypoint = waypoint.kind === "energy" || !waypoint.kind;
+      if (!energyWaypoint) continue;
       const station = waypoint;
       const canReachStation = energy >= safetyEnergy - 1e-6;
-      const nextEnergyIndex = waypoints.findIndex((candidate, candidateIndex) => candidateIndex > index && candidate.kind !== "service");
+      const nextEnergyIndex = waypoints.findIndex((candidate, candidateIndex) => candidateIndex > index && (candidate.kind === "energy" || !candidate.kind));
       const endLegIndex = nextEnergyIndex < 0 ? legs.length : nextEnergyIndex + 1;
       const travelToNextEnergyOrDestination = legs.slice(index + 1, endLegIndex).reduce((sum, leg) => sum + Number(leg.distance || 0), 0);
       const neededAfterStop = travelToNextEnergyOrDestination * profile.consumptionPerKm + (nextEnergyIndex < 0 ? targetEnergy : safetyEnergy);
@@ -2122,7 +2546,7 @@
       // When the current station is cheaper than every downstream stop, buy
       // more here (within capacity) and avoid the later, higher simulated
       // price. This is the energy-side part of the lowest-cost strategy.
-      const laterEnergyStops = waypoints.slice(index + 1).filter((candidate) => candidate.kind !== "service");
+      const laterEnergyStops = waypoints.slice(index + 1).filter((candidate) => candidate.kind === "energy" || !candidate.kind);
       const currentPrice = Math.max(0, Number(station.price || 0));
       const laterLowestPrice = Math.min(...laterEnergyStops.map((candidate) => Math.max(0, Number(candidate.price || 0))), Infinity);
       if (key === "cheapest" && laterEnergyStops.length && currentPrice > 0 && currentPrice < laterLowestPrice) {
@@ -2136,8 +2560,8 @@
       chargeMinutes += stationChargeMinutes;
       const rawP50 = Math.max(0, Number(station.p50 || station.wait || 0));
       const rawP90 = Math.max(0, Number(station.p90 || station.wait || 0));
-      const plannedP50 = key === "reliable" ? rawP50 * 0.68 : rawP50;
-      const plannedP90 = key === "reliable" ? rawP90 * 0.58 : rawP90;
+      const plannedP50 = rawP50;
+      const plannedP90 = rawP90;
       p50Wait += plannedP50;
       // 分位数不可加。各站 P90 直接相加，等于假定这一路每个补能点都同时踩中
       // 各自最差的那 10%——四站独立发生的概率是万分之一，而卡片上印的
@@ -2147,7 +2571,7 @@
       waitVariance += sigma * sigma;
       energyCost += amount * Math.max(0, Number(station.price || 0));
       stops.push(Object.assign({}, station, {
-        sequence: index + 1,
+        sequence: stops.length + 1,
         legDistanceKm: Number(legDistance.toFixed(1)),
         arrivalSoc: Number(arrivalSoc.toFixed(1)),
         targetSoc: Number((energy / profile.capacity * 100).toFixed(1)),
@@ -2160,7 +2584,7 @@
         plannedP50: Number(plannedP50.toFixed(1)),
         plannedP90: Number(plannedP90.toFixed(1))
       }));
-      elapsedMinutes += plannedP50 + stationChargeMinutes + reservationMinutesPerStop;
+      elapsedMinutes += plannedP50 + stationChargeMinutes;
       if (!canReachStation || !targetMetAtStop) break;
     }
     const p90Wait = p50Wait + Z90 * Math.sqrt(waitVariance);
@@ -2170,7 +2594,7 @@
     const detour = Math.max(0, Number(route.distance || 0) - Number(baseRoute?.distance || 0));
     const detourLimitKm = effectiveLongTripDetourLimit(baseRoute);
     const detourWithinLimit = detour <= detourLimitKm + 1e-6;
-    const energyWaypointCount = waypoints.filter((waypoint) => waypoint.kind !== "service").length;
+    const energyWaypointCount = waypoints.filter((waypoint) => waypoint.kind === "energy" || !waypoint.kind).length;
     const canReachAllStops = stops.length === energyWaypointCount && stops.every((stop) => stop.canReachStation && stop.targetMetAtStop);
     const targetSocMet = energy >= targetEnergy - 1e-6;
     const wait = Math.round(p50Wait);
@@ -2179,9 +2603,8 @@
       ? Math.min(serviceMinutes, Math.max(0, (stops.find((stop) => stop.id === servicePlan.inlineStationId)?.chargeMinutes || 0) + (stops.find((stop) => stop.id === servicePlan.inlineStationId)?.p50 || 0)))
       : 0;
     const serviceExtraMinutes = Math.max(0, serviceMinutes - overlapMinutes);
-    const reservationMinutes = reservationMinutesPerStop * stops.length;
-    const total = Number(route.duration || 0) + wait + chargeMinutes + reservationMinutes + serviceExtraMinutes;
-    const p90Total = Number(route.duration || 0) + Math.round(p90Wait) + chargeMinutes + reservationMinutes + serviceExtraMinutes;
+    const total = Number(route.duration || 0) + wait + chargeMinutes + serviceExtraMinutes;
+    const p90Total = Number(route.duration || 0) + Math.round(p90Wait) + chargeMinutes + serviceExtraMinutes;
     const arrival = state.departureMinutes + total;
     const lateMinutes = hasArrivalDeadline() ? Math.max(0, Math.ceil(arrival - state.deadlineMinutes)) : 0;
     const onTime = Math.max(50, Math.min(99, 98 - lateMinutes * 3 - Math.round(p90Wait) * 0.18 - stops.length * 1.5));
@@ -2201,7 +2624,6 @@
       p50Wait: Math.round(p50Wait),
       p90Wait: Math.round(p90Wait),
       chargeMinutes,
-      reservationMinutes,
       total,
       p90Total,
       arrival,
@@ -2228,13 +2650,15 @@
       arrivalReserveRequired: state.arrivalReserveEnabled,
       arrivalDeadlineRequired: state.deadlineEnabled,
       targetSocMet,
-      strategyReservation: key === "reliable"
+      viaWaypoints: Array.isArray(route.viaWaypoints) ? route.viaWaypoints : [],
+      routeIdentity: routeIdentity(route, waypoints)
     });
   }
 
   async function requestLongTripPlans() {
     const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
     if (!base || !Number.isFinite(Number(base.distance))) return null;
+    await ensureStationForecasts(base);
     // Once route verification has proved that public POI coverage is too sparse,
     // plan only with the explicit corridor anchors. Mixing the original sparse
     // POIs back in can repeatedly select an unverified urban station instead.
@@ -2250,7 +2674,15 @@
         soc: state.energyPercent,
         minArrivalSoc: effectiveArrivalReserveSoc(getEnergyProfile(isFuelActive())),
         maxStops: 6,
-        maxDetourKm: effectiveLongTripDetourLimit(base)
+        maxDetourKm: effectiveLongTripDetourLimit(base),
+        departureMinutes: state.departureMinutes,
+        ...(plannerDeadlineOffset() !== undefined ? { deadlineOffsetMinutes: plannerDeadlineOffset() } : {}),
+        weatherFactor: Number(state.weather?.weatherFactor) || 1,
+        trafficFactor: 1,
+        demandFactor: 1,
+        horizonMinutes: Math.min(240, Math.max(30, Math.ceil(Number(base.duration || 30) / 5) * 5)),
+        intervalMinutes: 5,
+        useForecast: true
       }, 20000);
       return proposal;
     } catch {
@@ -2334,7 +2766,7 @@
 
   function decorateLongTripRecord(role, record, extra = {}) {
     const names = { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" };
-    return Object.assign({}, record, { key: role, candidateKey: role, displayName: names[role] }, extra);
+    return Object.assign({}, record, { key: role, displayName: names[role] }, extra);
   }
 
   async function replanLongTripRoutes() {
@@ -2397,10 +2829,12 @@
         // energy sequence is still calculated from the verified AMap main
         // route, but it is explicitly marked as a provisional stop rather
         // than being presented as a real charging facility.
-        const route = state.provisionalCorridorActive && stops.every((station) => station.provisionalCorridor)
+        const energyWaypoints = stops.map((station) => Object.assign({}, station, { kind: "energy" }));
+        const routeStops = routeStopsWithTripWaypoints(energyWaypoints, true);
+        const route = state.provisionalCorridorActive && !state.tripWaypoints.length && stops.every((station) => station.provisionalCorridor)
           ? buildProvisionalCorridorRoute(role, base, plan, stops)
-          : await queryRouteSequence(role, stops);
-        const record = route && buildValidatedLongTripRecord(role, base, route, stops.map((station) => Object.assign({}, station, { kind: "energy" })));
+          : await queryRouteSequence(role, routeStops, { includeTripWaypoints: false });
+        const record = route && buildValidatedLongTripRecord(role, base, route, routeStops);
         if (record && !routedBackup[role]) routedBackup[role] = record;
         if (record?.feasible) {
           validated[role] = record;
@@ -2458,48 +2892,26 @@
     }
     let fastest = validated.fastest || available.slice().sort((a, b) => a.arrival - b.arrival || a.chargeMinutes - b.chargeMinutes || a.p50Wait - b.p50Wait || a.cost - b.cost)[0];
     let reliable = validated.reliable || available.slice().sort((a, b) => a.p90Total - b.p90Total || b.arrivalSoc - a.arrivalSoc || a.p90Wait - b.p90Wait || a.arrival - b.arrival)[0];
-    const replayStrategy = (record, strategy) => {
-      if (!record?.stops?.length) return null;
-      const base = state.baseRouteRecords[strategy] || state.baseRouteRecords.reliable;
-      const waypoints = record.stops.map((station) => Object.assign({}, station, { kind: "energy" }));
-      return buildValidatedLongTripRecord(strategy, base, record, waypoints);
-    };
-    // If only one road corridor survives verification, keep its verified
-    // geometry but make the operational strategies genuinely different.
-    if (fastest?.strategyReservation) {
-      const replay = replayStrategy(fastest, "fastest");
-      if (replay?.feasible) fastest = replay;
-    }
-    if (!reliable?.strategyReservation) {
-      const replay = replayStrategy(reliable || fastest, "reliable");
-      if (replay?.feasible) reliable = replay;
-    }
-    // The least-fee road can honestly be a backup: on long national journeys
-    // it may avoid tolls but violate the user's arrival deadline. Keep that
-    // trade-off visible instead of cloning the highway route into this card.
-    let cheapest = validated.cheapest || routedBackup.cheapest || available.slice().sort((a, b) => a.cost - b.cost || a.roadTolls - b.roadTolls || a.arrival - b.arrival)[0];
-    // If the low-fee road fails the deadline or maps back to the same motorway
-    // corridor, preserve the safe road but model the remaining cost lever:
-    // tariff-aware charging / station coupon. It is explicitly an estimate,
-    // not a claim that the displayed POI has a live public price feed.
-    if (!cheapest || cheapest === fastest || Number(cheapest.cost) >= Number(fastest.cost) - 0.01) {
-      const tariffFactor = 0.88;
-      const discountedEnergyCost = Number((Number(fastest.energyCost || 0) * tariffFactor).toFixed(1));
-      cheapest = Object.assign({}, fastest, {
-        key: "cheapest",
-        candidateKey: "cheapest",
-        stops: (fastest.stops || []).map((stop) => Object.assign({}, stop, { energyCost: Number((Number(stop.energyCost || 0) * tariffFactor).toFixed(1)) })),
-        energyCost: discountedEnergyCost,
-        cost: Number((discountedEnergyCost + Number(fastest.roadTolls || 0)).toFixed(1)),
-        tariffAwarePricing: true
-      });
-    }
+    // A single verified road corridor can legitimately be optimal for more
+    // than one objective. Keep the real cost/wait values instead of cloning a
+    // route and applying a made-up 12% tariff discount.
+    const cheapest = validated.cheapest
+      || available.slice().sort((a, b) => a.cost - b.cost || a.roadTolls - b.roadTolls || a.arrival - b.arrival)[0]
+      || fastest;
+    const sameRoute = (left, right) => Boolean(left && right && left.routeIdentity && left.routeIdentity === right.routeIdentity);
     const preferred = ["cost", "cheapest"].includes(state.priority) ? "cheapest" : ["time", "fastest"].includes(state.priority) ? "fastest" : "reliable";
     state.multiStopRouteRecords = {
-      fastest: decorateLongTripRecord("fastest", fastest, { isActualFastest: true, isActualStable: fastest === reliable, isActualCheapest: fastest === cheapest, recommended: preferred === "fastest" }),
-      reliable: decorateLongTripRecord("reliable", reliable, { isActualFastest: reliable === fastest, isActualStable: true, isActualCheapest: reliable === cheapest, recommended: preferred === "reliable" }),
-      cheapest: decorateLongTripRecord("cheapest", cheapest, { isActualFastest: cheapest === fastest, isActualStable: cheapest === reliable, isActualCheapest: true, recommended: preferred === "cheapest", costBackup: !cheapest.feasible })
+      fastest: decorateLongTripRecord("fastest", fastest, { isActualFastest: true, isActualStable: sameRoute(fastest, reliable), isActualCheapest: sameRoute(fastest, cheapest), recommended: preferred === "fastest" }),
+      reliable: decorateLongTripRecord("reliable", reliable, { isActualFastest: sameRoute(reliable, fastest), isActualStable: true, isActualCheapest: sameRoute(reliable, cheapest), recommended: preferred === "reliable" }),
+      cheapest: decorateLongTripRecord("cheapest", cheapest, { isActualFastest: sameRoute(cheapest, fastest), isActualStable: sameRoute(cheapest, reliable), isActualCheapest: true, recommended: preferred === "cheapest", costBackup: !cheapest.feasible })
     };
+    Object.values(state.multiStopRouteRecords).forEach((record) => {
+      record.objectiveBadges = [
+        record.isActualFastest ? "最快" : null,
+        record.isActualStable ? "最稳妥" : null,
+        record.isActualCheapest ? "最低成本" : null
+      ].filter(Boolean);
+    });
     state.multiStopPlanningMeta = {
       candidatesConsidered: proposal.candidatesConsidered,
       maxStops: proposal.maxStops,
@@ -2650,7 +3062,8 @@
         // 全程能耗成本（含起步电/油的折价），用于油电对比而非现金支出对比。
         tripEnergyCost: Number((Math.max(0, Number(route.distance) || 0) * profile.consumptionPerKm * unitPrice).toFixed(1)),
         key: candidateKey,
-        candidateKey,
+        candidateKey: routeIdentity(route, station ? [station] : []),
+        routeIdentity: routeIdentity(route, station ? [station] : []),
         station: station || null,
         wait,
         total,
@@ -2688,27 +3101,31 @@
     const actualFastest = raw.slice().sort(sortFast)[0];
     const actualStable = raw.slice().sort(sortStable)[0];
     const actualCheap = raw.slice().sort(sortCheap)[0];
-    const used = new Set();
-    const take = (preferred, sorter) => {
-      const available = raw.filter((record) => !used.has(record.candidateKey));
-      const choice = (available.includes(preferred) ? preferred : available.slice().sort(sorter)[0]) || preferred;
-      used.add(choice.candidateKey);
-      return choice;
-    };
-    const fastest = take(actualFastest, sortFast);
-    const stableCollision = actualStable.candidateKey === fastest.candidateKey;
-    const stable = take(actualStable, sortStable);
-    const cheapCollision = actualCheap.candidateKey === fastest.candidateKey || actualCheap.candidateKey === stable.candidateKey;
-    const cheap = take(actualCheap, sortCheap);
-    const fastestIsStable = actualStable.candidateKey === fastest.candidateKey;
-    const fastestIsCheap = actualCheap.candidateKey === fastest.candidateKey;
-    const stableIsCheap = actualCheap.candidateKey === stable.candidateKey;
+    // Keep each objective's actual winner even when two objectives resolve to
+    // the same physical road corridor. The previous de-duplication picked a
+    // worse unused candidate just to force three visually different cards.
+    const fastest = actualFastest;
+    const stable = actualStable;
+    const cheap = actualCheap;
+    const sameRoute = (left, right) => Boolean(left && right && left.routeIdentity === right.routeIdentity);
+    const fastestIsStable = sameRoute(actualFastest, actualStable);
+    const fastestIsCheap = sameRoute(actualFastest, actualCheap);
+    const stableIsCheap = sameRoute(actualStable, actualCheap);
+    const stableCollision = fastestIsStable;
+    const cheapCollision = fastestIsCheap || stableIsCheap;
     const decorate = (role, record, displayName, extra) => Object.assign({}, record, { key: role, displayName }, extra || {});
     state.routeRecords = {
       fastest: decorate("fastest", fastest, fastestIsStable && fastestIsCheap ? "全优方案" : fastestIsStable ? "最快且最稳" : fastestIsCheap ? "最快且最省" : "最快到达", { isActualFastest: true, isActualStable: fastestIsStable, isActualCheapest: fastestIsCheap }),
-      reliable: decorate("reliable", stable, stableCollision && stableIsCheap ? "最低成本" : stableCollision ? "路线备选" : stableIsCheap ? "最稳且最省" : "最稳妥", { isActualFastest: false, isActualStable: !stableCollision, isActualCheapest: stableIsCheap, stableCollision }),
-      cheapest: decorate("cheapest", cheap, cheapCollision ? "路线备选" : "最低成本", { isActualFastest: false, isActualStable: false, isActualCheapest: !cheapCollision, costBackup: cheapCollision })
+      reliable: decorate("reliable", stable, fastestIsStable && stableIsCheap ? "全优方案" : fastestIsStable ? "最快且最稳" : stableIsCheap ? "最稳且最省" : "最稳妥", { isActualFastest: fastestIsStable, isActualStable: true, isActualCheapest: stableIsCheap, stableCollision }),
+      cheapest: decorate("cheapest", cheap, fastestIsCheap && stableIsCheap ? "全优方案" : fastestIsCheap ? "最快且最省" : stableIsCheap ? "最稳且最省" : "最低成本", { isActualFastest: fastestIsCheap, isActualStable: stableIsCheap, isActualCheapest: true, costBackup: cheapCollision })
     };
+    Object.values(state.routeRecords).forEach((record) => {
+      record.objectiveBadges = [
+        record.isActualFastest ? "最快" : null,
+        record.isActualStable ? "最稳妥" : null,
+        record.isActualCheapest ? "最低成本" : null
+      ].filter(Boolean);
+    });
     Object.entries(state.serviceRouteOverrides || {}).forEach(([role, override]) => {
       if (!state.routeRecords[role]) return;
       state.routeRecords[role] = Object.assign({}, state.routeRecords[role], override, {
@@ -2717,12 +3134,11 @@
         displayName: state.routeRecords[role].displayName
       });
     });
-    const roleForCandidate = (candidateKey) => Object.entries(state.routeRecords).find(([, record]) => record.candidateKey === candidateKey)?.[0] || "reliable";
     const preferredRole = ["cost", "cheapest"].includes(state.priority)
-      ? roleForCandidate(actualCheap.candidateKey)
+      ? "cheapest"
       : ["time", "fastest"].includes(state.priority)
-        ? roleForCandidate(actualFastest.candidateKey)
-        : roleForCandidate(actualStable.candidateKey);
+        ? "fastest"
+        : "reliable";
     state.recommendedRoute = preferredRole;
     Object.entries(state.routeRecords).forEach(([role, record]) => { record.recommended = role === preferredRole; });
   }
@@ -2749,7 +3165,11 @@
             : `<span>用时 <b>${formatDuration(record.total)}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>P50 <b>${record.station?.p50 ?? "—"}分</b></span><span>P90 <b>${record.station?.p90 ?? "—"}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`);
     }
     if (tag) {
-      if (record.directTrip) tag.textContent = "无需补能";
+      const objectiveBadgeText = record.feasible && Array.isArray(record.objectiveBadges) && record.objectiveBadges.length > 1
+        ? `多目标：${record.objectiveBadges.join(" · ")}`
+        : "";
+      if (objectiveBadgeText && !record.servicePlan) tag.textContent = objectiveBadgeText;
+      else if (record.directTrip) tag.textContent = "无需补能";
       else if (record.serviceOnly) tag.textContent = "服务已加入";
       else if (record.servicePlan) tag.textContent = "含服务";
       else if (!record.canReachStation) tag.textContent = "无法安全到站";
@@ -2802,10 +3222,8 @@
         }
         const summaries = {
           fastest: `高德时间优先道路 + 典型等待与补能时长最短；总等待 P50 ${record.p50Wait} 分钟。`,
-          reliable: `采用错峰预约模拟，P90 等待降至 ${record.p90Wait} 分钟；为此增加 ${record.reservationMinutes || 0} 分钟到站协调时间。`,
-          cheapest: record.tariffAwarePricing
-            ? `当前时限下保留同一安全道路走廊，补能采用低价时段/优惠价模拟；费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}。`
-            : `费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}；优先在较低模拟站价处补能。`
+          reliable: `按到站时刻的预测 P90 比较尾部等待风险；当前方案 P90 等待 ${record.p90Wait} 分钟。`,
+          cheapest: `费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}；优先在模拟单价较低的站点补能。`
         };
         const baseReason = summaries[record.key] || `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：总等待 P90 ${record.p90Wait} 分钟。`;
         reason.textContent = displayCopy(withNote(serviceName ? `${baseReason} 已含服务停靠 ${serviceName}。` : baseReason));
@@ -3538,8 +3956,23 @@
     return conservativeExtraMinutes + 6 <= slackMinutes;
   }
 
-  async function loadServiceRecommendations(record) {
-    const suggestion = state.serviceSuggestion;
+  async function loadServiceRecommendations(record, options = {}) {
+    let suggestion = state.serviceSuggestion;
+    if (options.action && record) {
+      const kind = options.kind || "meal";
+      const progress = Math.max(0.08, Math.min(0.92, Number(options.progress ?? 0.45)));
+      suggestion = Object.assign({}, suggestion && suggestion.recordKey === record.key ? suggestion : {}, {
+        key: `action-${record.key}-${kind}-${stableHash(options.preferredName || "service")}`,
+        recordKey: record.key,
+        accepted: true,
+        loading: false,
+        options: [],
+        kind,
+        targetMinute: Math.round(state.departureMinutes + Number(record.duration || 0) * progress),
+        progress
+      });
+      state.serviceSuggestion = suggestion;
+    }
     if (!record || !suggestion || suggestion.recordKey !== record.key || !state.AMap) return;
     suggestion.accepted = true;
     suggestion.loading = true;
@@ -3549,11 +3982,15 @@
     renderServiceRecommendations(record);
     const center = pointAtPathProgress(record.path, suggestion.progress);
     if (!center) return;
-    const searches = suggestion.kind === "meal"
-      ? [["餐厅", "meal"], ["咖啡厅", "coffee"]]
-      : suggestion.kind === "rest"
-        ? [["休息区", "rest"], ["咖啡厅", "coffee"]]
-        : [["咖啡厅", "coffee"], ["便利店", "rest"]];
+    const preferredName = String(options.preferredName || "").trim();
+    const serviceKind = options.kind || suggestion.kind || "meal";
+    const searches = preferredName
+      ? [[preferredName, serviceKind], ...(serviceKind === "meal" ? [["餐厅", "meal"], ["咖啡厅", "coffee"]] : serviceKind === "rest" ? [["休息区", "rest"], ["咖啡厅", "coffee"]] : [["咖啡厅", "coffee"], ["便利店", "rest"]])]
+      : suggestion.kind === "meal"
+        ? [["餐厅", "meal"], ["咖啡厅", "coffee"]]
+        : suggestion.kind === "rest"
+          ? [["休息区", "rest"], ["咖啡厅", "coffee"]]
+          : [["咖啡厅", "coffee"], ["便利店", "rest"]];
     const results = await searchInBatches(searches.map(([keyword, type]) => () => searchNearby(keyword, center, type)), 2);
     if (requestId !== state.serviceRequestVersion || state.serviceSuggestion?.key !== suggestion.key) return;
     const durationByType = { meal: 20, coffee: 12, rest: 15 };
@@ -3578,7 +4015,14 @@
       })
       .sort((a, b) => a.detourKm - b.detourKm)
       .slice(0, 8);
-    const recommended = candidates.filter((service) => passesServiceRecommendationPrecheck(record, service));
+    const recommended = candidates
+      .filter((service) => passesServiceRecommendationPrecheck(record, service))
+      .sort((a, b) => {
+        if (!preferredName) return a.detourKm - b.detourKm;
+        const aExact = String(a.name || "").includes(preferredName) ? 0 : 1;
+        const bExact = String(b.name || "").includes(preferredName) ? 0 : 1;
+        return aExact - bExact || a.detourKm - b.detourKm;
+      });
     suggestion.filteredOutCount = Math.max(0, candidates.length - recommended.length);
     suggestion.options = recommended.slice(0, 4).map((service) => Object.assign({}, service, {
       reason: hasArrivalDeadline()
@@ -3658,18 +4102,19 @@
         durationMinutes: service.durationMinutes,
         routeProgress: Number.isFinite(Number(service.routeProgress)) ? Number(service.routeProgress) : routeProgress(service.location, path)
       });
-      const waypoints = (isInlineService ? energyWaypoints : energyWaypoints.concat(serviceWaypoint))
-        .sort((a, b) => a.routeProgress - b.routeProgress);
+      const baseWaypoints = isInlineService ? energyWaypoints : energyWaypoints.concat(serviceWaypoint);
+      const waypoints = routeStopsWithTripWaypoints(baseWaypoints, true);
       const base = state.baseRouteRecords[role] || state.baseRouteRecords.reliable || record;
       const longTripServiceAllowanceKm = !state.detourExplicit && record.multiStop
         ? Math.max(6, Math.min(16, Number(record.baseDistance || base.distance || 0) * 0.012))
         : 0;
-      const route = await queryRouteSequence(role, waypoints);
+      const route = await queryRouteSequence(role, waypoints, { includeTripWaypoints: false });
       const servicePlan = {
         id: service.id,
         name: service.name,
         icon: service.icon,
         serviceType: service.serviceType,
+        serviceLabel: service.serviceType === "rest" ? "休息" : "餐饮",
         location: service.location,
         durationMinutes: service.durationMinutes,
         inlineStationId,
@@ -3788,6 +4233,11 @@
     }
     state.selectedService = service.id;
     state.activeServicePlan = updated.servicePlan;
+    if (state.aiContext) {
+      const services = Array.isArray(state.aiContext.services) ? state.aiContext.services : [];
+      const label = updated.servicePlan.serviceLabel || "餐饮";
+      state.aiContext.services = Array.from(new Set([...services, label]));
+    }
     // Keep the service-adjusted option active. Otherwise the normal “best
     // route” auto-selection can immediately switch the details panel back to
     // a different direct alternative and make a successfully added stop look
@@ -3804,6 +4254,58 @@
     setAiReply(`已将 ${service.name} 加入行程，${switchNote}${estimateNote}`);
     showToast(`已加入 ${service.name}${switchedToFastest ? "，已切换为最快到达" : ""}${estimatedServiceRoute ? "，等待路线二次核验" : "，ETA 已按真实路线重算"}`, 3400);
     revealServiceFlow({ attention: true });
+  }
+
+  async function applyServiceAction(action) {
+    const record = state.routeRecords[state.selectedRoute] || state.routeRecords.reliable;
+    if (!record) return { ok: false, message: "当前还没有可加入服务的路线" };
+    const label = actionServiceLabel(action) || "餐饮";
+    // 补能由路线规划器统一安排，洗车也不是当前服务推荐模块的可执行
+    // 类型。不要把这两类动作误映射成餐厅搜索，更不能在没有真实候选的
+    // 情况下给出“已加入”的假成功。
+    if (label === "补能" || label === "洗车") {
+      const message = label === "补能"
+        ? "补能停靠由当前路线规划统一安排，请调整动力类型或路线偏好"
+        : "当前演示暂不支持把洗车作为服务停靠加入行程";
+      setText("serviceStatus", message);
+      return { ok: false, message };
+    }
+    const preferredName = String(action?.name || "").trim();
+    const kind = label === "休息" ? "rest" : preferredName && /咖啡|星巴克|瑞幸/.test(preferredName) ? "coffee" : "meal";
+    await loadServiceRecommendations(record, {
+      action: true,
+      kind,
+      preferredName,
+      progress: Number.isFinite(Number(record.duration)) && Number(record.duration) > 0 ? Math.min(0.82, Math.max(0.18, 90 / Number(record.duration))) : 0.45
+    });
+    const options = state.serviceSuggestion?.recordKey === record.key ? (state.serviceSuggestion.options || []) : [];
+    if (!options.length) {
+      const message = preferredName
+        ? `沿当前路线未找到可安全加入的“${preferredName}”，没有伪造加入结果`
+        : `当前路线没有可安全加入的${label}服务`;
+      setText("serviceStatus", message);
+      return { ok: false, message };
+    }
+    const exact = preferredName && options.find((service) => String(service.name || "").includes(preferredName));
+    const candidate = exact || options[0];
+    await applyServicePlan(candidate);
+    const succeeded = state.activeServicePlan?.id === candidate.id;
+    if (!succeeded) return { ok: false, message: `“${candidate.name}”未通过真实路线复算，没有加入行程` };
+    const fallbackNote = preferredName && !exact ? `未找到同名点，已选择沿线可行的${label}服务“${candidate.name}”` : `已加入${candidate.name}`;
+    return { ok: true, message: fallbackNote };
+  }
+
+  async function applyPostRouteActions(actions) {
+    const applied = [];
+    const failed = [];
+    for (const action of Array.isArray(actions) ? actions : []) {
+      if (action.type !== "ADD_SERVICE") continue;
+      const result = await applyServiceAction(action);
+      (result.ok ? applied : failed).push(action);
+      if (!result.ok) showToast(result.message, 3600);
+      else state.lastActionSummary = result.message;
+    }
+    return { applied, failed };
   }
 
   // 运营页标题原来写死"北京区域补能供需"：用户规划"从上海去杭州"后打开运营视图，
@@ -4083,9 +4585,9 @@
     const amount = canReachStation ? Math.min(requested, maxPurchasable) : 0;
     const remainingEnergy = energyAtStation + amount * profile.transferEfficiency - (consumption - firstLegConsumption);
     const targetMet = remainingEnergy >= targetEnergy - 1e-6;
-    const chargeMinutes = !amount ? 0 : isFuel
-      ? (key === "fastest" ? 4 : key === "reliable" ? 5 : 6)
-      : Math.max(4, Math.ceil(amount / (key === "fastest" ? 160 : key === "reliable" ? 120 : 90) * 60 + 3));
+    // Charging/refuelling time is a property of the selected station and
+    // vehicle branch, not a knob for making objective cards look different.
+    const chargeMinutes = amount ? energyFillMinutes(amount, station, isFuel) : 0;
     return {
       amount,
       unit: profile.unit,
@@ -4213,6 +4715,9 @@
     state.serviceSuggestion = null;
     state.activeServicePlan = null;
     state.serviceRouteOverrides = {};
+    state.tripWaypoints = [];
+    state.stationForecastScenarioKey = null;
+    state.stationForecastRequestVersion += 1;
     state.stations = [];
     state.selectedStation = null;
     if (state.live) {
@@ -4293,6 +4798,10 @@
       const parsedForApply = requestMode === "supplement" && state.hasPlannedRoute
         ? mergeSupplementIntent(parsed, payload, value)
         : parsed;
+      const actions = Array.isArray(parsedForApply.actions) && parsedForApply.actions.length
+        ? parsedForApply.actions
+        : inferLocalActions(value, parsedForApply);
+      parsedForApply.actions = actions;
       const payloadForApply = requestMode === "supplement" && state.hasPlannedRoute
         ? Object.assign({}, payload, {
             destinationLocation: parsedForApply.destinationLocation,
@@ -4315,6 +4824,12 @@
         showToast("请先选择一个目的地", 3200);
         return;
       }
+      if (requestMode === "new_trip" || actions.some((action) => action.type === "NEW_TRIP" || action.type === "CHANGE_DESTINATION")) {
+        // Keep the current plan intact while an ambiguous destination is
+        // waiting for the user's pick.  Once the destination is resolved,
+        // clear only the previous trip's stops and hard constraints.
+        clearSupplementalStopsForNewTrip();
+      }
       const applied = applyParsedIntent(parsedForApply, payloadForApply);
       if (!applied.ok) {
         if (applied.originUnresolved) {
@@ -4333,19 +4848,26 @@
         return;
       }
       clearDestinationCandidates();
+      const preRouteOutcome = await applyPreRouteActions(actions);
       setAiReply(payload.assistantReply || parsedForApply.assistantReply || "已识别出行约束，正在计算真实路线和补能站。 ");
       await recomputePlan({ manageButton: false, silent: true });
       setPlanningVisibility(true);
+      const postRouteOutcome = await applyPostRouteActions(actions);
+      const failedActions = preRouteOutcome.failed.concat(postRouteOutcome.failed);
+      const actionText = actions.length
+        ? `${actionModeLabel(actions, requestMode)}：${actions.filter((action) => !failedActions.includes(action)).map(actionSummary).join("、") || "未完成"}${failedActions.length ? `；${failedActions.map(actionSummary).join("、")}未完成` : ""}`
+        : requestMode === "supplement" ? "已保留当前行程并重新计算" : "";
+      recordActionJournal(actions, { failed: failedActions, summary: actionText });
       // The backend reports *why* the model was skipped (quota / auth / timeout…).
       // Showing that beats a generic "AI 暂不可用" that hides a days-old outage.
       const fallbackReason = payload.aiFallbackReason || "AI 暂不可用，已用本地规则完成规划";
       // aiUsed lives under `parsed`; reading it off the root made this check
       // always-false, so a failed model still reported "AI 已完成规划".
       const usedAi = payload.parsed?.aiUsed !== false;
-      setAiStatus(usedAi ? "AI 大模型已完成规划" : "本地规则规划完成", usedAi ? "ready" : "fallback");
-      setAiReply(planningCompletionMessage());
+      setAiStatus(usedAi ? `${actionModeLabel(actions, requestMode)}已完成` : `${actionModeLabel(actions, requestMode)} · 本地规则完成`, usedAi ? "ready" : "fallback");
+      setAiReply([actionText, planningCompletionMessage()].filter(Boolean).join("。"));
       setText("aiReplyMeta", usedAi ? "规划已完成" : fallbackReason);
-      showToast(usedAi ? planningCompletionMessage() : fallbackReason);
+      showToast(usedAi ? (actionText || planningCompletionMessage()) : fallbackReason);
     } catch (error) {
       const parsed = localIntentFallback(value);
       if (options.explicitDestination) parsed.destination = options.explicitDestination;
@@ -4355,6 +4877,11 @@
       const parsedForApply = requestMode === "supplement" && state.hasPlannedRoute
         ? mergeSupplementIntent(parsed, {}, value)
         : parsed;
+      const actions = inferLocalActions(value, parsedForApply);
+      parsedForApply.actions = actions;
+      if (requestMode === "new_trip" || actions.some((action) => action.type === "NEW_TRIP" || action.type === "CHANGE_DESTINATION")) {
+        clearSupplementalStopsForNewTrip();
+      }
       const payloadForApply = options.destinationLocation
         ? { destinationLocation: options.destinationLocation }
         : { destinationLocation: parsedForApply.destinationLocation, originLocation: parsedForApply.originLocation };
@@ -4364,11 +4891,19 @@
         else showUnresolvedDestination(applied.destination);
         return;
       }
+      const preRouteOutcome = await applyPreRouteActions(actions);
       setAiStatus("本地降级", "fallback");
       setAiReply("模型连接暂时不可用，已按本地规则保留核心规划能力。");
       await recomputePlan({ manageButton: false, silent: true });
       setPlanningVisibility(true);
-      setAiReply(planningCompletionMessage());
+      const postRouteOutcome = await applyPostRouteActions(actions);
+      const failedActions = preRouteOutcome.failed.concat(postRouteOutcome.failed);
+      const actionText = actions.length
+        ? `${actionModeLabel(actions, requestMode)}：${actions.filter((action) => !failedActions.includes(action)).map(actionSummary).join("、") || "未完成"}${failedActions.length ? `；${failedActions.map(actionSummary).join("、")}未完成` : ""}`
+        : requestMode === "supplement" ? "已保留当前行程并重新计算" : "";
+      recordActionJournal(actions, { failed: failedActions, summary: actionText });
+      setAiStatus(`${actionModeLabel(actions, requestMode)} · 本地规则完成`, "fallback");
+      setAiReply([actionText, planningCompletionMessage()].filter(Boolean).join("。"));
       setText("aiReplyMeta", "规划已完成");
       showToast("模型连接失败，已切换本地规则", 3600);
     } finally {
