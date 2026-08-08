@@ -97,25 +97,62 @@ async function routeApi(requestUrl, response) {
   });
 }
 
+const POI_SEARCH_TYPES = new Set(["fuel", "electric", "service", "meal", "coffee", "rest"]);
+const SERVICE_POI_TYPES = new Set(["meal", "coffee", "rest"]);
+const DEFAULT_POI_KEYWORDS = {
+  fuel: "加油站",
+  electric: "充电站",
+  service: "服务区",
+  meal: "餐厅",
+  coffee: "咖啡厅",
+  rest: "休息区"
+};
+
+function cleanPoiKeyword(value) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .trim()
+    .slice(0, 60);
+}
+
+/**
+ * Build the bounded AMap POI request.  Service keywords are user intent, not
+ * credentials; only the server-side AMap key is kept out of the browser.
+ */
+export function buildPoiSearchRequest({ location, type, keyword } = {}) {
+  const normalizedLocation = parseCoordinate(location);
+  if (!normalizedLocation) return null;
+  const normalizedType = POI_SEARCH_TYPES.has(type) ? type : "electric";
+  const requestedKeyword = SERVICE_POI_TYPES.has(normalizedType) ? cleanPoiKeyword(keyword) : "";
+  const resolvedKeyword = requestedKeyword || DEFAULT_POI_KEYWORDS[normalizedType];
+  return {
+    location: normalizedLocation,
+    type: normalizedType,
+    keyword: resolvedKeyword,
+    params: new URLSearchParams({
+      location: normalizedLocation,
+      keywords: resolvedKeyword,
+      radius: "30000",
+      page_size: "20",
+      page_num: "1",
+      show_fields: "business,children"
+    })
+  };
+}
+
 // The browser-side PlaceSearch SDK is useful for map interaction, but it can
 // return sparse results for motorway points far from a city centre. Query the
 // same AMap Web Service from the local server for route-corridor POIs so the
 // web-service key stays server-side and cross-province sampling is stable.
 async function poiApi(requestUrl, response) {
-  const location = parseCoordinate(requestUrl.searchParams.get("location"));
-  const requestedType = requestUrl.searchParams.get("type");
-  const type = requestedType === "fuel" ? "fuel" : requestedType === "service" ? "service" : "electric";
-  const keyword = type === "fuel" ? "加油站" : type === "service" ? "服务区" : "充电站";
-  if (!location) return json(response, 400, { error: "INVALID_POI_LOCATION" });
-  if (!hasAmapServiceKey(config)) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
-  const params = new URLSearchParams({
-    location,
-    keywords: keyword,
-    radius: "30000",
-    page_size: "20",
-    page_num: "1",
-    show_fields: "business,children"
+  const search = buildPoiSearchRequest({
+    location: requestUrl.searchParams.get("location"),
+    type: requestUrl.searchParams.get("type"),
+    keyword: requestUrl.searchParams.get("keyword")
   });
+  if (!search) return json(response, 400, { error: "INVALID_POI_LOCATION" });
+  const { location, type, keyword, params } = search;
+  if (!hasAmapServiceKey(config)) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
   const result = (await requestAmapJson("https://restapi.amap.com/v5/place/around", params, { config, timeoutMs: 15000 })).payload || {};
   let pois = Array.isArray(result.pois) ? result.pois : [];
   if (result.status !== "1") {
@@ -169,7 +206,8 @@ async function poiApi(requestUrl, response) {
       distance: poi.distance
     })),
     source,
-    kind: type
+    kind: type,
+    requestedKeyword: keyword
   });
 }
 

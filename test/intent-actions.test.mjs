@@ -52,6 +52,23 @@ test("supplement actions preserve concrete service names and waypoint locations"
   assert.deepEqual(waypoint.actions, [{ type: "ADD_WAYPOINT", location: "天津" }]);
 });
 
+test("generic meal follow-ups keep the service category without inventing a venue name", async () => {
+  const result = await parseLocal("中途想吃点东西", currentTrip);
+  assert.equal(result.requestMode, "supplement");
+  assert.deepEqual(result.actions, [{ type: "ADD_SERVICE", service: "餐饮" }]);
+});
+
+test("AI category output is enriched with the concrete keyword from the user text", async () => {
+  const result = await parseWithAi("中途想喝星巴克", currentTrip, {
+    destination: currentTrip.currentDestination,
+    services: ["餐饮"],
+    requestMode: "supplement",
+    actions: [{ type: "ADD_SERVICE", service: "餐饮", name: "餐厅" }],
+    clarificationNeeded: false
+  });
+  assert.deepEqual(result.actions, [{ type: "ADD_SERVICE", service: "餐饮", name: "星巴克" }]);
+});
+
 test("destination changes, stop removals, and constraint updates have stable action types", async () => {
   const changed = await parseLocal("把目的地改成杭州", currentTrip);
   assert.equal(changed.requestMode, "new_trip");

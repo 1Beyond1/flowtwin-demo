@@ -9,6 +9,10 @@
     },
     window.FLOWTWIN_CONFIG || {}
   );
+  // Concrete service requests (for example “麦当劳”) travel through the
+  // browser-side intent helper as first-class data.  The fallback keeps an old
+  // cached deployment usable while the new helper file is loading.
+  const serviceIntent = window.FlowTwinServiceIntent || {};
 
   // 必须和 lib/config.mjs 的 DEFAULT_ORIGIN.name 一致：后端用这个名字判断
   // "用户没说起点"，前端用它判断"这个起点是默认值，不是用户要求的"。
@@ -871,12 +875,39 @@
   function mergeSupplementIntent(parsed, payload, value) {
     const currentServices = Array.isArray(state.aiContext?.services) ? state.aiContext.services : [];
     const parsedServices = Array.isArray(parsed?.services) ? parsed.services : [];
+    const requestedServiceName = typeof serviceIntent.extractServiceKeyword === "function"
+      ? serviceIntent.extractServiceKeyword(value)
+      : null;
     const hasEnergyCue = /纯电|纯电动|电车|电动车|充电|燃油|油车|加油|混动|插混|油电/.test(String(value || ""));
     const hasPriorityCue = /不能迟到|准时|赶时间|最快|尽快|便宜|省钱|低成本|不想等|少等|等待/.test(String(value || ""));
     const hasDetourCue = /最多|不超过|不超|允许|绕行|绕路/.test(String(value || ""));
     const currentDeadline = state.deadlineEnabled ? formatClock(state.deadlineMinutes) : null;
     const currentReserve = state.arrivalReserveEnabled ? state.minArrivalSoc : null;
     const parsedEnergy = parsed?.energyType && parsed.energyType !== "unknown" ? parsed.energyType : state.energyType;
+    const parsedActions = Array.isArray(parsed?.actions) ? parsed.actions.map((action) => Object.assign({}, action)) : [];
+    const text = String(value || "");
+    const serviceLabel = /洗车/.test(text)
+      ? "洗车"
+      : /休息|卫生间|厕所/.test(text)
+        ? "休息"
+        : /补能|充电|加油/.test(text)
+          ? "补能"
+          : /餐|饭|吃|喝|咖啡/.test(text)
+            ? "餐饮"
+            : null;
+    let serviceActionFound = false;
+    const mergedActions = parsedActions.map((action) => {
+      if (action?.type !== "ADD_SERVICE" || !serviceLabel || action.service !== serviceLabel) return action;
+      serviceActionFound = true;
+      // The model may identify the category but omit or generalize the brand.
+      // Local text evidence is authoritative for this field.
+      return requestedServiceName
+        ? Object.assign({}, action, { service: serviceLabel, name: requestedServiceName })
+        : action;
+    });
+    if (serviceLabel && requestedServiceName && !serviceActionFound) {
+      mergedActions.push({ type: "ADD_SERVICE", service: serviceLabel, name: requestedServiceName });
+    }
     return Object.assign({}, parsed, {
       requestMode: "supplement",
       // A supplement never turns “吃麦当劳” into the trip destination. Keep
@@ -893,7 +924,8 @@
       maxDetourKm: hasDetourCue
         ? (parsed?.maxDetourKm ?? state.maxDetourKm)
         : (state.detourExplicit ? state.maxDetourKm : null),
-      services: Array.from(new Set([...currentServices, ...parsedServices]))
+      services: Array.from(new Set([...currentServices, ...parsedServices])),
+      actions: mergedActions
     });
   }
 
@@ -1126,7 +1158,9 @@
     const text = String(value || "");
     if (Array.isArray(parsed.actions) && parsed.actions.length) return parsed.actions;
     const actions = [];
-    const serviceName = (text.match(/(?:吃|喝|去|找|到)\s*(麦当劳|肯德基|星巴克|瑞幸|汉堡王|必胜客|海底捞|老乡鸡|德克士|喜茶|奈雪|全家|便利蜂)/) || [])[1];
+    const serviceName = typeof serviceIntent.extractServiceKeyword === "function"
+      ? serviceIntent.extractServiceKeyword(text)
+      : null;
     if (/(中途|途中|路上|顺便|另外|还想|再加|补充|加上)/.test(text) && /(吃|饭|餐|咖啡|休息|洗车)/.test(text)) {
       actions.push({ type: "ADD_SERVICE", service: /咖啡/.test(text) ? "餐饮" : /休息/.test(text) ? "休息" : /洗车/.test(text) ? "洗车" : "餐饮", ...(serviceName ? { name: serviceName } : {}) });
     }
@@ -2225,10 +2259,21 @@
 
   async function searchNearby(keyword, center, type) {
     const location = Array.isArray(center) ? center.join(",") : "";
-    const serverType = type === "fuel" ? "fuel" : type === "electric" ? "electric" : type === "service-area" ? "service" : null;
+    const serverType = type === "fuel"
+      ? "fuel"
+      : type === "electric"
+        ? "electric"
+        : type === "service-area"
+          ? "service"
+          : typeof serviceIntent.serviceSearchType === "function" ? serviceIntent.serviceSearchType(type) : null;
     if (location && serverType) {
       try {
-        const response = await fetch(`/api/poi?${new URLSearchParams({ location, type: serverType })}`, { headers: { Accept: "application/json" } });
+        const query = { location, type: serverType };
+        // For a concrete request, send the same brand/keyword to the server
+        // side AMap search.  The web-service key stays private, while the
+        // browser no longer has to broaden “麦当劳” into an arbitrary餐厅.
+        if (["meal", "coffee", "rest"].includes(serverType) && keyword) query.keyword = keyword;
+        const response = await fetch(`/api/poi?${new URLSearchParams(query)}`, { headers: { Accept: "application/json" } });
         if (response.ok) {
           const payload = await response.json();
           const pois = Array.isArray(payload.pois) ? payload.pois : [];
@@ -4118,7 +4163,7 @@
     const durationByType = { meal: 20, coffee: 12, rest: 15 };
     const iconByType = { meal: "utensils", coffee: "coffee", rest: "armchair" };
     const energyStops = record.stops?.length ? record.stops : record.station ? [record.station] : [];
-    const candidates = dedupePois(results.flat())
+    const allCandidates = dedupePois(results.flat())
       .map((poi) => {
         const type = poi.type === "meal" || poi.type === "coffee" ? poi.type : "rest";
         const nearestEnergyStop = energyStops.slice().sort((a, b) => distanceKm(a.location, poi.location) - distanceKm(b.location, poi.location))[0];
@@ -4135,21 +4180,38 @@
           reason: inlineStationId ? "靠近计划补能站，可与驻留时间并行安排" : `距主路线约 ${detourKm.toFixed(1)} km，加入后会重算 ETA`
         });
       })
-      .sort((a, b) => a.detourKm - b.detourKm)
-      .slice(0, 8);
+      .sort((a, b) => a.detourKm - b.detourKm);
+    const exactLocated = preferredName && typeof serviceIntent.matchesPoi === "function"
+      ? allCandidates.filter((service) => serviceIntent.matchesPoi(preferredName, service))
+      : [];
+    // Keep exact brand matches in the candidate window even if the generic
+    // restaurant query returned many nearer results.  Matching is performed on
+    // the POI name/address, never on the service category alone.
+    const candidates = preferredName && exactLocated.length
+      ? exactLocated.concat(allCandidates.filter((service) => !exactLocated.includes(service))).slice(0, 8)
+      : allCandidates.slice(0, 8);
     const recommended = candidates
       .filter((service) => passesServiceRecommendationPrecheck(record, service))
       .sort((a, b) => {
         if (!preferredName) return a.detourKm - b.detourKm;
-        const aExact = String(a.name || "").includes(preferredName) ? 0 : 1;
-        const bExact = String(b.name || "").includes(preferredName) ? 0 : 1;
+        const aExact = typeof serviceIntent.matchesPoi === "function" && serviceIntent.matchesPoi(preferredName, a) ? 0 : 1;
+        const bExact = typeof serviceIntent.matchesPoi === "function" && serviceIntent.matchesPoi(preferredName, b) ? 0 : 1;
         return aExact - bExact || a.detourKm - b.detourKm;
       });
+    const exactRecommended = preferredName && typeof serviceIntent.matchesPoi === "function"
+      ? recommended.filter((service) => serviceIntent.matchesPoi(preferredName, service))
+      : [];
+    const displayed = preferredName && !exactRecommended.length
+      ? recommended.map((service) => Object.assign({}, service, { alternative: true }))
+      : exactRecommended.length ? exactRecommended : recommended;
+    suggestion.requestedServiceName = preferredName || null;
+    suggestion.exactMatchLocated = Boolean(exactLocated.length);
+    suggestion.exactMatchFound = Boolean(exactRecommended.length);
     suggestion.filteredOutCount = Math.max(0, candidates.length - recommended.length);
-    suggestion.options = recommended.slice(0, 4).map((service) => Object.assign({}, service, {
+    suggestion.options = displayed.slice(0, 4).map((service) => Object.assign({}, service, {
       reason: hasArrivalDeadline()
-        ? `${service.reason} · 已通过到达时限预筛`
-        : service.reason
+        ? `${service.alternative ? "可选替代 · " : ""}${service.reason} · 已通过到达时限预筛`
+        : `${service.alternative ? "可选替代 · " : ""}${service.reason}`
     }));
     suggestion.loading = false;
     renderServiceRecommendations(record);
@@ -4195,11 +4257,19 @@
     const options = suggestion.options || [];
     const excludedByDeadline = Number(suggestion.filteredOutCount || 0);
     if (dwellLabel) dwellLabel.textContent = `预计 ${formatClock(suggestion.targetMinute)} 经过 · 高德真实 POI`;
+    const requestedName = String(suggestion.requestedServiceName || "").trim();
+    const hasExact = Boolean(suggestion.exactMatchFound);
     container.innerHTML = options.length
       ? options.map((service) => `<button type="button" class="service-card ${state.selectedService === service.id ? "selected" : ""}" data-service="${escapeHtml(service.id)}"><i data-lucide="${service.icon}"></i><span><strong>${escapeHtml(service.name)}</strong><small>${escapeHtml(service.reason)}</small></span><span>约${service.durationMinutes}分</span></button>`).join("")
-      : `<div class="service-card"><i data-lucide="${excludedByDeadline ? "clock-alert" : "map-pin-off"}"></i><span><strong>${excludedByDeadline ? "当前约束下不建议增加服务停靠" : "附近未检索到合适服务"}</strong><small>${excludedByDeadline ? "候选服务会超出当前绕行或到达时间余量，已自动隐藏；可调整约束后重新查看。" : "可继续行驶，系统会在下一个时间窗口再次评估。"}</small></span></div>`;
+      : `<div class="service-card"><i data-lucide="${excludedByDeadline ? "clock-alert" : "map-pin-off"}"></i><span><strong>${requestedName ? (suggestion.exactMatchLocated ? `“${escapeHtml(requestedName)}”当前不可安全加入` : `未找到“${escapeHtml(requestedName)}”`) : (excludedByDeadline ? "当前约束下不建议增加服务停靠" : "附近未检索到合适服务")}</strong><small>${requestedName ? "没有静默替换为其他商家；可调整路线约束后重试。" : excludedByDeadline ? "候选服务会超出当前绕行或到达时间余量，已自动隐藏；可调整约束后重新查看。" : "可继续行驶，系统会在下一个时间窗口再次评估。"}</small></span></div>`;
     if (serviceButton) { serviceButton.disabled = true; serviceButton.textContent = "选择服务后继续"; }
-    setText("serviceStatus", options.length ? `${excludedByDeadline ? "已按路线约束完成候选预筛；" : ""}选择服务后，系统将重新计算路线和 ETA` : excludedByDeadline ? "为满足当前路线约束，本次不增加服务停靠" : "本次不增加服务停靠");
+    setText("serviceStatus", options.length
+      ? requestedName && !hasExact
+        ? `未找到“${requestedName}”；下方为可选替代，点击后才会加入`
+        : `${excludedByDeadline ? "已按路线约束完成候选预筛；" : ""}选择服务后，系统将重新计算路线和 ETA`
+      : requestedName
+        ? `未找到“${requestedName}”，没有自动替换商家`
+        : excludedByDeadline ? "为满足当前路线约束，本次不增加服务停靠" : "本次不增加服务停靠");
     refreshIcons();
   }
 
@@ -4403,18 +4473,30 @@
     const options = state.serviceSuggestion?.recordKey === record.key ? (state.serviceSuggestion.options || []) : [];
     if (!options.length) {
       const message = preferredName
-        ? `沿当前路线未找到可安全加入的“${preferredName}”，没有伪造加入结果`
+        ? `沿当前路线未找到可安全加入的“${preferredName}”，没有自动替换商家`
         : `当前路线没有可安全加入的${label}服务`;
       setText("serviceStatus", message);
       return { ok: false, message };
     }
-    const exact = preferredName && options.find((service) => String(service.name || "").includes(preferredName));
-    const candidate = exact || options[0];
+    const choice = typeof serviceIntent.chooseServiceCandidate === "function"
+      ? serviceIntent.chooseServiceCandidate(options, preferredName)
+      : { candidate: preferredName ? options.find((service) => String(service.name || "").includes(preferredName)) : options[0] };
+    const exact = choice.exact || null;
+    // An explicit brand/keyword is a hard semantic preference for this action.
+    // Generic alternatives remain visible for an intentional click, but the
+    // second-turn action itself must not silently become “天祥餐馆” (or any
+    // other unrelated POI).
+    if (preferredName && !exact) {
+      const message = `未找到“${preferredName}”，未自动替换为其他商家；可在右侧选择替代`;
+      setText("serviceStatus", message);
+      setAiReply(message);
+      return { ok: false, message };
+    }
+    const candidate = choice.candidate || options[0];
     await applyServicePlan(candidate);
     const succeeded = state.activeServicePlan?.id === candidate.id;
     if (!succeeded) return { ok: false, message: `“${candidate.name}”未通过真实路线复算，没有加入行程` };
-    const fallbackNote = preferredName && !exact ? `未找到同名点，已选择沿线可行的${label}服务“${candidate.name}”` : `已加入${candidate.name}`;
-    return { ok: true, message: fallbackNote };
+    return { ok: true, message: `已加入${candidate.name}` };
   }
 
   async function applyPostRouteActions(actions) {
