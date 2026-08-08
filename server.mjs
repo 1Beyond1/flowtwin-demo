@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
-import { extname, join, normalize } from "node:path";
+import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./lib/config.mjs";
 import { parseTripIntent, formatPlanResponse, planLimits } from "./lib/plan.mjs";
@@ -21,10 +21,9 @@ import {
 import { createVersionChecker, loadVersionInfo, resolveVersionRoute } from "./lib/version.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
-const config = await loadConfig({ root });
-const port = config.port;
-const versionInfo = await loadVersionInfo({ root });
-const versionChecker = createVersionChecker({ localVersion: versionInfo });
+let config = null;
+let versionInfo = null;
+let versionChecker = null;
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -300,6 +299,127 @@ async function readJsonBody(request, maxBytes = 32768) {
   }
 }
 
+const LONG_TRIP_ENERGY_TYPES = new Set(["electric", "fuel", "hybridElectric", "hybridFuel"]);
+const SAFE_MAPPING_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function own(source, key) {
+  return Object.prototype.hasOwnProperty.call(source, key);
+}
+
+function safeNumber(value, min, max, { integer = false, clamp = true } = {}) {
+  if (value === null || value === undefined || typeof value === "boolean") return undefined;
+  if (typeof value !== "number" && typeof value !== "string") return undefined;
+  if (typeof value === "string" && !value.trim()) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  if (!clamp && (parsed < min || parsed > max)) return undefined;
+  const bounded = clamp ? Math.max(min, Math.min(max, parsed)) : parsed;
+  return integer ? Math.floor(bounded) : bounded;
+}
+
+function safeDepartureMinutes(value) {
+  const numeric = safeNumber(value, 0, 24 * 60);
+  if (numeric !== undefined) return numeric;
+  if (typeof value !== "string") return undefined;
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return undefined;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour >= 0 && hour < 24 && minute >= 0 && minute < 60
+    ? hour * 60 + minute
+    : undefined;
+}
+
+function safeOffsetMapping(value) {
+  if (!isObject(value)) return undefined;
+  const result = {};
+  let accepted = 0;
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    if (accepted >= 200 || SAFE_MAPPING_KEYS.has(rawKey)) continue;
+    const key = rawKey.trim();
+    if (!key || key.length > 120) continue;
+    const offset = safeNumber(rawValue, 0, 7 * 24 * 60);
+    if (offset === undefined) continue;
+    result[key] = offset;
+    accepted += 1;
+  }
+  return accepted ? result : undefined;
+}
+
+function copyNumber(source, target, key, min, max, options) {
+  if (!own(source, key)) return;
+  const value = safeNumber(source[key], min, max, options);
+  if (value !== undefined) target[key] = value;
+}
+
+function copyDeparture(source, target) {
+  if (!own(source, "departureMinutes")) return;
+  const value = safeDepartureMinutes(source.departureMinutes);
+  if (value !== undefined) target.departureMinutes = value;
+}
+
+function copyForecastScenarioFields(source, target) {
+  copyDeparture(source, target);
+  copyNumber(source, target, "weatherFactor", 0.8, 1.5);
+  copyNumber(source, target, "trafficFactor", 0.7, 1.5);
+  copyNumber(source, target, "demandFactor", 0.5, 2);
+  copyNumber(source, target, "horizonMinutes", 5, 240);
+  copyNumber(source, target, "intervalMinutes", 1, 60);
+  for (const key of ["arrivalOffsetMinutes", "arrivalMinutes", "etaMinutes"]) {
+    copyNumber(source, target, key, 0, 7 * 24 * 60);
+  }
+  for (const key of ["arrivalOffsets", "etaByStation", "arrivalByStation"]) {
+    if (!own(source, key)) continue;
+    const value = safeOffsetMapping(source[key]);
+    if (value !== undefined) target[key] = value;
+  }
+}
+
+/**
+ * Build the only long-trip fields that the HTTP API is allowed to pass to the
+ * planner.  Keeping this constructor pure makes the boundary testable without
+ * booting the server or touching an upstream service.
+ */
+export function buildLongTripApiInput(body = {}) {
+  const source = isObject(body) ? body : {};
+  const target = {};
+  if (Array.isArray(source.stations)) target.stations = source.stations.slice(0, 40);
+
+  copyNumber(source, target, "distanceKm", 0, 6000, { clamp: false });
+  copyNumber(source, target, "durationMinutes", 0, 7 * 24 * 60);
+  copyNumber(source, target, "soc", 0, 100);
+  copyNumber(source, target, "minArrivalSoc", 0, 100);
+  copyNumber(source, target, "maxStops", 0, 6, { integer: true });
+  copyNumber(source, target, "maxDetourKm", 0, 1000);
+  copyDeparture(source, target);
+  copyNumber(source, target, "deadlineOffsetMinutes", 0, 7 * 24 * 60);
+  copyNumber(source, target, "deadlineMinutes", 0, 7 * 24 * 60);
+  copyNumber(source, target, "arrivalDeadlineMinutes", 0, 7 * 24 * 60);
+  copyForecastScenarioFields(source, target);
+
+  if (typeof source.energyType === "string" && LONG_TRIP_ENERGY_TYPES.has(source.energyType)) {
+    target.energyType = source.energyType;
+  }
+  if (typeof source.useForecast === "boolean") target.useForecast = source.useForecast;
+  return target;
+}
+
+/**
+ * Normalize the forecast scenario independently from the server configuration.
+ * In particular, station-arrival mappings are copied as bounded scalar maps;
+ * arbitrary nested request data never reaches the forecast model.
+ */
+export function buildForecastApiScenario(scenario = {}) {
+  const source = isObject(scenario) ? scenario : {};
+  const target = {};
+  copyForecastScenarioFields(source, target);
+  return target;
+}
+
 async function planApi(request, response) {
   const body = await readJsonBody(request, 32768);
   const message = typeof body.message === "string" ? body.message.trim() : "";
@@ -312,7 +432,15 @@ async function planApi(request, response) {
 async function forecastApi(request, response) {
   const body = await readJsonBody(request, 128000);
   if (body.stations !== undefined && !Array.isArray(body.stations)) return json(response, 400, { error: "STATIONS_MUST_BE_ARRAY" });
-  return json(response, 200, forecastStations(body.stations || [], body.scenario || {}));
+  const scenario = buildForecastApiScenario(body.scenario);
+  const result = forecastStations(body.stations || [], scenario);
+  // Keep the model's existing response shape while making the accepted
+  // departure/arrival scenario auditable to API callers. Only normalized
+  // scenario fields are reflected; request data cannot replace server config.
+  return json(response, 200, {
+    ...result,
+    scenario: { ...result.scenario, ...scenario }
+  });
 }
 
 // 高德天气文案 -> 对补能等待的放大因子与是否恶劣。雨天/雪天更多人充电、服务也
@@ -386,19 +514,11 @@ async function weatherApi(requestUrl, response) {
 async function longTripApi(request, response) {
   const body = await readJsonBody(request, 128000);
   if (!Array.isArray(body.stations)) return json(response, 400, { error: "STATIONS_REQUIRED" });
-  if (!Number.isFinite(Number(body.distanceKm)) || Number(body.distanceKm) < 0 || Number(body.distanceKm) > 6000) {
+  const input = buildLongTripApiInput(body);
+  if (!Number.isFinite(input.distanceKm)) {
     return json(response, 400, { error: "INVALID_DISTANCE" });
   }
-  return json(response, 200, buildLongTripPlans({
-    distanceKm: Number(body.distanceKm),
-    durationMinutes: Number(body.durationMinutes) || 0,
-    stations: body.stations.slice(0, 40),
-    energyType: body.energyType,
-    soc: body.soc,
-    minArrivalSoc: body.minArrivalSoc,
-    maxStops: body.maxStops,
-    maxDetourKm: body.maxDetourKm
-  }));
+  return json(response, 200, buildLongTripPlans(input));
 }
 
 async function operatorApi(request, response) {
@@ -475,7 +595,7 @@ async function staticFile(pathname, response) {
   }
 }
 
-createServer(async (request, response) => {
+async function requestHandler(request, response) {
   try {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
     if (request.method === "OPTIONS") return json(response, 204, {});
@@ -521,6 +641,21 @@ createServer(async (request, response) => {
     if (status >= 500) console.error("FlowTwin request failed without logging request data or credentials");
     return json(response, status, { error: status === 413 ? "REQUEST_TOO_LARGE" : status === 400 ? "INVALID_JSON" : "INTERNAL_SERVER_ERROR" });
   }
-}).listen(port, "127.0.0.1", () => {
-  console.log(`FlowTwin running at http://127.0.0.1:${port}`);
-});
+}
+
+async function startServer() {
+  config = await loadConfig({ root });
+  versionInfo = await loadVersionInfo({ root });
+  versionChecker = createVersionChecker({ localVersion: versionInfo });
+  const port = config.port;
+  createServer(requestHandler).listen(port, "127.0.0.1", () => {
+    console.log(`FlowTwin running at http://127.0.0.1:${port}`);
+  });
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  startServer().catch(() => {
+    console.error("FlowTwin failed to start");
+    process.exitCode = 1;
+  });
+}
