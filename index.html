@@ -3414,20 +3414,62 @@
         height: 5px;
         border-radius: 50%;
         background: #d8ddda;
+        opacity: 0.28;
+        transform: scale(0.86) translateZ(0);
+        transform-origin: center;
+        will-change: transform, opacity, background-color;
       }
 
-      @keyframes composer-dot-emphasis {
-        0%, 4% { background: #111617; box-shadow: 0 0 0 1px rgba(17, 22, 23, 0.04); transform: scale(1.26); }
-        15% { background: #111617; transform: scale(1.08); }
-        20%, 100% { background: #d8ddda; box-shadow: none; transform: scale(0.9); }
+      /* The loader travels around the 3x3 grid, then settles on the centre:
+         13 -> 12 -> 11 -> 21 -> 31 -> 32 -> 33 -> 23 -> 22. */
+      @keyframes composer-dot-flow {
+        0%, 5% {
+          background: #111617;
+          opacity: 1;
+          transform: scale(1.28) translateZ(0);
+        }
+        14% {
+          background: #25302f;
+          opacity: 0.92;
+          transform: scale(1.14) translateZ(0);
+        }
+        28% {
+          background: #53605d;
+          opacity: 0.72;
+          transform: scale(1.04) translateZ(0);
+        }
+        46% {
+          background: #7e8986;
+          opacity: 0.52;
+          transform: scale(0.98) translateZ(0);
+        }
+        68% {
+          background: #aeb8b4;
+          opacity: 0.36;
+          transform: scale(0.91) translateZ(0);
+        }
+        86%, 100% {
+          background: #d8ddda;
+          opacity: 0.22;
+          transform: scale(0.86) translateZ(0);
+        }
       }
 
-      .composer-submit-button.is-loading .composer-dot:nth-child(3) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: 0s; }
-      .composer-submit-button.is-loading .composer-dot:nth-child(1) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: -0.2s; }
-      .composer-submit-button.is-loading .composer-dot:nth-child(7) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: -0.4s; }
-      .composer-submit-button.is-loading .composer-dot:nth-child(9) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: -0.6s; }
-      .composer-submit-button.is-loading .composer-dot:nth-child(6) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: -0.8s; }
-      .composer-submit-button.is-loading .composer-dot:nth-child(5) { animation: composer-dot-emphasis 1.2s ease-in-out infinite; animation-delay: -1s; }
+      .composer-submit-button.is-loading .composer-dot {
+        animation: composer-dot-flow 1.72s linear infinite;
+      }
+
+      /* DOM order is row-major; the delay variables remap it to the desired
+         perimeter path without moving the visual 3x3 grid. */
+      .composer-submit-button.is-loading .composer-dot:nth-child(1) { --flow-delay: 290ms; animation-delay: var(--flow-delay); }
+      .composer-submit-button.is-loading .composer-dot:nth-child(2) { --flow-delay: 145ms; animation-delay: var(--flow-delay); }
+      .composer-submit-button.is-loading .composer-dot:nth-child(3) { --flow-delay: 0ms; animation-delay: var(--flow-delay); }
+      .composer-submit-button.is-loading .composer-dot:nth-child(4) { --flow-delay: 435ms; animation-delay: var(--flow-delay); }
+      .composer-submit-button.is-loading .composer-dot:nth-child(5) { --flow-delay: 1160ms; animation-delay: var(--flow-delay); }
+      .composer-submit-button.is-loading .composer-dot:nth-child(6) { --flow-delay: 1015ms; animation-delay: var(--flow-delay); }
+      .composer-submit-button.is-loading .composer-dot:nth-child(7) { --flow-delay: 580ms; animation-delay: var(--flow-delay); }
+      .composer-submit-button.is-loading .composer-dot:nth-child(8) { --flow-delay: 725ms; animation-delay: var(--flow-delay); }
+      .composer-submit-button.is-loading .composer-dot:nth-child(9) { --flow-delay: 870ms; animation-delay: var(--flow-delay); }
 
       .voice-intent-button {
         background: var(--blue) !important;
@@ -3585,8 +3627,17 @@
 
       @media (prefers-reduced-motion: reduce) {
         .settings-panel { animation: none; }
-        .composer-submit-button.is-loading .composer-dot { animation: none !important; transform: scale(0.9); }
-        .composer-submit-button.is-loading .composer-dot:nth-child(3) { background: #111617; transform: scale(1.15); }
+        .composer-submit-button.is-loading .composer-dot {
+          animation: none !important;
+          background: #d8ddda;
+          opacity: 0.28;
+          transform: scale(0.86) translateZ(0);
+        }
+        .composer-submit-button.is-loading .composer-dot:nth-child(3) {
+          background: #111617;
+          opacity: 1;
+          transform: scale(1.15) translateZ(0);
+        }
       }
       @media (prefers-reduced-motion: reduce) {
         *,
@@ -4491,9 +4542,9 @@
           <button type="button" class="composer-submit-button" id="composerSubmitButton" aria-label="提交新行程规划" title="开始规划">
             <i class="composer-arrow" data-lucide="arrow-up"></i>
             <span class="composer-dot-loader" aria-hidden="true">
-              <span class="composer-dot" data-dot-position="top-left" data-sequence="11"></span><span class="composer-dot" data-dot-position="top-center"></span><span class="composer-dot" data-dot-position="top-right" data-sequence="33"></span>
-              <span class="composer-dot" data-dot-position="middle-left"></span><span class="composer-dot" data-dot-position="center" data-sequence="22"></span><span class="composer-dot" data-dot-position="middle-right" data-sequence="32"></span>
-              <span class="composer-dot" data-dot-position="bottom-left" data-sequence="13"></span><span class="composer-dot" data-dot-position="bottom-center"></span><span class="composer-dot" data-dot-position="bottom-right" data-sequence="33"></span>
+              <span class="composer-dot" data-dot-position="top-left" data-sequence="11"></span><span class="composer-dot" data-dot-position="top-center" data-sequence="12"></span><span class="composer-dot" data-dot-position="top-right" data-sequence="13"></span>
+              <span class="composer-dot" data-dot-position="middle-left" data-sequence="21"></span><span class="composer-dot" data-dot-position="center" data-sequence="22"></span><span class="composer-dot" data-dot-position="middle-right" data-sequence="23"></span>
+              <span class="composer-dot" data-dot-position="bottom-left" data-sequence="31"></span><span class="composer-dot" data-dot-position="bottom-center" data-sequence="32"></span><span class="composer-dot" data-dot-position="bottom-right" data-sequence="33"></span>
             </span>
           </button>
           <button type="button" class="ai-parse-button voice-intent-button" id="voiceIntentButton" aria-label="开始语音输入" aria-pressed="false" title="语音输入">
