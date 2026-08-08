@@ -3772,7 +3772,7 @@
         justify-content: center;
         gap: 2px;
         width: 30px;
-        height: 26px;
+        height: 30px;
         color: currentColor;
       }
 
@@ -3782,20 +3782,46 @@
         height: var(--wave-height, 16px);
         border-radius: 999px;
         background: currentColor;
-        transform: scaleY(0.72);
+        transform: scaleY(0.82);
         transform-origin: center;
         opacity: 0.88;
         animation: none;
         will-change: auto;
       }
 
-      .voice-wave > span:nth-child(1) { --wave-height: 10px; --wave-delay: 0s; }
-      .voice-wave > span:nth-child(2) { --wave-height: 16px; --wave-delay: 0.08s; }
-      .voice-wave > span:nth-child(3) { --wave-height: 21px; --wave-delay: 0.16s; }
-      .voice-wave > span:nth-child(4) { --wave-height: 24px; --wave-delay: 0.24s; }
-      .voice-wave > span:nth-child(5) { --wave-height: 19px; --wave-delay: 0.32s; }
-      .voice-wave > span:nth-child(6) { --wave-height: 14px; --wave-delay: 0.40s; }
-      .voice-wave > span:nth-child(7) { --wave-height: 9px; --wave-delay: 0.48s; }
+      /* Idle is intentionally multi-peak, matching a compact voice waveform
+         instead of the old single-hump / croissant silhouette. */
+      .voice-wave > span:nth-child(1) { --wave-height: 12px; --wave-delay: 0s; }
+      .voice-wave > span:nth-child(2) { --wave-height: 22px; --wave-delay: 0.07s; }
+      .voice-wave > span:nth-child(3) { --wave-height: 30px; --wave-delay: 0.14s; }
+      .voice-wave > span:nth-child(4) { --wave-height: 18px; --wave-delay: 0.21s; }
+      .voice-wave > span:nth-child(5) { --wave-height: 28px; --wave-delay: 0.28s; }
+      .voice-wave > span:nth-child(6) { --wave-height: 22px; --wave-delay: 0.35s; }
+      .voice-wave > span:nth-child(7) { --wave-height: 12px; --wave-delay: 0.42s; }
+
+      @keyframes voice-wave-hover {
+        0%, 100% {
+          transform: scaleY(0.82);
+          opacity: 0.88;
+        }
+        28%, 54% {
+          transform: scaleY(1.04);
+          opacity: 1;
+        }
+        76% {
+          transform: scaleY(0.82);
+          opacity: 0.88;
+        }
+      }
+
+      /* A single left-to-right ripple on hover. The recording selector below
+         remains more specific and continuous, while :not(.recording) keeps
+         this one-shot motion out of the active voice-input state. */
+      .ai-composer .ai-parse-button:not(.recording):hover .voice-wave > span {
+        animation: voice-wave-hover 620ms cubic-bezier(0.22, 1, 0.36, 1) 1 both;
+        animation-delay: var(--wave-delay, 0s);
+        will-change: transform, opacity;
+      }
 
       .ai-composer .ai-parse-button.recording .voice-wave {
         display: flex;
@@ -3844,7 +3870,7 @@
       @media (prefers-reduced-motion: reduce) {
         .voice-wave > span {
           animation: none;
-          transform: scaleY(0.72);
+          transform: scaleY(0.82);
           opacity: 0.88;
         }
 
