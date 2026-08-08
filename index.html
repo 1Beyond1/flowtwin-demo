@@ -1279,6 +1279,25 @@
         font-size: 11px;
       }
 
+      .operator-boundary-note {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-top: 9px;
+        padding: 8px 10px;
+        border: 1px solid #d9e2f7;
+        border-radius: 6px;
+        background: #f7f9ff;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      .operator-boundary-note strong {
+        color: var(--blue);
+        font-weight: 700;
+      }
+
       /* The operator view intentionally shows the two halves of the decision
          loop: deterministic simulation first, natural-language interpretation
          second.  The entry point is shared, but the responsibilities stay
@@ -4598,15 +4617,16 @@
           <div>
             <div class="eyebrow">Operator intelligence</div>
             <h2 id="operatorPanelTitle">北京区域补能供需</h2>
-            <p>把聚合出行需求转成可解释的跨站引流与定价动作。<span class="source-badge">真实站点 POI · 经营状态演示仿真</span></p>
+            <p>把全网站点观察结果与平台可调控站点分开，形成可解释的推荐分流方案。<span class="source-badge">地图 POI（真实服务可用时来自高德） · 演示平台配置 · 仿真经营状态</span></p>
+            <div class="operator-boundary-note"><strong>业务边界</strong><span>所有站点都可用于地图导航和补能候选；只有演示平台配置中同时满足合作、可调控、可发券、商家接受的站点，才会进入运营策略计算。</span></div>
           </div>
           <button class="close-button" id="closeOperator" aria-label="关闭运营视图"><i data-lucide="x"></i></button>
         </div>
         <div class="analysis-flow-strip" aria-label="智能分析流程">
           <article class="analysis-step-card active" id="operatorSimulationStep">
             <div class="analysis-step-top"><span class="analysis-step-number">01</span><span class="analysis-step-state" id="operatorSimulationState">待开始</span></div>
-            <strong>分流仿真计算</strong>
-            <p>用拥堵、容量、等待与 ROI 约束计算跨站分流结果，不由大模型替代。</p>
+            <strong>平台分流仿真计算</strong>
+            <p>用拥堵、容量、等待与平台成本约束计算推荐分流结果，不由大模型替代。</p>
           </article>
           <div class="analysis-flow-connector" aria-hidden="true"><i data-lucide="arrow-right"></i></div>
           <article class="analysis-step-card" id="operatorFeishuStep">
@@ -4617,23 +4637,23 @@
         </div>
         <div class="operator-grid">
           <div class="operator-metric"><div class="stat-label">未来 30 分钟峰值排队</div><strong id="operatorQueue">43<span style="font-size:13px;font-family:var(--sans);font-weight:500"> 人</span></strong><p id="operatorQueueNote">大兴南区 3 个站点出现集中到达</p></div>
-          <div class="operator-metric"><div class="stat-label">当前优惠档位</div><strong id="operatorDiscount">¥6<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span></strong><p id="operatorDiscountNote">仅对高峰时段目标用户触发</p></div>
-          <div class="operator-metric"><div class="stat-label">预测优惠 ROI</div><strong id="operatorRoi" style="color:var(--teal)">1.8x</strong><p id="operatorRoiNote">演示模拟：新增订单毛利 / 优惠成本</p></div>
+          <div class="operator-metric"><div class="stat-label">平台券档位</div><strong id="operatorDiscount">—</strong><p id="operatorDiscountNote">尚未生成可执行的平台券策略</p></div>
+          <div class="operator-metric"><div class="stat-label">场景 ROI 估算</div><strong id="operatorRoi">—</strong><p id="operatorRoiNote">场景仿真结果 · 待真实 A/B 实验验证</p></div>
         </div>
         <section class="station-flow" aria-label="跨站分流路径">
           <div class="station-flow-head"><strong>本次跨站分流</strong><span id="operatorLogicHint">根据拥堵、空余容量、绕行与人群敏感度计算</span></div>
           <div class="station-flow-cards">
-            <article class="flow-station-card source"><span>拥堵站 · 需求来源</span><strong id="operatorSourceName">正在识别高峰站点</strong><p id="operatorSourceMetrics">负载 — · P90 —</p></article>
+            <article class="flow-station-card source"><span>拥堵源站 · 全网观察</span><strong id="operatorSourceName">正在识别高峰站点</strong><p id="operatorSourceMetrics">负载 — · 预计等待 —</p></article>
             <div class="flow-arrow"><i data-lucide="arrow-right"></i><small id="operatorFlowLabel">分流方案</small></div>
-            <article class="flow-station-card target"><span>承接站 · 空余容量</span><strong id="operatorTargetName">正在筛选可承接站</strong><p id="operatorTargetMetrics">负载 — · P90 —</p></article>
+            <article class="flow-station-card target"><span>平台承接站 · 可执行</span><strong id="operatorTargetName">正在筛选可承接站</strong><p id="operatorTargetMetrics">全网 POI 可见 · 等待边界校验</p></article>
           </div>
         </section>
         <div class="strategy-lab" id="operatorStrategyLab">
-          <div class="strategy-lab-head"><strong>优惠档位实验台</strong><span>优惠不足无法分流；优惠过高会拉低 ROI。算法在 ROI ≥ 1 的档位里取分流量最大的一档</span></div>
+          <div class="strategy-lab-head"><strong>平台券 / 推荐分流实验台</strong><span>平台不能直接修改商家油电标价；本实验台只比较平台券、推荐分流与承接容量的场景结果。</span></div>
           <div class="strategy-controls">
             <div class="strategy-control">
-              <div class="strategy-control-head"><label for="discountSlider">单笔优惠金额</label><output id="discountValue" for="discountSlider">¥6</output></div>
-              <input id="discountSlider" type="range" min="0" max="15" step="1" value="6" aria-label="单笔优惠金额" />
+              <div class="strategy-control-head"><label for="discountSlider">单笔平台券金额</label><output id="discountValue" for="discountSlider">¥6</output></div>
+              <input id="discountSlider" type="range" min="0" max="15" step="1" value="6" aria-label="单笔平台券金额" />
             </div>
             <div class="strategy-control">
               <label for="targetSegment">目标用户</label>
@@ -4645,21 +4665,21 @@
               </select>
             </div>
             <div class="strategy-control">
-              <label for="targetStationSelect">承接站</label>
-              <select id="targetStationSelect" aria-label="承接站"></select>
+              <label for="targetStationSelect">平台可承接站</label>
+              <select id="targetStationSelect" aria-label="平台可承接站"></select>
             </div>
             <button class="strategy-preview-button" id="operatorSimulate"><i data-lucide="calculator"></i> 试算这组方案</button>
           </div>
           <div class="strategy-comparison" aria-label="策略执行前后对比">
-            <div class="comparison-metric snapshot" id="operatorBeforeCompare"><span>执行前</span><div class="snapshot-values"><strong id="beforeQueueValue">18 人</strong><strong id="beforeP90Value">P90 23.0m</strong></div></div>
-            <div class="comparison-metric snapshot after" id="operatorAfterCompare"><span>策略预测</span><div class="snapshot-values"><strong id="afterQueueValue">14 人</strong><strong id="afterP90Value">P90 18.4m</strong></div></div>
-            <div class="comparison-metric"><span>预计分流人数</span><div class="comparison-values"><strong id="divertedUsersValue">4 人</strong></div></div>
-            <div class="comparison-metric"><span>优惠投入回报</span><div class="comparison-values"><strong id="strategyRoiValue">1.5x</strong></div></div>
+            <div class="comparison-metric snapshot" id="operatorBeforeCompare"><span>执行前</span><div class="snapshot-values"><strong id="beforeQueueValue">—</strong><strong id="beforeP90Value">P90 —</strong></div></div>
+            <div class="comparison-metric snapshot after" id="operatorAfterCompare"><span>未执行策略</span><div class="snapshot-values"><strong id="afterQueueValue">—</strong><strong id="afterP90Value">P90 —</strong></div></div>
+            <div class="comparison-metric"><span>场景预计分流</span><div class="comparison-values"><strong id="divertedUsersValue">—</strong></div></div>
+            <div class="comparison-metric"><span>场景 ROI 估算</span><div class="comparison-values"><strong id="strategyRoiValue">—</strong></div></div>
           </div>
         </div>
         <div class="operator-actions">
           <div class="operator-action-copy">
-            <p id="operatorAction"><strong>建议动作：</strong>先识别拥堵站，再在承接站容量和 ROI ≥ 1 的约束内，求分流量最大的优惠档位。</p>
+            <p id="operatorAction"><strong>当前边界：</strong>全网站点可以导航和观察，但只有演示平台配置中可控且接受平台券的站点才能生成运营策略。</p>
             <small>点击“开始智能分析”后，系统会先完成严谨仿真，再自动请求飞书 AI 解读；两条结果彼此独立。</small>
           </div>
           <div class="operator-button-group"><button class="secondary-action subtle hidden" id="resetExecution"><i data-lucide="rotate-ccw"></i>重置分析</button><button class="secondary-action analysis-run-button" id="approveButton"><i data-lucide="sparkles"></i>开始智能分析</button></div>

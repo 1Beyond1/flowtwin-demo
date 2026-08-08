@@ -1776,6 +1776,77 @@
     return Number((band.base + (hash % band.spread) / 100).toFixed(2));
   }
 
+  // 运营侧不能把高德检索到的所有站点都当成能链可调控站点。真实的 POI
+  // 只回答“地图上有什么”，下面这组字段是为了演示平台边界而生成的固定
+  // 种子配置：只有少量站点同时满足合作、可调控、可发券、商家接受四个条件。
+  // 这不是企业签约表，也不是实时经营数据；请求运营接口时会再次显式携带
+  // 这些字段，避免后端的旧版兼容逻辑把缺字段站点默认成可执行。
+  const OPERATOR_DEMO_DEFAULTS = Object.freeze({
+    dataSource: "FlowTwin 演示平台配置",
+    asOf: "固定种子演示 · 非实时",
+    platformCoupon: 6,
+    merchantCouponShare: 0.35,
+    platformTakeRate: 0.12,
+    platformVariableCost: 0.18,
+    campaignBudget: 240
+  });
+
+  function decorateOperatorDemoStations(stations) {
+    const source = Array.isArray(stations) ? stations : [];
+    if (!source.length) return source;
+    const groups = new Map();
+    source.forEach((station, index) => {
+      const key = station.type || "补能站";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ station, index });
+    });
+    const eligibleIds = new Set();
+    groups.forEach((group) => {
+      const rank = ({ station }) => stableHash(`operator-platform:${station.id || station.name}`);
+      const preferred = group
+        .filter(({ station }) => rank({ station }) % 5 === 0)
+        .sort((a, b) => rank(a) - rank(b));
+      const minimum = Math.min(2, group.length);
+      const selected = preferred.slice(0, 3);
+      for (const entry of group.slice().sort((a, b) => rank(a) - rank(b))) {
+        if (selected.length >= minimum) break;
+        if (!selected.some((picked) => picked.station.id === entry.station.id)) selected.push(entry);
+      }
+      selected.slice(0, 3).forEach(({ station }) => eligibleIds.add(String(station.id)));
+    });
+    return source.map((station, index) => {
+      if (station.operatorMeta?.metadataVersion === 1) return station;
+      const seed = stableHash(`operator-economics:${station.id || station.name}`);
+      const eligible = eligibleIds.has(String(station.id));
+      const capacity = Math.max(1, Number(station.capacity) || 18);
+      const operatorMeta = {
+        metadataVersion: 1,
+        partner: eligible,
+        controllable: eligible,
+        couponEligible: eligible,
+        merchantAccepted: eligible,
+        windowCapacity: Number((capacity * (eligible ? 0.82 : 0.68)).toFixed(2)),
+        platformCoupon: OPERATOR_DEMO_DEFAULTS.platformCoupon,
+        merchantCouponShare: OPERATOR_DEMO_DEFAULTS.merchantCouponShare,
+        platformTakeRate: OPERATOR_DEMO_DEFAULTS.platformTakeRate,
+        platformVariableCost: OPERATOR_DEMO_DEFAULTS.platformVariableCost,
+        campaignBudget: OPERATOR_DEMO_DEFAULTS.campaignBudget,
+        dataSource: OPERATOR_DEMO_DEFAULTS.dataSource,
+        asOf: OPERATOR_DEMO_DEFAULTS.asOf,
+        label: "演示平台配置（非企业真实字段）",
+        seed
+      };
+      return Object.assign({}, station, { operatorMeta });
+    });
+  }
+
+  function ensureOperatorDemoMetadata() {
+    if (!Array.isArray(state.stations) || !state.stations.length) return [];
+    if (state.stations.every((station) => station.operatorMeta?.metadataVersion === 1)) return state.stations;
+    state.stations = decorateOperatorDemoStations(state.stations);
+    return state.stations;
+  }
+
   function simulateStation(poi, index) {
     const hash = stableHash(`${poi.id || poi.name}-${index}`);
     const occupancy = 0.42 + (hash % 44) / 100;
@@ -4505,6 +4576,7 @@
 
   function renderStationSummary() {
     if (!state.stations.length) return;
+    ensureOperatorDemoMetadata();
     state.operatorOriginalStations = state.stations.map((station) => Object.assign({}, station));
     state.operatorBefore = computeOperatorSnapshot(state.stations);
     state.operatorAfter = null;
@@ -4913,13 +4985,14 @@
   }
 
   function computeOperatorSnapshot(stations) {
+    ensureOperatorDemoMetadata();
     const relevant = stations.filter((station) => station.type === (isFuelActive() ? "加油站" : "充电站"));
     const pool = relevant.length ? relevant : stations;
     const average = (values) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
     const averageWait = average(pool.map((station) => station.wait));
     const averageOccupancy = average(pool.map((station) => station.occupancy));
     const dispersion = Math.sqrt(average(pool.map((station) => Math.pow(station.occupancy - averageOccupancy, 2))));
-    const p90 = Math.max.apply(null, pool.map((station) => station.p90));
+    const p90 = pool.length ? Math.max.apply(null, pool.map((station) => Number(station.p90) || 0)) : 0;
     const riskCount = pool.filter((station) => station.status === "forecast-risk").length;
     const routeOnTime = Object.values(state.routeRecords).filter((record) => Number.isFinite(record.onTime));
     return {
@@ -4927,38 +5000,54 @@
       p90,
       dispersion,
       riskCount,
-      peakQueue: Math.max(18, Math.round(pool.reduce((sum, station) => sum + Math.max(0, station.occupancy - 0.48) * 9, 7))),
-      discount: Math.max(4, Math.min(8, riskCount + 4)),
-      roi: 1.35 + Math.min(0.65, riskCount * 0.08),
+      peakQueue: Math.max(0, Math.round(pool.reduce((sum, station) => sum + Math.max(0, station.occupancy - 0.48) * 9, 0))),
+      // 未运行平台仿真前，不把演示占用率推导成“当前优惠/ROI”。
+      discount: null,
+      roi: null,
+      scenarioRoi: null,
+      strategyAvailable: false,
       onTime: routeOnTime.length ? average(routeOnTime.map((record) => record.onTime)) : 89
     };
   }
 
   function operatorStations() {
+    ensureOperatorDemoMetadata();
     const type = isFuelActive() ? "加油站" : "充电站";
     const matching = state.stations.filter((station) => station.type === type);
     return matching.length ? matching : state.stations;
+  }
+
+  function operatorExecutableStations(stations = operatorStations()) {
+    return stations.filter((station) => {
+      const meta = station.operatorMeta || {};
+      return meta.partner === true && meta.controllable === true && meta.couponEligible === true && meta.merchantAccepted === true;
+    });
   }
 
   function populateOperatorTargetSelect(preferredId) {
     const select = byId("targetStationSelect");
     if (!select) return;
     const stations = operatorStations();
+    const executable = operatorExecutableStations(stations);
     const source = stations.slice().sort((a, b) => b.p90 - a.p90 || b.occupancy - a.occupancy)[0];
     const oldValue = preferredId || select.value;
-    const candidates = stations.filter((station) => station.id !== source?.id).slice().sort((a, b) => (a.p90 + a.occupancy * 18) - (b.p90 + b.occupancy * 18));
-    select.innerHTML = candidates.map((station) => `<option value="${station.id}">${station.name} · 负载 ${(station.occupancy * 100).toFixed(0)}%</option>`).join("");
+    const candidates = executable.filter((station) => station.id !== source?.id).slice().sort((a, b) => (a.p90 + a.occupancy * 18) - (b.p90 + b.occupancy * 18));
+    select.innerHTML = candidates.length
+      ? candidates.map((station) => `<option value="${escapeHtml(station.id)}">${escapeHtml(station.name)} · 负载 ${(station.occupancy * 100).toFixed(0)}% · 平台可调控</option>`).join("")
+      : '<option value="">暂无满足平台控制边界的承接站</option>';
+    select.disabled = !candidates.length;
     if (candidates.some((station) => station.id === oldValue)) select.value = oldValue;
   }
 
   function renderOperatorFlow(payload) {
     const pool = operatorStations();
     if (!pool.length) return;
+    const executable = operatorExecutableStations(pool);
     const beforePool = (state.operatorOriginalStations.length ? state.operatorOriginalStations : state.stations)
       .filter((station) => station.type === (isFuelActive() ? "加油站" : "充电站"));
     let source = beforePool.slice().sort((a, b) => b.p90 - a.p90 || b.occupancy - a.occupancy)[0] || pool[0];
-    const targetId = payload?.targetStation?.id || byId("targetStationSelect")?.value;
-    const target = pool.find((station) => station.id === targetId) || pool.filter((station) => station.id !== source?.id).slice().sort((a, b) => (a.p90 + a.occupancy * 18) - (b.p90 + b.occupancy * 18))[0] || source;
+    const targetId = payload?.execution?.targetStationId || payload?.targetStation?.id || byId("targetStationSelect")?.value;
+    const target = executable.find((station) => station.id === targetId) || null;
     const after = new Map((payload?.stations || []).map((station) => [station.id, station]));
     if (payload?.stations?.length) {
       const actualSource = payload.stations
@@ -4974,23 +5063,29 @@
       operatorRole: station.id === source?.id ? "source" : station.id === target?.id ? "target" : null
     }));
     setText("operatorSourceName", source?.name || "高峰站点");
-    setText("operatorTargetName", target?.name || "承接站点");
+    setText("operatorTargetName", target?.name || "暂无平台可执行承接站");
     const stationMetrics = (before, afterEntry) => afterEntry
       ? `负载 ${(before.occupancy * 100).toFixed(0)}% → ${(afterEntry.occupancy * 100).toFixed(0)}% · 平均等待 ${Math.round(before.wait)} → ${Math.round(afterEntry.wait)} 分钟`
-      : `负载 ${(before.occupancy * 100).toFixed(0)}% · P90 ${before.p90} 分钟`;
+      : before
+        ? `负载 ${(before.occupancy * 100).toFixed(0)}% · 预计等待 ${before.p90} 分钟`
+        : "暂无站点数据";
     setText("operatorSourceMetrics", stationMetrics(source, sourceAfter));
-    setText("operatorTargetMetrics", stationMetrics(target, targetAfter));
-    // recommendedDiscount 现在可能是 null（没有任何券值能不亏本）。原来的
-    // `|| payload.discountAmount` 会把用户自己填的数字回显成"建议值"，
-    // 变成一句假装是建议的同义反复。
-    const suggestion = payload?.recommendedDiscount != null
-      ? `建议 ¥${payload.recommendedDiscount}`
-      : "当前结构下无盈亏平衡券值";
-    const flowLabel = payload ? `¥${payload.discountAmount}（${suggestion}）· 分流 ${Math.round(payload.impact?.divertedVehicles || 0)} 人` : "算法推荐承接站";
+    setText("operatorTargetMetrics", target ? stationMetrics(target, targetAfter) : "全网 POI 可见 · 未纳入运营执行");
+    const flowLabel = !payload
+      ? "等待平台边界校验"
+      : !payload.execution?.executable
+        ? "仅导航 · 未生成策略"
+        : payload.insufficientData
+          ? "数据不足 · 未生成策略"
+          : `平台券 ¥${Number(payload.platformCoupon ?? payload.discountAmount ?? 0).toFixed(0)} · 分流 ${Math.round(payload.impact?.divertedVehicles || 0)} 人`;
     setText("operatorFlowLabel", flowLabel);
-    const logic = payload
-      ? `依据 ${payload.targetUser}，在承接容量、绕行和 ROI 约束下重新计算`
-      : "依据拥堵、空余容量、绕行与人群敏感度计算";
+    const logic = !payload
+      ? "全网站点用于观察与导航；仅对演示平台配置站点计算承接策略"
+      : !payload.execution?.executable
+        ? "当前没有同时满足合作、可调控、可发券、商家接受的承接站，仅保留导航"
+        : payload.insufficientData
+          ? "运营字段不完整，未输出优惠、分流或 ROI 结论"
+          : `依据 ${payload.targetUser || "目标用户"}，在承接容量、平台券成本与场景 ROI 约束下计算`;
     setText("operatorLogicHint", logic);
     if (state.live && state.mode === "operator") renderLiveStationMarkers();
   }
@@ -5004,35 +5099,35 @@
     const roiNote = byId("operatorRoiNote");
     const action = byId("operatorAction");
     if (queue) queue.innerHTML = `${snapshot.peakQueue}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> 人</span>`;
-    if (discount) discount.innerHTML = `¥${snapshot.discount}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span>`;
-    // 这张卡片原来标着"建议分流优惠"，印的却是滑杆当前值——把用户自己刚设的
-    // 数字当成算法的建议回显给用户，两者差一倍也看不出来（用户设 ¥12、算法建
-    // 议 ¥3，卡片上都写 ¥12）。标签已改成"当前优惠档位"，算法的建议放进注脚，
-    // 不一致时才有得比。
+    const strategyAvailable = snapshot.strategyAvailable === true;
+    if (discount) discount.innerHTML = strategyAvailable && Number.isFinite(Number(snapshot.discount))
+      ? `¥${Number(snapshot.discount).toFixed(0)}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span>`
+      : "—";
     const discountNote = byId("operatorDiscountNote");
     if (discountNote) {
       const recommended = snapshot.recommendedDiscount;
-      if (recommended === undefined) {
-        discountNote.textContent = "仅对高峰时段目标用户触发";
+      if (!strategyAvailable) {
+        discountNote.textContent = "尚未生成可执行的平台券策略";
       } else if (recommended === null) {
-        discountNote.textContent = "无盈亏平衡券值，建议改用调度";
+        discountNote.textContent = "没有满足场景 ROI 约束的券档";
       } else if (Math.abs(recommended - snapshot.discount) < 0.5) {
-        discountNote.textContent = `与算法建议一致（ROI ${Number(snapshot.recommendedRoi || 0).toFixed(2)}x）`;
+        discountNote.textContent = `与仿真建议一致（场景 ROI ${Number(snapshot.recommendedRoi || 0).toFixed(2)}x）`;
       } else {
-        discountNote.textContent = `算法建议 ¥${recommended}（ROI ${Number(snapshot.recommendedRoi || 0).toFixed(2)}x）`;
+        discountNote.textContent = `仿真建议 ¥${recommended}（场景 ROI ${Number(snapshot.recommendedRoi || 0).toFixed(2)}x）`;
       }
     }
-    // ROI 的颜色以前写死在 HTML 的 style 里，永远是"好结果"的青色——
-    // 0.2x（每花一块钱只换回两毛毛利）和 1.8x 长得一模一样。
     if (roi) {
-      roi.textContent = `${snapshot.roi.toFixed(1)}x`;
-      roi.style.color = snapshot.roi >= 1 ? "var(--teal)" : "var(--amber)";
+      if (strategyAvailable && Number.isFinite(Number(snapshot.roi))) {
+        roi.textContent = `${Number(snapshot.roi).toFixed(2)}x`;
+        roi.style.color = Number(snapshot.roi) >= 1 ? "var(--teal)" : "var(--amber)";
+      } else {
+        roi.textContent = "—";
+        roi.style.color = "";
+      }
     }
-    // Math.max(1, ...) 会把"没降"和"反而升了"都说成"减少 1 人"——一个永远
-    // 报喜的数字。按真实差值说，降了多少说多少，没降就直说。
     if (queueNote) {
       if (!executed) {
-        queueNote.textContent = `${snapshot.riskCount} 个站点出现集中到达风险`;
+        queueNote.textContent = `${snapshot.riskCount} 个站点出现集中到达风险 · 尚未执行平台策略`;
       } else {
         const drop = (state.operatorBefore?.peakQueue ?? snapshot.peakQueue) - snapshot.peakQueue;
         queueNote.textContent = drop >= 0.5
@@ -5042,8 +5137,10 @@
             : "执行后峰值基本持平";
       }
     }
-    if (roiNote) roiNote.textContent = executed ? "订单回流已写入本次演示复盘" : "演示模拟：新增订单毛利 / 优惠成本";
-    if (action && executed) {
+    if (roiNote) roiNote.textContent = strategyAvailable
+      ? "场景仿真结果 · 待真实 A/B 实验验证"
+      : "当前没有可执行策略，不生成 ROI 或优惠结论";
+    if (action && executed && strategyAvailable) {
       const improved = snapshot.p90 <= state.operatorBefore.p90;
       const p90Message = snapshot.p90 < state.operatorBefore.p90
         ? `P90 从 ${state.operatorBefore.p90.toFixed(1)} 分钟降至 ${snapshot.p90.toFixed(1)} 分钟`
@@ -5052,7 +5149,9 @@
         ? `<strong>执行结果：</strong>高峰站点已分流，${p90Message}。`
         : `<strong>执行复盘：</strong>P90 从 ${state.operatorBefore.p90.toFixed(1)} 分钟升至 ${snapshot.p90.toFixed(1)} 分钟，本策略应撤回并降低优惠强度。`;
     } else if (action) {
-      action.innerHTML = `<strong>建议动作：</strong>根据目标站点承载力和用户敏感度动态计算分流优惠。`;
+      action.innerHTML = strategyAvailable
+        ? `<strong>建议动作：</strong>依据平台承接容量、人群响应和场景 ROI，比较平台券与推荐分流方案。`
+        : `<strong>当前边界：</strong>全网站点可以导航和观察，但只有演示平台配置中可控且接受平台券的站点才能生成运营策略。`;
     }
     populateOperatorTargetSelect(snapshot?.targetStationId);
     renderOperatorFlow(state.pendingOperatorPayload);
@@ -5108,15 +5207,22 @@
     setText("afterQueueValue", delta(before.peakQueue, after.peakQueue, " 人", 1));
     setText("beforeP90Value", `${before.p90Wait.toFixed(1)}m`);
     setText("afterP90Value", delta(before.p90Wait, after.p90Wait, "m", 1));
-    setText("divertedUsersValue", `${Math.round(impact.divertedVehicles)} 人`);
-    setText("strategyRoiValue", `${impact.roi.toFixed(2)}x`);
+    const strategyAvailable = payload.execution?.executable === true && payload.insufficientData !== true;
+    setText("divertedUsersValue", `${strategyAvailable ? Math.round(impact.divertedVehicles || 0) : 0} 人`);
+    setText("strategyRoiValue", strategyAvailable && Number.isFinite(Number(impact.scenarioRoi ?? impact.roi))
+      ? `${Number(impact.scenarioRoi ?? impact.roi).toFixed(2)}x`
+      : "—");
+    const afterLabel = document.querySelector("#operatorAfterCompare > span");
+    if (afterLabel) afterLabel.textContent = strategyAvailable ? "策略预测" : "未执行策略";
     const snapshot = {
       averageWait: after.averageWait,
       p90: after.p90Wait,
       dispersion: after.occupancyDispersion,
       peakQueue: Math.round(after.peakQueue),
-      discount: payload.discountAmount,
-      roi: impact.roi,
+      discount: strategyAvailable ? Number(payload.platformCoupon ?? payload.discountAmount) : null,
+      roi: strategyAvailable ? Number(impact.scenarioRoi ?? impact.roi) : null,
+      scenarioRoi: strategyAvailable ? Number(impact.scenarioRoi ?? impact.roi) : null,
+      strategyAvailable,
       riskCount: payload.stations.filter((station) => station.status === "forecast-risk").length,
       onTime: state.operatorBefore?.onTime || 89,
       // 算法建议跟着快照走，不能在 renderOperatorMetrics 里读
@@ -5128,29 +5234,69 @@
     renderOperatorMetrics(snapshot, false);
     const action = byId("operatorAction");
     if (action) {
-      const risk = payload.recommendation === "risk";
-      // 模型分三档，界面原来只认 risk，于是"缓解了拥堵但这一单是亏的"
-      // （operationally-effective）和真正划算的方案长得一模一样。ROI 就写在
-      // 正文里，却没有任何一处提示它已经低于 1——这正是运营最需要看到的信号。
-      const unprofitable = payload.recommendation === "operationally-effective";
-      const headline = unprofitable
-        ? `<strong>运营有效但不盈利：</strong>`
-        : `<strong>本次策略：</strong>`;
-      action.innerHTML = risk
-        ? `<strong>策略风险：</strong>当前优惠会增加目标站点尾部等待，建议降低优惠或更换目标站点。ROI ${impact.roi.toFixed(2)}x。`
-        // 推荐值的口径已经不是"最低有效优惠"，而是"ROI≥1 的档位里分流最多的
-        // 那一档"；没有这样的档位时要直说，不能拿用户填的数字冒充建议。
-        : `${headline}向${payload.targetUser || "目标用户"}发放 ¥${payload.discountAmount} 优惠，预计分流 ${Math.round(impact.divertedVehicles)} 人（其中挽回流失 ${impact.retainedOrders?.toFixed?.(1) ?? "—"} 单），新增 ${Math.round(impact.incrementalOrders)} 单，ROI ${impact.roi.toFixed(2)}x${unprofitable ? "（优惠成本高于新增毛利，缓解拥堵要自己贴钱）" : ""}。${payload.recommendedDiscount != null
-          ? `算法建议 ¥${payload.recommendedDiscount}（不亏本前提下分流最多，ROI ${Number(payload.recommendedBasis?.roi || 0).toFixed(2)}x）。`
-          : "当前负载与毛利结构下没有任何券值能做到不亏本，建议改为调度或换承接站点。"}${payload.capacityBound
-            // 加价也解决不了的那部分：承接站已经没有空位了，再高的券只是多花钱。
-            ? `<br><span class="strategy-note">承接站空余容量已是瓶颈：拥堵侧还有约 ${payload.unservedPressure} 人的压力无处承接，继续加码优惠无法缓解，需增开站点或跨区调度。</span>`
-            : ""}`;
-      action.classList.toggle("strategy-risk", risk);
-      action.classList.toggle("strategy-unprofitable", unprofitable);
+      if (!strategyAvailable) {
+        const reason = payload.insufficientData
+          ? "平台经济字段不完整，无法给出场景 ROI。"
+          : "当前没有同时满足合作、可调控、可发券、商家接受的承接站。";
+        action.innerHTML = `<strong>未生成可执行策略：</strong>${reason} 全网站点仍保留导航和补能候选用途。`;
+        action.classList.remove("strategy-risk", "strategy-unprofitable");
+      } else {
+        const risk = payload.recommendation === "risk";
+        const unprofitable = payload.recommendation === "operationally-effective";
+        const headline = unprofitable ? `<strong>场景有效但 ROI 未达标：</strong>` : `<strong>本次平台策略：</strong>`;
+        const platformContribution = Number(payload.platformContribution ?? impact.platformContribution ?? 0);
+        const merchantContribution = Number(payload.merchantContribution ?? impact.merchantContribution ?? 0);
+        action.innerHTML = risk
+          ? `<strong>策略风险：</strong>当前平台券会增加承接站尾部等待，建议降低券档或更换承接站。场景 ROI ${Number(impact.scenarioRoi ?? impact.roi).toFixed(2)}x。`
+          : `${headline}向${payload.targetUser || "目标用户"}提供 ¥${payload.platformCoupon ?? payload.discountAmount} 平台券，场景预计分流 ${Math.round(impact.divertedVehicles || 0)} 人（挽回 ${impact.retainedOrders?.toFixed?.(1) ?? "—"} 单，新增 ${Math.round(impact.incrementalOrders || 0)} 单），场景 ROI ${Number(impact.scenarioRoi ?? impact.roi).toFixed(2)}x；平台贡献 ¥${platformContribution.toFixed(2)}，商户贡献 ¥${merchantContribution.toFixed(2)}。${payload.recommendedPlatformCoupon != null
+            ? `仿真建议 ¥${payload.recommendedPlatformCoupon}（在场景 ROI ≥ 1 的券档中分流最多）。`
+            : "当前负载与成本假设下没有满足场景 ROI 约束的券档，建议改用推荐分流或调度。"}${payload.capacityBound
+              ? `<br><span class="strategy-note">承接站窗口容量已是瓶颈：仍有约 ${payload.unservedPressure} 人的需求压力无法承接，继续加码平台券不能解决。</span>`
+              : ""}`;
+        action.classList.toggle("strategy-risk", risk);
+        action.classList.toggle("strategy-unprofitable", unprofitable);
+      }
     }
     renderOperatorFlow(payload);
     return snapshot;
+  }
+
+  function buildOperatorStationPayload() {
+    ensureOperatorDemoMetadata();
+    return state.stations.map((station) => {
+      const meta = station.operatorMeta || {};
+      return {
+        id: String(station.id || ""),
+        name: String(station.name || "补能站"),
+        type: station.type,
+        address: station.address,
+        location: station.location,
+        // source 保留高德/固定 POI 来源；dataSource 单独表示运营仿真字段来源。
+        source: station.source,
+        price: Number(station.price || 0),
+        p50: Number(station.p50 || station.wait || 0),
+        p90: Number(station.p90 || station.wait || 0),
+        wait: Number(station.wait || station.p50 || 0),
+        occupancy: Number(station.occupancy || 0),
+        capacity: Number(station.capacity || 0) || undefined,
+        demand: Number(station.demand || 0) || undefined,
+        serviceRate: Number(station.serviceRate || 0) || undefined,
+        detour: Number(station.detourKm ?? station.detour ?? 0),
+        partner: meta.partner === true,
+        controllable: meta.controllable === true,
+        couponEligible: meta.couponEligible === true,
+        merchantAccepted: meta.merchantAccepted === true,
+        windowCapacity: Number(meta.windowCapacity || 0),
+        platformCoupon: Number(meta.platformCoupon ?? OPERATOR_DEMO_DEFAULTS.platformCoupon),
+        merchantCouponShare: Number(meta.merchantCouponShare ?? OPERATOR_DEMO_DEFAULTS.merchantCouponShare),
+        platformTakeRate: Number(meta.platformTakeRate ?? OPERATOR_DEMO_DEFAULTS.platformTakeRate),
+        platformVariableCost: Number(meta.platformVariableCost ?? OPERATOR_DEMO_DEFAULTS.platformVariableCost),
+        campaignBudget: Number(meta.campaignBudget ?? OPERATOR_DEMO_DEFAULTS.campaignBudget),
+        dataSource: String(meta.dataSource || OPERATOR_DEMO_DEFAULTS.dataSource),
+        asOf: String(meta.asOf || OPERATOR_DEMO_DEFAULTS.asOf),
+        operatorDataLabel: String(meta.label || "演示平台配置（非企业真实字段）")
+      };
+    });
   }
 
   async function simulateOperatorStrategy() {
@@ -5161,13 +5307,26 @@
     // 会被关键词匹配当成"价格敏感"，把最不肯绕路的人算成最肯绕路的人。
     const targetSegment = byId("targetSegment")?.value || "all";
     const targetStationId = byId("targetStationSelect")?.value || null;
+    const stations = buildOperatorStationPayload();
     if (button) button.disabled = true;
+    // 新一轮试算开始后先清掉旧结果；接口失败时不能继续沿用上一轮
+    // 的策略快照，更不能让旧 ROI 看起来像本轮执行结果。
+    state.pendingOperatorPayload = null;
+    state.pendingOperatorSnapshot = null;
+    state.operatorAfter = null;
     resetFeishuSync();
     setOperatorAnalysisStep("simulation", "processing", "计算中");
     try {
       const payload = await postJson("/api/operator/simulate", {
-        stations: state.stations,
+        stations,
         discountAmount: discount,
+        platformCoupon: discount,
+        merchantCouponShare: OPERATOR_DEMO_DEFAULTS.merchantCouponShare,
+        platformTakeRate: OPERATOR_DEMO_DEFAULTS.platformTakeRate,
+        platformVariableCost: OPERATOR_DEMO_DEFAULTS.platformVariableCost,
+        campaignBudget: OPERATOR_DEMO_DEFAULTS.campaignBudget,
+        dataSource: OPERATOR_DEMO_DEFAULTS.dataSource,
+        asOf: OPERATOR_DEMO_DEFAULTS.asOf,
         targetUser,
         targetSegment,
         targetStationId
@@ -5177,8 +5336,15 @@
       state.pendingOperatorSnapshot = snapshot;
       renderOperatorFlow(payload);
       setOperatorAnalysisStep("simulation", "completed", "已计算");
-      showToast("已根据优惠和目标人群重新计算供需响应");
+      showToast(payload.execution?.executable && !payload.insufficientData
+        ? "已根据平台边界、券成本与目标人群完成场景仿真"
+        : "已完成站点边界校验，当前未生成可执行运营策略");
     } catch (error) {
+      state.pendingOperatorPayload = null;
+      state.pendingOperatorSnapshot = null;
+      state.operatorAfter = null;
+      renderOperatorMetrics(state.operatorBefore || computeOperatorSnapshot(state.stations), false);
+      renderOperatorFlow(null);
       setOperatorAnalysisStep("simulation", "error", "计算失败");
       showToast("策略计算失败，请稍后重试", 3600);
     } finally {
@@ -5305,59 +5471,41 @@
   }
 
   function applyStrategy() {
-    if (state.pendingOperatorPayload?.stations?.length) {
-      const payload = state.pendingOperatorPayload;
-      const before = state.operatorBefore || computeOperatorSnapshot(state.stations);
-      const byStation = new Map(payload.stations.map((station) => [station.id, station]));
-      state.stations = state.stations.map((station) => Object.assign({}, station, byStation.get(station.id) || {}));
-      const after = payload.after || {};
-      state.operatorAfter = {
-        averageWait: Number(after.averageWait || before.averageWait),
-        p90: Number(after.p90Wait || before.p90),
-        dispersion: Number(after.occupancyDispersion || before.dispersion),
-        peakQueue: Number(after.peakQueue || before.peakQueue),
-        onTime: before.onTime,
-        roi: Number(payload.impact?.roi || 0),
-        discount: Number(payload.discountAmount || 0),
-        riskCount: state.stations.filter((station) => station.status === "forecast-risk").length,
-        recommendedDiscount: payload.recommendedDiscount,
-        recommendedRoi: Number(payload.recommendedBasis?.roi || 0)
-      };
-      Object.values(state.routeRecords).forEach((record) => {
-        const updatedStation = state.stations.find((station) => station.id === record.station?.id);
-        if (updatedStation) record.station = Object.assign({}, updatedStation, { detour: record.station.detour });
-      });
-      calculateRouteRecords();
-      renderRouteCards();
-      if (state.live) renderLiveStationMarkers();
-      renderOperatorMetrics(state.operatorAfter, true);
-      renderValidationMetrics(state.operatorAfter);
-      return;
-    }
+    const payload = state.pendingOperatorPayload;
+    if (!payload?.stations?.length) return false;
     const before = state.operatorBefore || computeOperatorSnapshot(state.stations);
-    const ranked = state.stations.slice().sort((a, b) => b.p90 - a.p90);
-    const affectedIds = new Set(ranked.slice(0, Math.max(1, Math.ceil(ranked.length / 3))).map((station) => station.id));
-    state.stations = state.stations.map((station) => {
-      if (!affectedIds.has(station.id)) return Object.assign({}, station, { occupancy: Math.min(0.92, station.occupancy + 0.025) });
-      const p90 = Math.max(5, Math.round(station.p90 * 0.8));
-      const occupancy = Math.max(0.35, station.occupancy - 0.14);
-      return Object.assign({}, station, {
-        p90,
-        wait: Math.max(3, Math.round(station.wait * 0.8)),
-        occupancy,
-        status: p90 >= 20 || occupancy >= 0.82 ? "forecast-risk" : "forecast-ready",
-        riskLabel: p90 >= 20 || occupancy >= 0.82 ? "高峰风险" : "分流后可用"
+    const executable = payload.execution?.executable === true && payload.insufficientData !== true;
+    if (!executable) {
+      // 站点边界或经济字段不满足时，不把“仿真响应”写回导航状态，
+      // 更不能再用旧版的固定 0.8 / 0.786 / ROI 1.8 兜底制造执行结果。
+      state.operatorAfter = Object.assign({}, before, {
+        strategyAvailable: false,
+        discount: null,
+        roi: null,
+        scenarioRoi: null,
+        noStrategyReason: payload.insufficientData ? "数据不足" : "仅导航"
       });
-    });
-    const computed = computeOperatorSnapshot(state.stations);
-    state.operatorAfter = Object.assign({}, computed, {
-      averageWait: before.averageWait * 0.786,
-      p90: before.p90 * 0.8,
-      dispersion: before.dispersion * 0.84,
-      peakQueue: Math.max(10, Math.round(before.peakQueue * 0.77)),
-      onTime: Math.min(99, before.onTime + 8.6),
-      roi: 1.8
-    });
+      renderOperatorMetrics(state.operatorAfter, true);
+      renderOperatorFlow(payload);
+      return false;
+    }
+    const byStation = new Map(payload.stations.map((station) => [station.id, station]));
+    state.stations = state.stations.map((station) => Object.assign({}, station, byStation.get(station.id) || {}));
+    const after = payload.after || {};
+    state.operatorAfter = {
+      averageWait: Number(after.averageWait ?? before.averageWait),
+      p90: Number(after.p90Wait ?? before.p90),
+      dispersion: Number(after.occupancyDispersion ?? before.dispersion),
+      peakQueue: Number(after.peakQueue ?? before.peakQueue),
+      onTime: before.onTime,
+      roi: Number(payload.scenarioRoi ?? payload.impact?.scenarioRoi ?? payload.impact?.roi ?? 0),
+      scenarioRoi: Number(payload.scenarioRoi ?? payload.impact?.scenarioRoi ?? payload.impact?.roi ?? 0),
+      discount: Number(payload.platformCoupon ?? payload.discountAmount ?? 0),
+      riskCount: state.stations.filter((station) => station.status === "forecast-risk").length,
+      recommendedDiscount: payload.recommendedPlatformCoupon ?? payload.recommendedDiscount,
+      recommendedRoi: Number(payload.recommendedBasis?.scenarioRoi ?? payload.recommendedBasis?.roi ?? 0),
+      strategyAvailable: true
+    };
     Object.values(state.routeRecords).forEach((record) => {
       const updatedStation = state.stations.find((station) => station.id === record.station?.id);
       if (updatedStation) record.station = Object.assign({}, updatedStation, { detour: record.station.detour });
@@ -5367,6 +5515,7 @@
     if (state.live) renderLiveStationMarkers();
     renderOperatorMetrics(state.operatorAfter, true);
     renderValidationMetrics(state.operatorAfter);
+    return true;
   }
 
   function resetExecution() {
