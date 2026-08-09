@@ -21,7 +21,6 @@
   // 的同名常量保持一致，两边算的是同一条路线的同一个 P90。
   const Z90 = 1.2816;
   const DEFAULT_LONG_TRIP_MAX_STOPS = 6;
-  const ADAPTIVE_LONG_TRIP_MAX_STOPS = 12;
 
   const FALLBACK = {
     origin: [116.491, 39.951],
@@ -2676,18 +2675,15 @@
     const initialSafeRange = Math.max(0, startEnergy - safetyEnergy) / profile.consumptionPerKm;
     const fullSafeRange = Math.max(0.001, profile.capacity - safetyEnergy) / profile.consumptionPerKm;
     const finalLegRange = Math.max(0, profile.capacity - profile.capacity * targetReserve / 100) / profile.consumptionPerKm;
-    if (distanceKm <= initialSafeRange + 1e-6) return { minimumStops: 0, maxStops: DEFAULT_LONG_TRIP_MAX_STOPS, adaptiveMaxStops: false };
+    if (distanceKm <= initialSafeRange + 1e-6) return { minimumStops: 0, maxStops: null, adaptiveMaxStops: true };
     const remainingAfterFirstAndFinal = distanceKm - initialSafeRange - finalLegRange;
     const minimumStops = remainingAfterFirstAndFinal <= 1e-6
       ? 1
       : Math.ceil(remainingAfterFirstAndFinal / fullSafeRange) + 1;
-    const adaptive = minimumStops > DEFAULT_LONG_TRIP_MAX_STOPS;
-    // Keep six as the normal budget. Once the physics says six cannot cover
-    // the corridor, add a small geometry margin and never exceed twelve.
-    const maxStops = adaptive
-      ? Math.min(ADAPTIVE_LONG_TRIP_MAX_STOPS, Math.max(DEFAULT_LONG_TRIP_MAX_STOPS, minimumStops + 3))
-      : DEFAULT_LONG_TRIP_MAX_STOPS;
-    return { minimumStops, maxStops, adaptiveMaxStops: adaptive };
+    // The browser does not impose a fixed stop-count limit. The backend uses
+    // the available corridor candidates as the search boundary and the energy
+    // model decides how many stops are actually necessary.
+    return { minimumStops, maxStops: null, adaptiveMaxStops: true };
   }
 
   function buildValidatedLongTripRecord(key, baseRoute, route, waypoints, servicePlan = null) {
@@ -2857,7 +2853,6 @@
         energyType: backendEnergyTypeKey(),
         soc: state.energyPercent,
         minArrivalSoc: effectiveArrivalReserveSoc(getEnergyProfile(isFuelActive())),
-        maxStops: stopBudget.maxStops,
         adaptiveMaxStops: stopBudget.adaptiveMaxStops,
         maxDetourKm: effectiveLongTripDetourLimit(base),
         departureMinutes: state.departureMinutes,
@@ -2878,14 +2873,14 @@
       // one.
       state.multiStopPlanningMeta = {
         candidatesConsidered: planningStations.length,
-        maxStops: stopBudget.maxStops,
+        maxStops: null,
         minimumStops: stopBudget.minimumStops,
         adaptiveMaxStops: stopBudget.adaptiveMaxStops,
         reason: "PLANNER_UNAVAILABLE",
         error: error?.message || "LONGTRIP_API_UNAVAILABLE",
         failure: "多站规划服务暂时不可用，未把单站估算冒充为全程补能方案。请稍后重试。"
       };
-      return { plans: [], candidatesConsidered: planningStations.length, maxStops: stopBudget.maxStops, minimumStops: stopBudget.minimumStops, reason: "PLANNER_UNAVAILABLE" };
+      return { plans: [], candidatesConsidered: planningStations.length, maxStops: null, minimumStops: stopBudget.minimumStops, adaptiveMaxStops: true, reason: "PLANNER_UNAVAILABLE" };
     }
   }
 
@@ -2910,10 +2905,10 @@
     const generated = [];
     let previousProgress = 0;
     let desiredProgress = Math.max(28, Math.min(totalDistanceKm - maxFinalLeg, initialSafeRange * 0.7));
-    // Candidate density and the number of selected stops are different things.
-    // A fuel route may safely select six stops while still needing more than
-    // six corridor anchors so the optimiser can choose every other anchor.
-    while (totalDistanceKm - previousProgress > maxFinalLeg && generated.length < ADAPTIVE_LONG_TRIP_MAX_STOPS) {
+    // Keep adding corridor anchors until the final leg is reachable. There is
+    // deliberately no fixed six/twelve-stop condition here; the energy model
+    // and route length determine how many candidates are needed.
+    while (totalDistanceKm - previousProgress > maxFinalLeg) {
       const reachableLimit = previousProgress === 0 ? initialSafeRange : fullSafeRange;
       const progressKm = Math.min(desiredProgress, totalDistanceKm - maxFinalLeg);
       const location = pointAtPathProgress(base.path, progressKm / totalDistanceKm);
@@ -2991,13 +2986,16 @@
       if (proposal?.reason) {
         state.multiStopPlanningMeta = {
           candidatesConsidered: proposal.candidatesConsidered || 0,
-          maxStops: proposal.maxStops || 6,
+          maxStops: proposal.maxStops ?? null,
           minimumStops: proposal.minimumStops || 0,
           adaptiveMaxStops: Boolean(proposal.adaptiveMaxStops),
           reason: proposal.reason,
           failure: proposal.reason === "NO_FEASIBLE_SEQUENCE"
             ? (() => {
               const minimum = Number(proposal.minimumStops) || 0;
+              if (proposal.adaptiveMaxStops === true) {
+                return `已检索 ${proposal.candidatesConsidered || 0} 个沿线补能候选；按当前${isFuelActive() ? "油量" : "电量"}与安全下限，理论上至少约需 ${minimum} 次补能，但在候选覆盖、可达性或绕行约束下仍未形成完整方案。`;
+              }
               const cap = Number(proposal.maxStops) || DEFAULT_LONG_TRIP_MAX_STOPS;
               return minimum > cap
                 ? `已检索 ${proposal.candidatesConsidered || 0} 个沿线补能候选；按当前${isFuelActive() ? "油量" : "电量"}与安全下限，理论上至少约需 ${minimum} 次补能，超过本次最多 ${cap} 次的规划预算。`
@@ -3079,7 +3077,7 @@
       const detail = describeRejection(sample);
       state.multiStopPlanningMeta = {
         candidatesConsidered: proposal.candidatesConsidered || 0,
-        maxStops: proposal.maxStops || 6,
+        maxStops: proposal.maxStops ?? null,
         minimumStops: proposal.minimumStops || 0,
         adaptiveMaxStops: Boolean(proposal.adaptiveMaxStops),
         reason: "ROUTE_VERIFICATION_FAILED",
@@ -3384,7 +3382,8 @@
       else if (record.directTrip) tag.textContent = "无需补能";
       else if (record.serviceOnly) tag.textContent = "服务已加入";
       else if (record.servicePlan) tag.textContent = "含服务";
-      else if (record.planningFailure && state.multiStopPlanningMeta?.reason === "NO_FEASIBLE_SEQUENCE"
+      else if (record.planningFailure && state.multiStopPlanningMeta?.adaptiveMaxStops !== true
+        && state.multiStopPlanningMeta?.reason === "NO_FEASIBLE_SEQUENCE"
         && Number(state.multiStopPlanningMeta?.minimumStops) > Number(state.multiStopPlanningMeta?.maxStops)) {
         tag.textContent = `需 ${state.multiStopPlanningMeta.minimumStops} 次补能`;
       }
@@ -3505,8 +3504,6 @@
     const usablePerFill = Math.max(1e-6, profile.capacity - safetyEnergy - reserveEnergy);
     const deficit = Math.max(0, totalConsumed - usableFromStart);
     const stops = deficit <= 1e-6 ? 0 : Math.ceil(deficit / usablePerFill);
-    const adaptiveMaxStops = stops > DEFAULT_LONG_TRIP_MAX_STOPS;
-    const maxStops = adaptiveMaxStops ? ADAPTIVE_LONG_TRIP_MAX_STOPS : DEFAULT_LONG_TRIP_MAX_STOPS;
     const purchased = deficit / profile.transferEfficiency;
     const medianP50 = pool.length
       ? pool.map((station) => Number(station.p50) || 0).sort((a, b) => a - b)[Math.floor(pool.length / 2)]
@@ -3543,17 +3540,15 @@
       energyCost: Number(energyCost.toFixed(1)),
       costPerKm: distanceKm > 0 ? Number((energyCost / distanceKm).toFixed(2)) : 0,
       generalizedCost: Number((energyCost + timeCost).toFixed(1)),
-      // 普通线路仍按六站预算比较；超长线路使用和主规划器一致的自适应
-      // 上限（最多十二站），不能因为"每公里更便宜"就把不可排出的路径推荐出去。
-      maxStops,
-      exceedsStopCap: stops > maxStops,
-      available: firstStopReachable && (stops === 0 || (pool.length > 0 && stops <= maxStops)),
+      // 混动分支只负责给出能量侧的可行性比较，不再人为设置六站/十二站上限。
+      // 真正的站点顺序、逐段道路可达性和绕行约束仍由多站规划器复核。
+      maxStops: null,
+      exceedsStopCap: false,
+      available: firstStopReachable && (stops === 0 || pool.length > 0),
       // 不可用原因要分清，否则面板会写"未检索到充电站"而池子里明明有 24 个。
       unavailableReason: !firstStopReachable && stops > 0
         ? "first-stop-unreachable"
-        : stops > maxStops
-          ? "stop-cap-exceeded"
-          : pool.length === 0 && stops > 0
+        : pool.length === 0 && stops > 0
             ? "no-station"
             : null
     };
@@ -3608,9 +3603,7 @@
   function branchCardMarkup(branch, comparison) {
     const active = activeEnergyKind() === branch.kind;
     const recommended = comparison.recommend === branch.kind;
-    const stopText = branch.exceedsStopCap
-      ? `需补能 ${branch.stops} 次 · 超过 ${branch.maxStops} 站规划上限`
-      : !branch.available
+    const stopText = !branch.available
         ? `沿线暂未检索到${branch.stationType}`
         : branch.stops === 0
           ? "无需补能，可直达"
@@ -3657,13 +3650,11 @@
     // 漂亮，但用户按它决策会吃亏，所以两侧都要写清楚。
     let verdict;
     if (!loser.available) {
-      // 不可用原因分四种，措辞必须和实际情况对得上：站数超上限、沿线确实没站、
+      // 不可用原因分三种，措辞必须和实际情况对得上：沿线确实没站、
       // 当前电量到不了最近的站、以及规划器实测排不出线（站直线够得着但路况够不着）。
       // 一律写成"未检索到可用"会把 24 个充电站说没了。
       const reason = loser.unavailableReason;
-      const loserExplain = reason === "stop-cap-exceeded" || loser.exceedsStopCap
-        ? `${loser.label}需补能 ${loser.stops} 次，超过 ${loser.maxStops} 站规划上限`
-        : reason === "no-station"
+      const loserExplain = reason === "no-station"
           ? `沿线未检索到可用的${loser.stationType}`
           : reason === "first-stop-unreachable" || reason === "planning-failed"
             ? `当前${loser.label}剩余能量到不了最近的${loser.stationType}（可续驶约 ${loser.rangeKm} km）`
@@ -4018,7 +4009,9 @@
       const planningMeta = state.multiStopPlanningMeta || {};
       const minimumStops = Number(planningMeta.minimumStops) || 0;
       const maxStops = Number(planningMeta.maxStops) || DEFAULT_LONG_TRIP_MAX_STOPS;
-      if (evidence[1]) evidence[1].textContent = minimumStops > maxStops
+      if (evidence[1]) evidence[1].textContent = planningMeta.adaptiveMaxStops === true
+        ? `系统未设置固定补能次数上限，已按车辆能量模型动态搜索；本次检索到 ${planningMeta.candidatesConsidered || 0} 个沿线候选。`
+        : minimumStops > maxStops
         ? `按当前车辆${isFuelActive() ? "油量" : "电量"}模型，理论至少约需 ${minimumStops} 次补能；当前规划上限为 ${maxStops} 次，未把单站估算冒充全程方案。`
         : `系统最多支持连续补能 ${maxStops} 次，未用默认目的地或单站路线冒充结果。`;
       if (evidence[2]) evidence[2].textContent = `已同时检查逐段安全余量、${arrivalReserveDescription(record)}与绕行上限（≤${activeDetourLimitKm(record)} km）。`;

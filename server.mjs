@@ -431,8 +431,10 @@ export function buildLongTripApiInput(body = {}) {
   copyNumber(source, target, "durationMinutes", 0, 7 * 24 * 60);
   copyNumber(source, target, "soc", 0, 100);
   copyNumber(source, target, "minArrivalSoc", 0, 100);
-  const maxStopsLimit = source.adaptiveMaxStops === true ? 12 : 6;
-  copyNumber(source, target, "maxStops", 0, maxStopsLimit, { integer: true });
+  // Adaptive browser planning derives its stop budget from the returned
+  // candidate corridor. Do not reintroduce a fixed API-side six/twelve cap.
+  // Keep the six-stop bound only for legacy direct callers that do not opt in.
+  if (source.adaptiveMaxStops !== true) copyNumber(source, target, "maxStops", 0, 6, { integer: true });
   copyNumber(source, target, "maxDetourKm", 0, 1000);
   copyDeparture(source, target);
   copyNumber(source, target, "deadlineOffsetMinutes", 0, 7 * 24 * 60);
@@ -443,8 +445,8 @@ export function buildLongTripApiInput(body = {}) {
   if (typeof source.energyType === "string" && LONG_TRIP_ENERGY_TYPES.has(source.energyType)) {
     target.energyType = source.energyType;
   }
-  // Adaptive planning is an explicit server-side opt-in from the trusted
-  // browser planner.  The ordinary public contract keeps its six-stop cap.
+  // Adaptive planning is an explicit server-side opt-in from the browser
+  // planner. The ordinary legacy contract remains bounded for compatibility.
   if (source.adaptiveMaxStops === true) target.adaptiveMaxStops = true;
   if (typeof source.useForecast === "boolean") target.useForecast = source.useForecast;
   return target;
