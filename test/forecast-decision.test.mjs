@@ -83,6 +83,39 @@ test("port discrete-event forecast never lowers wait when the current queue grow
   assert.ok(queue.p90 >= queue.p50 && queue.p50 >= 0);
 });
 
+test("metadata and queue fields alone do not activate the port model", () => {
+  const result = forecastStations([{
+    id: "metadata-only",
+    name: "只有元数据的站点",
+    capacity: 12,
+    occupancy: 0.6,
+    wait: 10,
+    queueVehicles: 8,
+    averageSessionMinutes: 45,
+    snapshotTime: "2026-08-09T12:00:00Z",
+    dataSource: "test snapshot",
+    freshnessSeconds: 30
+  }]).stations[0];
+  assert.equal(result.method, "aggregate-flow-simulation");
+  assert.equal(result.inputSnapshot, null);
+});
+
+test("port total is derived from idle, charging and fault counts when absent", () => {
+  const result = forecastStations([portStation({
+    totalPorts: undefined,
+    idlePorts: 2,
+    chargingPorts: 3,
+    faultPorts: 1,
+    estimatedReleaseMinutes: [5, 10, 15]
+  })]).stations[0];
+  assert.equal(result.method, "port-discrete-event");
+  assert.equal(result.inputSnapshot.totalPorts, 6);
+  assert.equal(
+    result.inputSnapshot.idlePorts + result.inputSnapshot.chargingPorts + result.inputSnapshot.faultPorts,
+    6
+  );
+});
+
 test("port inputs are clipped to safe ranges and keep counts within total ports", () => {
   const result = forecastStations([portStation({
     totalPorts: 2,
