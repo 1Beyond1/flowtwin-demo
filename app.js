@@ -3599,6 +3599,10 @@
     if (headingNote) headingNote.textContent = allSameRoute
       ? "时间、风险与成本均落在同一条可执行路线上"
       : "按最终时间、风险和成本生成可解释对比";
+    const expandLabel = byId("expandRoutes")?.querySelector("span");
+    if (expandLabel) expandLabel.textContent = allSameRoute
+      ? "最佳方案"
+      : `${displayGroups.length} 条补能方案`;
     renderActiveRouteSummary();
     renderHybridCompare();
     updateInsight(state.routeRecords[state.selectedRoute]);
