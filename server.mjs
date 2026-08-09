@@ -20,11 +20,50 @@ import {
 } from "./lib/feishu-bitable.mjs";
 import { createVersionChecker, loadVersionInfo, resolveVersionRoute } from "./lib/version.mjs";
 import { AMAP_CACHE_TTLS, createAmapFileCache } from "./lib/amap-cache.mjs";
+import { createRateLimiter, readRateLimitConfig } from "./lib/rate-limit.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 let config = null;
 let versionInfo = null;
 let versionChecker = null;
+const rateLimiter = createRateLimiter({
+  ...readRateLimitConfig(),
+  trustProxy: process.env.FLOWTWIN_TRUST_PROXY === "1"
+});
+
+export function rateLimitScopeForRequest(method, pathname) {
+  const normalizedMethod = String(method || "").toUpperCase();
+  const normalizedPath = String(pathname || "");
+  if (normalizedMethod === "POST") {
+    if (normalizedPath === "/api/plan") return "plan";
+    if (normalizedPath === "/api/stt") return "stt";
+    if (normalizedPath === "/api/forecast" || normalizedPath === "/api/longtrip") return "map";
+    if (normalizedPath === "/api/feishu/sync") return "feishu-sync";
+    if (normalizedPath.startsWith("/api/feishu/strategy/") && normalizedPath.endsWith("/approve")) return "approve";
+    return null;
+  }
+  if (normalizedMethod === "GET" && ["/api/route", "/api/poi", "/api/weather"].includes(normalizedPath)) return "map";
+  return null;
+}
+
+export function applyRateLimit(request, response, limiter = rateLimiter, requestUrl = null) {
+  const method = String(request?.method || "").toUpperCase();
+  if (method === "OPTIONS") return true;
+  const url = requestUrl || new URL(request?.url || "/", `http://${request?.headers?.host || "localhost"}`);
+  const scope = rateLimitScopeForRequest(method, url.pathname);
+  if (!scope) return true;
+  const decision = limiter.check(scope, request);
+  if (decision.allowed) return true;
+  const retryAfterSeconds = Math.max(1, Number(decision.retryAfterSeconds) || 1);
+  response.writeHead(429, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Retry-After": String(retryAfterSeconds)
+  });
+  response.end(JSON.stringify({ error: "RATE_LIMITED", scope, retryAfterSeconds }));
+  return false;
+}
 
 export function buildAiHealthSummary(source = {}) {
   const primaryConfigured = Boolean(source.aiBaseUrl && source.aiApiKey && source.aiModel);
@@ -759,6 +798,7 @@ async function requestHandler(request, response) {
       },
       amapCache: config.amapCache?.getStats?.() || null
     });
+    if (!applyRateLimit(request, response, rateLimiter, requestUrl)) return;
     if (request.method === "GET" && requestUrl.pathname === "/api/contracts") return json(response, 200, API_CONTRACTS);
     if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
     if (requestUrl.pathname === "/api/poi") return await poiApi(requestUrl, response);
