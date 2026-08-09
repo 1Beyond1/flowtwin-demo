@@ -53,7 +53,8 @@ test("plan parser uses strict AI JSON and returns locations without exposing sec
 test("plan parser fails over from the primary AI provider to the backup", async () => {
   const calls = [];
   const result = await parseTripIntent({
-    message: "从北京去南京，优先准时",
+    message: "中途想去吃麦当劳，然后再喝咖啡",
+    context: { hasPlannedRoute: true, currentDestination: "南京" },
     config: {
       aiBaseUrl: "https://primary.example/v1",
       aiApiKey: "primary-secret",
@@ -94,6 +95,98 @@ test("plan parser leaves current time and energy to the client controls", async 
   assert.equal(result.destination, "大兴机场");
   assert.equal(Object.hasOwn(result, "departureTime"), false);
   assert.equal(Object.hasOwn(result, "soc"), false);
+});
+
+test("simple explicit new trips stay local and do not call AI", async () => {
+  const calls = [];
+  const result = await parseTripIntent({
+    message: "从能链北京总部去南京，优先准时",
+    config: {
+      aiBaseUrl: "https://primary.example/v1",
+      aiApiKey: "primary-secret",
+      aiModel: "primary-model",
+      aiBackupBaseUrl: "https://backup.example/v1",
+      aiBackupApiKey: "backup-secret",
+      aiBackupModel: "backup-model"
+    },
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      throw new Error("AI must not be called for a simple new trip");
+    }
+  });
+  assert.equal(result.aiUsed, false);
+  assert.equal(result.analysis.mode, "local");
+  assert.equal(result.analysis.ai.requested, false);
+  assert.equal(calls.length, 0);
+  assert.ok(result.analysis.score > 0);
+  assert.ok(result.analysis.factors.every((factor) => ["pass", "warn", "fail"].includes(factor.status)));
+  assert.equal(formatPlanResponse(result).analysis.mode, "local");
+});
+
+test("multi-turn composite service requests call AI after local parsing", async () => {
+  const calls = [];
+  const result = await parseTripIntent({
+    message: "中途想去吃麦当劳，然后再喝咖啡",
+    context: { hasPlannedRoute: true, currentDestination: "上海东方明珠广播电视塔" },
+    config: { aiBaseUrl: "https://primary.example/v1", aiApiKey: "primary-secret", aiModel: "primary-model" },
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      if (!String(url).includes("chat/completions")) throw new Error("unexpected lookup");
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        origin: null,
+        destination: "上海东方明珠广播电视塔",
+        arrivalDeadline: null,
+        minArrivalSoc: null,
+        energyType: "unknown",
+        priority: "balanced",
+        maxDetourKm: null,
+        services: ["餐饮"],
+        requestMode: "supplement",
+        actions: [{ type: "ADD_SERVICE", service: "餐饮", name: "麦当劳" }],
+        clarificationNeeded: false,
+        assistantReply: "已补充服务停靠"
+      }) } }] }), { status: 200 });
+    }
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(result.analysis.mode, "ai");
+  assert.equal(result.analysis.ai.requested, true);
+  assert.equal(result.analysis.ai.used, true);
+  assert.equal(result.requestMode, "supplement");
+  assert.deepEqual(result.services, ["餐饮"]);
+});
+
+test("AI failure falls back without exposing provider details in analysis", async () => {
+  const result = await parseTripIntent({
+    message: "中途想去那里吃饭",
+    context: { hasPlannedRoute: true, currentDestination: "上海东方明珠广播电视塔" },
+    config: { aiBaseUrl: "https://primary.example/v1", aiApiKey: "primary-secret", aiModel: "primary-model" },
+    fetchImpl: async (url) => {
+      if (String(url).includes("chat/completions")) return new Response(JSON.stringify({ error: { message: "quota exceeded at https://provider.example" } }), { status: 429 });
+      throw new Error("unexpected lookup");
+    }
+  });
+  const publicResult = formatPlanResponse(result);
+  assert.equal(result.aiUsed, false);
+  assert.equal(result.aiFailureCode, "quota");
+  assert.equal(publicResult.analysis.mode, "local-fallback");
+  assert.equal(publicResult.analysis.ai.fallback, true);
+  assert.equal(JSON.stringify(publicResult.analysis).includes("primary.example"), false);
+  assert.equal(JSON.stringify(publicResult.analysis).includes("quota exceeded"), false);
+  assert.equal(JSON.stringify(publicResult.analysis).includes("https://"), false);
+});
+
+test("confidence analysis is deterministic for identical local evidence", async () => {
+  const input = {
+    message: "从能链北京总部去南京，最晚19:30前到，到达至少保留40%，优先准时",
+    config: {},
+    fetchImpl: async () => { throw new Error("offline"); }
+  };
+  const first = await parseTripIntent(input);
+  const second = await parseTripIntent(input);
+  assert.deepEqual(first.analysis, second.analysis);
+  assert.equal(first.analysis.mode, "local");
+  assert.equal(first.analysis.ai.requested, false);
 });
 
 test("plan parser keeps parsing the destination arrival reserve", async () => {
@@ -271,8 +364,9 @@ test("a bare city query resolves to the city, not a same-prefix station", async 
 
 test("plan response reports why the model was skipped instead of failing silently", async () => {
   const result = await parseTripIntent({
-    message: "去北京南站",
-    config: { webServiceKey: "geo-key", aiBaseUrl: "https://ai.example.com/v1", aiApiKey: "test-key", aiModel: "m" },
+    message: "中途想去那里吃饭",
+    context: { hasPlannedRoute: true, currentDestination: "上海东方明珠广播电视塔" },
+    config: { aiBaseUrl: "https://ai.example.com/v1", aiApiKey: "test-key", aiModel: "m" },
     fetchImpl: async (url) => {
       if (String(url).includes("chat/completions")) {
         return new Response(JSON.stringify({ error: { message: "quota exceeded" } }), { status: 429 });

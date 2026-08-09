@@ -26,6 +26,16 @@ let config = null;
 let versionInfo = null;
 let versionChecker = null;
 
+export function buildAiHealthSummary(source = {}) {
+  const primaryConfigured = Boolean(source.aiBaseUrl && source.aiApiKey && source.aiModel);
+  const backupConfigured = Boolean(source.aiBackupBaseUrl && source.aiBackupApiKey && source.aiBackupModel);
+  return {
+    configured: primaryConfigured || backupConfigured,
+    primaryConfigured,
+    backupConfigured
+  };
+}
+
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -744,6 +754,7 @@ async function requestHandler(request, response) {
       service: "FlowTwin",
       dependencies: {
         amapConfigured: hasAmapServiceKey(config),
+        ai: buildAiHealthSummary(config),
         feishu: feishuConfigSummary(config)
       },
       amapCache: config.amapCache?.getStats?.() || null

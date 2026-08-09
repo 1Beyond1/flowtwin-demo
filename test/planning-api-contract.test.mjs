@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildForecastApiScenario, buildLongTripApiInput } from "../server.mjs";
+import { buildAiHealthSummary, buildForecastApiScenario, buildLongTripApiInput } from "../server.mjs";
 import { forecastStations } from "../lib/forecast.mjs";
 import { buildLongTripPlans } from "../lib/longtrip.mjs";
 
@@ -47,6 +47,26 @@ function legacyRequest() {
     stations: stations()
   };
 }
+
+test("AI health summary exposes only configuration booleans", () => {
+  const summary = buildAiHealthSummary({
+    aiBaseUrl: "https://primary.example/v1",
+    aiApiKey: "primary-secret",
+    aiModel: "primary-model",
+    aiBackupBaseUrl: "https://backup.example/v1",
+    aiBackupApiKey: "backup-secret",
+    aiBackupModel: "backup-model"
+  });
+  assert.deepEqual(summary, {
+    configured: true,
+    primaryConfigured: true,
+    backupConfigured: true
+  });
+  assert.deepEqual(Object.keys(summary).sort(), ["backupConfigured", "configured", "primaryConfigured"]);
+  assert.equal(JSON.stringify(summary).includes("primary.example"), false);
+  assert.equal(JSON.stringify(summary).includes("primary-secret"), false);
+  assert.equal(JSON.stringify(summary).includes("primary-model"), false);
+});
 
 test("longtrip adapter whitelists and bounds forecast controls", () => {
   const input = buildLongTripApiInput({
