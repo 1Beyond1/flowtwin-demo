@@ -163,6 +163,7 @@
     operatorOriginalStations: [],
     routeErrors: {},
     aiContext: null,
+    parseAnalysis: null,
     aiActive: false,
     voiceAutoPlan: true,
     lastIntentSignature: null,
@@ -1266,6 +1267,72 @@
     const row = byId("parsedRow");
     if (row) row.innerHTML = chips.map((chip) => `<span class="parsed-chip"></span>`).join("");
     if (row) Array.from(row.children).forEach((child, index) => { child.textContent = chips[index]; });
+  }
+
+  function normalizeParseAnalysis(value) {
+    if (!value || typeof value !== "object") return null;
+    const scoreValue = Number(value.score);
+    const score = Number.isFinite(scoreValue) ? scoreValue : null;
+    const level = String(value.level ?? "").trim();
+    const rawFactors = Array.isArray(value.factors)
+      ? value.factors
+      : value.factors && typeof value.factors === "object"
+        ? Object.entries(value.factors).map(([label, detail]) => ({ label, detail }))
+        : [];
+    const factors = rawFactors.map((factor, index) => {
+      if (factor && typeof factor === "object") {
+        const label = String(factor.label ?? factor.name ?? factor.key ?? factor.title ?? `依据 ${index + 1}`).trim();
+        const detail = String(factor.detail ?? factor.reason ?? factor.value ?? factor.text ?? factor.description ?? "").trim();
+        return { label, detail };
+      }
+      return { label: `依据 ${index + 1}`, detail: String(factor ?? "").trim() };
+    }).filter((factor) => factor.detail || factor.label).slice(0, 8);
+    if (score === null && !level && !factors.length) return null;
+    return { score, level, factors };
+  }
+
+  function formatParseScore(score) {
+    if (!Number.isFinite(score)) return "";
+    const percent = score >= 0 && score <= 1 ? score * 100 : score;
+    return `${Math.round(Math.max(0, Math.min(100, percent)))}%`;
+  }
+
+  function renderParseAnalysis(value) {
+    const analysis = normalizeParseAnalysis(value);
+    state.parseAnalysis = analysis;
+    const confidence = byId("parsedConfidence");
+    const toggle = byId("parsedAnalysisToggle");
+    const factorsPanel = byId("parsedAnalysisFactors");
+    if (!confidence || !toggle || !factorsPanel) return;
+
+    factorsPanel.replaceChildren();
+    factorsPanel.hidden = true;
+    toggle.setAttribute("aria-expanded", "false");
+    const toggleLabel = toggle.querySelector("span");
+    if (toggleLabel) toggleLabel.textContent = "查看依据";
+
+    if (!analysis) {
+      confidence.textContent = "解析依据待生成";
+      toggle.hidden = true;
+      return;
+    }
+
+    const summary = [];
+    if (analysis.score !== null) summary.push(`解析置信度 ${formatParseScore(analysis.score)}`);
+    if (analysis.level) summary.push(`等级 ${analysis.level}`);
+    confidence.textContent = summary.join(" · ") || "解析依据已生成";
+
+    analysis.factors.forEach((factor) => {
+      const row = document.createElement("div");
+      row.className = "parsed-analysis-factor";
+      const label = document.createElement("strong");
+      label.textContent = factor.label;
+      const detail = document.createElement("span");
+      detail.textContent = factor.detail;
+      row.append(label, detail);
+      factorsPanel.appendChild(row);
+    });
+    toggle.hidden = !analysis.factors.length;
   }
 
   // The current backend returns an arrival-time `prediction`. Older local
@@ -5115,6 +5182,7 @@
     state.activeServicePlan = null;
     state.serviceRouteOverrides = {};
     state.tripWaypoints = [];
+    state.parseAnalysis = null;
     state.stationForecastScenarioKey = null;
     state.stationForecastRequestVersion += 1;
     state.stations = [];
@@ -5182,6 +5250,7 @@
     clearDestinationCandidates();
     state.hybridFailedBranches = new Set();
     state.aiActive = true;
+    renderParseAnalysis(null);
     setComposerSubmitting(true);
     setAiStatus("AI 正在理解", "loading");
     setAiReply("正在把你的自然语言要求拆解为路线约束……");
@@ -5210,6 +5279,7 @@
       setAiStatus("正在确认目的地与意图", "loading");
       setAiReply("已收到出行要求，正在确认目的地、补充停靠与路线偏好……");
       const parsed = payload.parsed || payload.intent || payload.plan || localIntentFallback(value);
+      renderParseAnalysis(payload.analysis || payload.parsed?.analysis || payload.intent?.analysis || payload.plan?.analysis);
       if (options.explicitDestination) parsed.destination = options.explicitDestination;
       if (options.destinationLocation) {
         payload.destinationLocation = options.destinationLocation;
@@ -6178,6 +6248,7 @@
     initSettings();
     setDisplayMode(readDisplayMode(), { persist: false });
     initFallback();
+    renderParseAnalysis(null);
     setPlanningVisibility(false);
     fitIntentInput();
     if (window.innerWidth <= 760) byId("insightPanel").classList.add("hidden");
@@ -6217,6 +6288,16 @@
       state.manualArrivalReserveOverride = null;
       fitIntentInput();
       updateComposerActionLabel();
+    });
+    byId("parsedAnalysisToggle")?.addEventListener("click", () => {
+      const toggle = byId("parsedAnalysisToggle");
+      const factorsPanel = byId("parsedAnalysisFactors");
+      if (!toggle || !factorsPanel || toggle.hidden) return;
+      const expanded = toggle.getAttribute("aria-expanded") === "true";
+      toggle.setAttribute("aria-expanded", String(!expanded));
+      factorsPanel.hidden = expanded;
+      const label = toggle.querySelector("span");
+      if (label) label.textContent = expanded ? "查看依据" : "收起依据";
     });
     byId("voiceIntentButton")?.addEventListener("click", () => { toggleVoiceIntent(); });
     byId("composerSubmitButton")?.addEventListener("click", parseIntent);

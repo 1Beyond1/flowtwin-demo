@@ -2153,6 +2153,75 @@
         font-size: 10px;
       }
 
+      .parsed-analysis-meta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .parsed-analysis-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        min-height: 20px;
+        padding: 0 5px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--blue);
+        font: inherit;
+        font-size: 9px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .parsed-analysis-toggle:hover,
+      .parsed-analysis-toggle:focus-visible {
+        border-color: #aebff1;
+        background: #f5f7ff;
+        outline: 0;
+      }
+
+      .parsed-analysis-toggle svg {
+        width: 11px;
+        height: 11px;
+        transition: transform 160ms ease;
+      }
+
+      .parsed-analysis-toggle[aria-expanded="true"] svg {
+        transform: rotate(180deg);
+      }
+
+      .parsed-analysis-factors {
+        display: grid;
+        gap: 5px;
+        margin: -2px 0 10px;
+        padding: 8px 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-soft);
+      }
+
+      .parsed-analysis-factor {
+        display: grid;
+        grid-template-columns: minmax(54px, auto) minmax(0, 1fr);
+        gap: 7px;
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.45;
+      }
+
+      .parsed-analysis-factor strong {
+        color: var(--text);
+        font-size: inherit;
+      }
+
+      .parsed-analysis-factor span {
+        overflow-wrap: anywhere;
+      }
+
       .forecast-card,
       .arrival-loop,
       .strategy-lab {
@@ -4646,7 +4715,8 @@
           </div>
         </section>
         <div id="parsedOutput" hidden data-reviewer-only>
-          <div class="parsed-section-head"><strong>结构化约束</strong><span id="parsedConfidence">解析置信度 96%</span></div>
+          <div class="parsed-section-head"><strong>结构化约束</strong><div class="parsed-analysis-meta"><span id="parsedConfidence">解析依据待生成</span><button id="parsedAnalysisToggle" class="parsed-analysis-toggle" type="button" aria-expanded="false" aria-controls="parsedAnalysisFactors" hidden><span>查看依据</span><i data-lucide="chevron-down"></i></button></div></div>
+          <div class="parsed-analysis-factors" id="parsedAnalysisFactors" hidden></div>
           <div class="parsed-row" id="parsedRow" aria-label="已解析约束"></div>
         </div>
 
