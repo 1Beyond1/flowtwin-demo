@@ -164,6 +164,7 @@
     routeErrors: {},
     aiContext: null,
     parseAnalysis: null,
+    aiHealth: { state: "checking", configured: null },
     aiActive: false,
     voiceAutoPlan: true,
     lastIntentSignature: null,
@@ -805,6 +806,61 @@
     }
   }
 
+  function aiHealthLabel(stateName) {
+    return {
+      checking: "正在检查解析能力",
+      configured: "AI 已配置 · 规则校验可用",
+      "not-configured": "规则解析可用 · AI 未配置",
+      unknown: "规则解析可用 · AI 状态未知"
+    }[stateName] || "规则解析可用 · AI 状态未知";
+  }
+
+  function setAiHealthStatus(stateName) {
+    const normalized = ["checking", "configured", "not-configured", "unknown"].includes(stateName) ? stateName : "unknown";
+    state.aiHealth = {
+      state: normalized,
+      configured: normalized === "configured" ? true : normalized === "not-configured" ? false : null
+    };
+    // A health response must not overwrite an active plan or an in-flight parse.
+    if (!state.aiActive && !state.hasPlannedRoute) setAiStatus(aiHealthLabel(normalized), normalized);
+  }
+
+  async function loadAiHealthStatus() {
+    setAiHealthStatus("checking");
+    try {
+      const payload = await getJson("/api/health", 8000);
+      const configured = payload?.dependencies?.ai?.configured;
+      setAiHealthStatus(configured === true ? "configured" : configured === false ? "not-configured" : "unknown");
+    } catch (_) {
+      setAiHealthStatus("unknown");
+    }
+  }
+
+  function resolvePlanAiStatus(payload = {}) {
+    const ai = payload?.analysis?.ai;
+    if (ai && typeof ai === "object") {
+      const mode = String(ai.mode ?? "").trim().toLowerCase();
+      if (ai.fallback === true) {
+        return { label: "AI 暂不可用，已使用规则完成", state: "fallback", meta: payload.aiFallbackReason || "规则校验已完成" };
+      }
+      if (ai.used === true) {
+        return { label: "AI 与规则协同完成", state: "ready", meta: "AI 与规则共同完成需求解析" };
+      }
+      if (ai.attempted === false || mode === "rules") {
+        return { label: "规则解析完成", state: "rules", meta: "规则校验已完成" };
+      }
+    }
+
+    // Backward compatibility for responses before analysis.ai was added.
+    if (payload?.parsed?.aiUsed === true) {
+      return { label: "AI 与规则协同完成", state: "ready", meta: "兼容旧版解析结果" };
+    }
+    if (payload?.parsed?.aiUsed === false || payload?.aiFallbackReason) {
+      return { label: "AI 暂不可用，已使用规则完成", state: "fallback", meta: payload.aiFallbackReason || "规则校验已完成" };
+    }
+    return { label: "规则解析完成", state: "rules", meta: "规则校验已完成" };
+  }
+
   function setAiStatus(label, stateName) {
     const status = byId("aiStatus");
     if (!status) return;
@@ -818,9 +874,14 @@
       loading: "正在理解需求并调用路线工具",
       ready: "自然语言规划已完成",
       fallback: "本地规则已完成规划",
+      rules: "规则校验已完成",
+      checking: "正在检查解析能力",
+      configured: "配置状态已确认",
+      "not-configured": "规则解析仍可用",
+      unknown: "规则解析仍可用",
       unresolved: "等待有效目的地"
     };
-    if (meta) meta.textContent = metaByState[stateName] || "AI 能力已接入";
+    if (meta) meta.textContent = metaByState[stateName] || "规则解析可用";
     const thinking = byId("aiThinking");
     if (thinking) thinking.hidden = stateName !== "loading";
   }
@@ -870,7 +931,8 @@
     });
     if (!hasPlan) {
       setAiReply("");
-      setAiStatus("AI 大模型已接入", "idle");
+      const healthState = state.aiHealth?.state || "unknown";
+      setAiStatus(aiHealthLabel(healthState), healthState);
     }
     updateComposerActionLabel();
   }
@@ -4869,7 +4931,7 @@
     return body
       .replace(/\s+(?=\d+\.\s)/g, "\n")
       .split(/\n+/)
-      .map((entry) => entry.replace(/^\s*\d+\.\s*/, "").trim().replace(/operationally-effective/gi, "运营有效但未达到盈利目标"))
+      .map((entry) => entry.replace(/^\s*\d+\.\s*/, "").trim().replace(/operationally-effective/gi, "场景有效但仿真收益假设未达标"))
       .filter(Boolean);
   }
 
@@ -4894,15 +4956,15 @@
       if (source) source.textContent = "仿真结果已生成，AI 正在读取策略记录。";
     } else if (status === "error" || result?.mode === "error") {
       empty.hidden = false;
-      empty.textContent = `本地分流仿真已完成，但飞书 AI 暂时不可用：${result.message || "请检查配置或权限"}`;
-      if (source) source.textContent = "本地仿真结果不受影响；飞书 AI 结果未伪造。";
+      empty.textContent = `策略沙盘结果已生成，但飞书 AI 暂时不可用：${result.message || "请检查配置或权限"}`;
+      if (source) source.textContent = "策略沙盘结果不受影响；飞书 AI 结果未伪造。";
     } else if (status === "not-configured") {
       empty.hidden = false;
-      empty.textContent = "本地分流仿真已完成，当前未配置飞书 AI；不会用示例文字冒充 AI 结果。";
-      if (source) source.textContent = "本地仿真结果不受影响；飞书 AI 需要完成服务配置后使用。";
+      empty.textContent = "策略沙盘结果已生成，当前未配置飞书 AI；不会用示例文字冒充 AI 结果。";
+      if (source) source.textContent = "策略沙盘结果不受影响；飞书 AI 需要完成服务配置后使用。";
     } else {
       empty.hidden = false;
-      empty.textContent = "点击“开始智能分析”，先完成分流仿真，再查看 AI 对运营结果的自然语言解读。";
+      empty.textContent = "点击“开始智能分析”，先生成策略沙盘结果，再查看 AI 对运营结果的自然语言解读。";
       if (source) source.textContent = "数据来源将在分析完成后明确标注；当前不代表企业实时经营结论。";
     }
   }
@@ -5410,16 +5472,11 @@
         ? `${actionModeLabel(actions, requestMode)}：${actions.filter((action) => !failedActions.includes(action)).map(actionSummary).join("、") || "未完成"}${failedActions.length ? `；${failedActions.map(actionSummary).join("、")}未完成` : ""}`
         : requestMode === "supplement" ? "已保留当前行程并重新计算" : "";
       recordActionJournal(actions, { failed: failedActions, summary: actionText });
-      // The backend reports *why* the model was skipped (quota / auth / timeout…).
-      // Showing that beats a generic "AI 暂不可用" that hides a days-old outage.
-      const fallbackReason = payload.aiFallbackReason || "AI 暂不可用，已用本地规则完成规划";
-      // aiUsed lives under `parsed`; reading it off the root made this check
-      // always-false, so a failed model still reported "AI 已完成规划".
-      const usedAi = payload.parsed?.aiUsed !== false;
-      setAiStatus(usedAi ? `${actionModeLabel(actions, requestMode)}已完成` : `${actionModeLabel(actions, requestMode)} · 本地规则完成`, usedAi ? "ready" : "fallback");
+      const aiPlanStatus = resolvePlanAiStatus(payload);
+      setAiStatus(aiPlanStatus.label, aiPlanStatus.state);
       setAiReply([actionText, planningCompletionMessage()].filter(Boolean).join("。"));
-      setText("aiReplyMeta", usedAi ? "规划已完成" : fallbackReason);
-      showToast(usedAi ? (actionText || planningCompletionMessage()) : fallbackReason);
+      setText("aiReplyMeta", aiPlanStatus.meta);
+      showToast(aiPlanStatus.label || actionText || planningCompletionMessage());
       state.lastIntentSignature = signature;
     } catch (error) {
       const parsed = localIntentFallback(value);
@@ -5445,7 +5502,7 @@
         return;
       }
       const preRouteOutcome = await applyPreRouteActions(actions);
-      setAiStatus("本地降级", "fallback");
+      setAiStatus("规则解析完成", "rules");
       setAiReply("模型连接暂时不可用，已按本地规则保留核心规划能力。");
       setAiStatus("正在请求路线与沿线补能站", "loading");
       await recomputePlan({ manageButton: false, silent: true });
@@ -5457,9 +5514,9 @@
         ? `${actionModeLabel(actions, requestMode)}：${actions.filter((action) => !failedActions.includes(action)).map(actionSummary).join("、") || "未完成"}${failedActions.length ? `；${failedActions.map(actionSummary).join("、")}未完成` : ""}`
         : requestMode === "supplement" ? "已保留当前行程并重新计算" : "";
       recordActionJournal(actions, { failed: failedActions, summary: actionText });
-      setAiStatus(`${actionModeLabel(actions, requestMode)} · 本地规则完成`, "fallback");
+      setAiStatus("规则解析完成", "rules");
       setAiReply([actionText, planningCompletionMessage()].filter(Boolean).join("。"));
-      setText("aiReplyMeta", "规划已完成");
+      setText("aiReplyMeta", "规则校验已完成");
       showToast("模型连接失败，已切换本地规则", 3600);
       state.lastIntentSignature = signature;
     } finally {
@@ -5561,14 +5618,14 @@
         ? "仅导航 · 未生成策略"
         : payload.insufficientData
           ? "数据不足 · 未生成策略"
-          : `平台券 ¥${Number(payload.platformCoupon ?? payload.discountAmount ?? 0).toFixed(0)} · 分流 ${Math.round(payload.impact?.divertedVehicles || 0)} 人`;
+          : `平台券 ¥${Number(payload.platformCoupon ?? payload.discountAmount ?? 0).toFixed(0)} · 仿真预计可引导 ${Math.round(payload.impact?.divertedVehicles || 0)} 人`;
     setText("operatorFlowLabel", flowLabel);
     const logic = !payload
       ? "全网站点用于观察与导航；仅对演示平台配置站点计算承接策略"
       : !payload.execution?.executable
         ? "当前没有同时满足合作、可调控、可发券、商家接受的承接站，仅保留导航"
         : payload.insufficientData
-          ? "运营字段不完整，未输出优惠、分流或 ROI 结论"
+          ? "运营字段不完整，未输出优惠、仿真预计可引导或场景 ROI 结论"
           : `依据 ${payload.targetUser || "目标用户"}，在承接容量、平台券成本与场景 ROI 约束下计算`;
     setText("operatorLogicHint", logic);
     if (state.live && state.mode === "operator") renderLiveStationMarkers();
@@ -5611,30 +5668,30 @@
     }
     if (queueNote) {
       if (!executed) {
-        queueNote.textContent = `${snapshot.riskCount} 个站点出现集中到达风险 · 尚未执行平台策略`;
+        queueNote.textContent = `${snapshot.riskCount} 个站点出现集中到达风险 · 尚未应用沙盘策略`;
       } else {
         const drop = (state.operatorBefore?.peakQueue ?? snapshot.peakQueue) - snapshot.peakQueue;
         queueNote.textContent = drop >= 0.5
-          ? `执行后峰值减少 ${drop.toFixed(0)} 人`
+          ? `沙盘应用后峰值减少 ${drop.toFixed(0)} 人`
           : drop <= -0.5
-            ? `执行后峰值上升 ${Math.abs(drop).toFixed(0)} 人，需复核承接站容量`
-            : "执行后峰值基本持平";
+            ? `沙盘应用后峰值上升 ${Math.abs(drop).toFixed(0)} 人，需复核承接站容量`
+            : "沙盘应用后峰值基本持平";
       }
     }
     if (roiNote) roiNote.textContent = strategyAvailable
       ? "场景仿真结果 · 待真实 A/B 实验验证"
-      : "当前没有可执行策略，不生成 ROI 或优惠结论";
+      : "当前没有可执行策略，不生成场景 ROI 或优惠结论";
     if (action && executed && strategyAvailable) {
       const improved = snapshot.p90 <= state.operatorBefore.p90;
       const p90Message = snapshot.p90 < state.operatorBefore.p90
         ? `P90 从 ${state.operatorBefore.p90.toFixed(1)} 分钟降至 ${snapshot.p90.toFixed(1)} 分钟`
         : `P90 保持 ${snapshot.p90.toFixed(1)} 分钟`;
       action.innerHTML = improved
-        ? `<strong>执行结果：</strong>高峰站点已分流，${p90Message}。`
-        : `<strong>执行复盘：</strong>P90 从 ${state.operatorBefore.p90.toFixed(1)} 分钟升至 ${snapshot.p90.toFixed(1)} 分钟，本策略应撤回并降低优惠强度。`;
+         ? `<strong>策略沙盘结果：</strong>高峰站点仿真预计可引导，${p90Message}。`
+         : `<strong>沙盘复盘：</strong>P90 从 ${state.operatorBefore.p90.toFixed(1)} 分钟升至 ${snapshot.p90.toFixed(1)} 分钟，本沙盘建议应撤回并降低优惠强度。`;
     } else if (action) {
       action.innerHTML = strategyAvailable
-        ? `<strong>建议动作：</strong>依据平台承接容量、人群响应和场景 ROI，比较平台券与推荐分流方案。`
+         ? `<strong>沙盘建议：</strong>依据平台承接容量、人群响应和场景 ROI，比较平台券与推荐引导方案。`
         : `<strong>当前边界：</strong>全网站点可以导航和观察，但只有演示平台配置中可控且接受平台券的站点才能生成运营策略。`;
     }
     populateOperatorTargetSelect(snapshot?.targetStationId);
@@ -5659,7 +5716,7 @@
     setText("validationStatusText", "等待运行本次仿真");
     setText("validationStatusMeta", "进入验证流程后，以当前站点输入计算 1,000 次合成行程");
     setText("validationFootText", "尚未运行。结果将在固定种子下由当前站点输入生成。");
-    setText("validationSourceBadge", "可复现实验 / 非真实经营 KPI");
+    setText("validationSourceBadge", "可复现实验 / 非企业真实经营结论");
     const body = byId("validationTableBody");
     if (body) body.innerHTML = '<tr id="validationEmptyRow"><td colspan="6">尚未运行仿真；点击“验证”后将以当前站点输入计算。</td></tr>';
     const progress = byId("validationProgress");
@@ -5697,7 +5754,7 @@
       ? `${Number(impact.scenarioRoi ?? impact.roi).toFixed(2)}x`
       : "—");
     const afterLabel = document.querySelector("#operatorAfterCompare > span");
-    if (afterLabel) afterLabel.textContent = strategyAvailable ? "策略预测" : "未执行策略";
+    if (afterLabel) afterLabel.textContent = strategyAvailable ? "沙盘预测" : "未应用沙盘策略";
     const snapshot = {
       averageWait: after.averageWait,
       p90: after.p90Wait,
@@ -5722,19 +5779,19 @@
         const reason = payload.insufficientData
           ? "平台经济字段不完整，无法给出场景 ROI。"
           : "当前没有同时满足合作、可调控、可发券、商家接受的承接站。";
-        action.innerHTML = `<strong>未生成可执行策略：</strong>${reason} 全网站点仍保留导航和补能候选用途。`;
+        action.innerHTML = `<strong>未生成可执行沙盘建议：</strong>${reason} 全网站点仍保留导航和补能候选用途。`;
         action.classList.remove("strategy-risk", "strategy-unprofitable");
       } else {
         const risk = payload.recommendation === "risk";
         const unprofitable = payload.recommendation === "operationally-effective";
-        const headline = unprofitable ? `<strong>场景有效但 ROI 未达标：</strong>` : `<strong>本次平台策略：</strong>`;
+        const headline = unprofitable ? `<strong>场景有效但场景 ROI 未达标：</strong>` : `<strong>本次沙盘建议：</strong>`;
         const platformContribution = Number(payload.platformContribution ?? impact.platformContribution ?? 0);
         const merchantContribution = Number(payload.merchantContribution ?? impact.merchantContribution ?? 0);
         action.innerHTML = risk
           ? `<strong>策略风险：</strong>当前平台券会增加承接站尾部等待，建议降低券档或更换承接站。场景 ROI ${Number(impact.scenarioRoi ?? impact.roi).toFixed(2)}x。`
-          : `${headline}向${payload.targetUser || "目标用户"}提供 ¥${payload.platformCoupon ?? payload.discountAmount} 平台券，场景预计分流 ${Math.round(impact.divertedVehicles || 0)} 人（挽回 ${impact.retainedOrders?.toFixed?.(1) ?? "—"} 单，新增 ${Math.round(impact.incrementalOrders || 0)} 单），场景 ROI ${Number(impact.scenarioRoi ?? impact.roi).toFixed(2)}x；平台贡献 ¥${platformContribution.toFixed(2)}，商户贡献 ¥${merchantContribution.toFixed(2)}。${payload.recommendedPlatformCoupon != null
-            ? `仿真建议 ¥${payload.recommendedPlatformCoupon}（在场景 ROI ≥ 1 的券档中分流最多）。`
-            : "当前负载与成本假设下没有满足场景 ROI 约束的券档，建议改用推荐分流或调度。"}${payload.capacityBound
+          : `${headline}向${payload.targetUser || "目标用户"}提供 ¥${payload.platformCoupon ?? payload.discountAmount} 平台券，仿真预计可引导 ${Math.round(impact.divertedVehicles || 0)} 人（挽回 ${impact.retainedOrders?.toFixed?.(1) ?? "—"} 单，新增 ${Math.round(impact.incrementalOrders || 0)} 单），场景 ROI ${Number(impact.scenarioRoi ?? impact.roi).toFixed(2)}x；仿真收益假设：平台贡献 ¥${platformContribution.toFixed(2)}，商户贡献 ¥${merchantContribution.toFixed(2)}。${payload.recommendedPlatformCoupon != null
+            ? `仿真建议 ¥${payload.recommendedPlatformCoupon}（在场景 ROI ≥ 1 的券档中仿真预计可引导最多）。`
+            : "当前负载与成本假设下没有满足场景 ROI 约束的券档，建议改用推荐引导或调度。"}${payload.capacityBound
               ? `<br><span class="strategy-note">承接站窗口容量已是瓶颈：仍有约 ${payload.unservedPressure} 人的需求压力无法承接，继续加码平台券不能解决。</span>`
               : ""}`;
         action.classList.toggle("strategy-risk", risk);
@@ -5864,7 +5921,7 @@
     const modeLabel = payload.inputMode === "current-stations" ? "当前站点输入" : "合成站点输入";
     setText("validationStatusMeta", `${payload.trips?.toLocaleString?.() || payload.trips} 次合成行程 · ${payload.stationCount || 0} 个节点 · 种子 ${payload.seed} · ${modeLabel}`);
     setText("validationFootText", `本次输入：${payload.stationCount || 0} 个${modeLabel} · ${payload.trips?.toLocaleString?.() || payload.trips} 次合成行程 · 固定随机种子 ${payload.seed}。${payload.assumptions || ""}`);
-    setText("validationSourceBadge", "可复现实验 / 非真实经营 KPI");
+    setText("validationSourceBadge", "可复现实验 / 非企业真实经营结论");
     const progress = byId("validationProgress");
     if (progress) progress.style.width = "100%";
     const evidenceButton = byId("validationEvidenceButton");
@@ -6043,7 +6100,7 @@
     state.executionState = "running";
     const button = byId("approveButton");
     if (button) {
-      button.innerHTML = '<i data-lucide="loader-circle"></i>正在计算分流…';
+      button.innerHTML = '<i data-lucide="loader-circle"></i>正在生成沙盘结果…';
       button.disabled = true;
       button.style.opacity = "0.72";
       refreshIcons();
@@ -6068,7 +6125,7 @@
     // The main CTA becomes “重置分析” after completion; keep the legacy
     // secondary reset control hidden so the evaluator sees one clear action.
     byId("resetExecution")?.classList.add("hidden");
-    showToast("分析完成：仿真结果与 AI 运营解读已更新");
+    showToast("分析完成：策略沙盘结果与 AI 运营解读已更新");
     refreshIcons();
   }
 
@@ -6308,6 +6365,7 @@
     initFallback();
     renderParseAnalysis(null);
     setPlanningVisibility(false);
+    void loadAiHealthStatus();
     fitIntentInput();
     if (window.innerWidth <= 760) byId("insightPanel").classList.add("hidden");
     $$("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));

@@ -4691,7 +4691,7 @@
 
       <div class="ai-composer-dock" id="aiComposerDock" aria-label="AI 出行输入与状态">
         <div class="ai-runtime-status ai-composer-status" id="aiStatus" data-status="idle" role="status" aria-live="polite">
-          <span class="ai-runtime-main" id="aiStatusText">AI 大模型已接入</span>
+          <span class="ai-runtime-main" id="aiStatusText">正在检查解析能力</span>
           <span class="ai-runtime-meta" id="aiModelLabel" data-reviewer-only>等待出行需求</span>
         </div>
         <div class="ai-request ai-composer" id="aiComposer" aria-label="自然语言出行输入">
@@ -4863,7 +4863,7 @@
           <div>
             <div class="eyebrow">Operator intelligence</div>
             <h2 id="operatorPanelTitle">北京区域补能供需</h2>
-            <p>把全网站点观察结果与平台可调控站点分开，形成可解释的推荐分流方案。<span class="source-badge">地图 POI（真实服务可用时来自高德） · 演示平台配置 · 仿真经营状态</span></p>
+            <p>把全网站点观察结果与平台可调控站点分开，形成可解释的策略沙盘建议。<span class="source-badge">地图 POI（真实服务可用时来自高德） · 演示平台配置 · 仿真经营状态</span></p>
             <div class="operator-boundary-note"><strong>业务边界</strong><span>所有站点都可用于地图导航和补能候选；只有演示平台配置中同时满足合作、可调控、可发券、商家接受的站点，才会进入运营策略计算。</span></div>
           </div>
           <button class="close-button" id="closeOperator" aria-label="关闭运营视图"><i data-lucide="x"></i></button>
@@ -4871,8 +4871,8 @@
         <div class="analysis-flow-strip" aria-label="智能分析流程">
           <article class="analysis-step-card active" id="operatorSimulationStep">
             <div class="analysis-step-top"><span class="analysis-step-number">01</span><span class="analysis-step-state" id="operatorSimulationState">待开始</span></div>
-            <strong>平台分流仿真计算</strong>
-            <p>用拥堵、容量、等待与平台成本约束计算推荐分流结果，不由大模型替代。</p>
+            <strong>策略沙盘计算</strong>
+            <p>用拥堵、容量、等待与平台成本约束计算仿真预计可引导方案，不由大模型替代。</p>
           </article>
           <div class="analysis-flow-connector" aria-hidden="true"><i data-lucide="arrow-right"></i></div>
           <article class="analysis-step-card" id="operatorFeishuStep">
@@ -4884,18 +4884,18 @@
         <div class="operator-grid">
           <div class="operator-metric"><div class="stat-label">未来 30 分钟峰值排队</div><strong id="operatorQueue">43<span style="font-size:13px;font-family:var(--sans);font-weight:500"> 人</span></strong><p id="operatorQueueNote">大兴南区 3 个站点出现集中到达</p></div>
           <div class="operator-metric"><div class="stat-label">平台券档位</div><strong id="operatorDiscount">—</strong><p id="operatorDiscountNote">尚未生成可执行的平台券策略</p></div>
-          <div class="operator-metric"><div class="stat-label">场景 ROI 估算</div><strong id="operatorRoi">—</strong><p id="operatorRoiNote">场景仿真结果 · 待真实 A/B 实验验证</p></div>
+          <div class="operator-metric"><div class="stat-label">场景 ROI（仿真）</div><strong id="operatorRoi">—</strong><p id="operatorRoiNote">场景仿真结果 · 待真实 A/B 实验验证</p></div>
         </div>
-        <section class="station-flow" aria-label="跨站分流路径">
-          <div class="station-flow-head"><strong>本次跨站分流</strong><span id="operatorLogicHint">根据拥堵、空余容量、绕行与人群敏感度计算</span></div>
+        <section class="station-flow" aria-label="跨站引导沙盘路径">
+          <div class="station-flow-head"><strong>本次跨站引导沙盘</strong><span id="operatorLogicHint">根据拥堵、空余容量、绕行与人群敏感度计算</span></div>
           <div class="station-flow-cards">
             <article class="flow-station-card source"><span>拥堵源站 · 全网观察</span><strong id="operatorSourceName">正在识别高峰站点</strong><p id="operatorSourceMetrics">负载 — · 预计等待 —</p></article>
-            <div class="flow-arrow"><i data-lucide="arrow-right"></i><small id="operatorFlowLabel">分流方案</small></div>
+            <div class="flow-arrow"><i data-lucide="arrow-right"></i><small id="operatorFlowLabel">仿真引导方案</small></div>
             <article class="flow-station-card target"><span>平台承接站 · 可执行</span><strong id="operatorTargetName">正在筛选可承接站</strong><p id="operatorTargetMetrics">全网 POI 可见 · 等待边界校验</p></article>
           </div>
         </section>
         <div class="strategy-lab" id="operatorStrategyLab">
-          <div class="strategy-lab-head"><strong>平台券 / 推荐分流实验台</strong><span>平台不能直接修改商家油电标价；本实验台只比较平台券、推荐分流与承接容量的场景结果。</span></div>
+          <div class="strategy-lab-head"><strong>平台券 / 推荐引导沙盘</strong><span>平台不能直接修改商家油电标价；本沙盘只比较平台券、推荐引导与承接容量的场景结果。</span></div>
           <div class="strategy-controls">
             <div class="strategy-control">
               <div class="strategy-control-head"><label for="discountSlider">单笔平台券金额</label><output id="discountValue" for="discountSlider">¥6</output></div>
@@ -4916,17 +4916,17 @@
             </div>
             <button class="strategy-preview-button" id="operatorSimulate"><i data-lucide="calculator"></i> 试算这组方案</button>
           </div>
-          <div class="strategy-comparison" aria-label="策略执行前后对比">
-            <div class="comparison-metric snapshot" id="operatorBeforeCompare"><span>执行前</span><div class="snapshot-values"><strong id="beforeQueueValue">—</strong><strong id="beforeP90Value">P90 —</strong></div></div>
-            <div class="comparison-metric snapshot after" id="operatorAfterCompare"><span>未执行策略</span><div class="snapshot-values"><strong id="afterQueueValue">—</strong><strong id="afterP90Value">P90 —</strong></div></div>
-            <div class="comparison-metric"><span>场景预计分流</span><div class="comparison-values"><strong id="divertedUsersValue">—</strong></div></div>
-            <div class="comparison-metric"><span>场景 ROI 估算</span><div class="comparison-values"><strong id="strategyRoiValue">—</strong></div></div>
+          <div class="strategy-comparison" aria-label="策略沙盘前后对比">
+            <div class="comparison-metric snapshot" id="operatorBeforeCompare"><span>应用前</span><div class="snapshot-values"><strong id="beforeQueueValue">—</strong><strong id="beforeP90Value">P90 —</strong></div></div>
+            <div class="comparison-metric snapshot after" id="operatorAfterCompare"><span>未应用沙盘策略</span><div class="snapshot-values"><strong id="afterQueueValue">—</strong><strong id="afterP90Value">P90 —</strong></div></div>
+            <div class="comparison-metric"><span>仿真预计可引导</span><div class="comparison-values"><strong id="divertedUsersValue">—</strong></div></div>
+            <div class="comparison-metric"><span>场景 ROI（仿真）</span><div class="comparison-values"><strong id="strategyRoiValue">—</strong></div></div>
           </div>
         </div>
         <div class="operator-actions">
           <div class="operator-action-copy">
             <p id="operatorAction"><strong>当前边界：</strong>全网站点可以导航和观察，但只有演示平台配置中可控且接受平台券的站点才能生成运营策略。</p>
-            <small>点击“开始智能分析”后，系统会先完成严谨仿真，再自动请求飞书 AI 解读；两条结果彼此独立。</small>
+            <small>点击“开始智能分析”后，系统会先生成策略沙盘结果，再自动请求飞书 AI 解读；两条结果彼此独立，均不代表企业真实经营结论。</small>
           </div>
           <div class="operator-button-group"><button class="secondary-action subtle hidden" id="resetExecution"><i data-lucide="rotate-ccw"></i>重置分析</button><button class="secondary-action analysis-run-button" id="approveButton"><i data-lucide="sparkles"></i>开始智能分析</button></div>
         </div>
@@ -4937,7 +4937,7 @@
               <div>
                 <div class="eyebrow">AI operation interpretation</div>
                 <h3>飞书 AI 运营解读</h3>
-                <p>它不重新计算仿真指标，而是读取当前策略记录，把分流结果解释成运营人员可以执行和复核的建议。</p>
+                <p>它不重新计算仿真指标，而是读取当前策略记录，把仿真引导结果解释成运营人员可以复核的建议。</p>
               </div>
             </div>
             <div class="feishu-ai-actions">
@@ -4946,7 +4946,7 @@
             </div>
           </div>
           <div class="feishu-ai-result" id="feishuAiResult" aria-live="polite">
-            <div class="feishu-ai-empty" id="feishuAiEmpty">点击“开始智能分析”，先完成分流仿真，再查看 AI 对运营结果的自然语言解读。</div>
+            <div class="feishu-ai-empty" id="feishuAiEmpty">点击“开始智能分析”，先生成策略沙盘结果，再查看 AI 对运营结果的自然语言解读。</div>
             <div class="feishu-ai-conclusions" id="feishuAiConclusions" hidden></div>
           </div>
           <div class="feishu-ai-foot"><span id="feishuAiSource">数据来源将在分析完成后明确标注；当前不代表企业实时经营结论。</span><span class="source-badge">仿真结果 → AI 解读</span></div>
@@ -4973,13 +4973,13 @@
         </div>
         <div class="validation-table-wrap">
           <table class="validation-table">
-            <thead><tr><th>策略</th><th>平均等待</th><th>P90 等待</th><th>准时率</th><th>利用率离散度</th><th>优惠 ROI</th></tr></thead>
+            <thead><tr><th>策略</th><th>平均等待</th><th>P90 等待</th><th>准时率</th><th>利用率离散度</th><th>场景 ROI</th></tr></thead>
             <tbody id="validationTableBody">
               <tr id="validationEmptyRow"><td colspan="6">尚未运行仿真；点击“验证”后将以当前站点输入计算。</td></tr>
             </tbody>
           </table>
         </div>
-        <div class="validation-foot"><p id="validationFootText">尚未运行。结果将在固定种子下由当前站点输入生成。</p><span class="source-badge" id="validationSourceBadge">可复现实验 / 非真实经营 KPI</span></div>
+        <div class="validation-foot"><p id="validationFootText">尚未运行。结果将在固定种子下由当前站点输入生成。</p><span class="source-badge" id="validationSourceBadge">可复现实验 / 非企业真实经营结论</span></div>
       </section>
 
       <div class="evidence-backdrop" id="validationEvidenceBackdrop" hidden data-reviewer-only>
