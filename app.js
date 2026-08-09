@@ -1519,11 +1519,18 @@
       return `<circle class="forecast-point" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3"><title>${displayCopy(`+${points[index].minute || 0} 分钟 · P90 ${value.toFixed(1)} 分钟`)}</title></circle>`;
     }).join("");
     const status = byId("forecastStatus");
-    if (status) status.textContent = `${entry.simulation || entry.forecastSource === "simulation" ? "仿真预测" : "演示预测"} · ${entry.horizonMinutes || points.length * 5 - 5} 分钟`;
+    if (status) {
+      const methodLabel = entry.method === "port-discrete-event" ? "端口级离散事件仿真" : "聚合流量仿真";
+      status.textContent = `${entry.simulation || entry.forecastSource === "simulation" ? "仿真预测" : "演示预测"} · ${methodLabel} · ${entry.horizonMinutes || points.length * 5 - 5} 分钟`;
+    }
     const meta = byId("forecastMeta");
     if (meta) {
       const text = meta.querySelector("span") || meta;
-      text.textContent = `${entry.explanation || payload?.model || "可解释队列近似"}${entry.asOf ? ` · ${entry.asOf}` : ""}`;
+      const snapshot = entry.inputSnapshot;
+      const portSummary = entry.method === "port-discrete-event" && snapshot
+        ? `总枪位 ${snapshot.totalPorts ?? "—"} · 空闲 ${snapshot.idlePorts ?? "—"} · 排队 ${snapshot.queueVehicles ?? "—"}`
+        : "";
+      text.textContent = `${entry.explanation || payload?.model || "可解释队列近似"}${entry.asOf ? ` · ${entry.asOf}` : ""}${portSummary ? ` · ${portSummary}` : ""}`;
     }
   }
 
@@ -1577,13 +1584,20 @@
     const requestId = ++state.forecastRequestVersion;
     const status = byId("forecastStatus");
     if (status) status.textContent = "正在计算…";
-    if (Array.isArray(station.forecast) && station.forecast.length) {
+    // A station can arrive here from an older route record with a legacy
+    // forecast array but without the current method/input evidence. Do not
+    // render that stale aggregate snapshot as if it were the current forecast
+    // contract; the port-level demo snapshot must get a chance to run.
+    if (Array.isArray(station.forecast) && station.forecast.length && station.forecastMethod) {
       renderForecast(station, station);
       return;
     }
     try {
+      const forecastInput = station.forecastInputSnapshot
+        ? station
+        : Object.assign({}, station, buildDemoPortSnapshot(station));
       const payload = await postJson("/api/forecast", {
-        stations: [station],
+        stations: [forecastInput],
         scenario: {
           departureMinutes: state.departureMinutes,
           energyType: state.energyType,
@@ -1613,16 +1627,47 @@
     ].join("|");
   }
 
+  // 企业端口/枪位数据暂未开放。为了让评委能看到“站点等待时间”不是一条
+  // 写死的数字，这里从已有演示占用率、容量和等待输入推导一份确定性的端口
+  // 快照，交给后端的 port-discrete-event 仿真。它必须明确标注为演示数据，
+  // 不能伪装成能链实时站点状态；后续拿到脱敏数据时，只替换这层输入。
+  function buildDemoPortSnapshot(station) {
+    const totalPorts = Math.max(4, Math.min(60, Math.round(Number(station?.capacity) || 12)));
+    const occupancy = Math.max(0, Math.min(0.96, Number(station?.occupancy) || 0));
+    const faultPorts = occupancy >= 0.93 ? 1 : 0;
+    const chargingPorts = Math.max(1, Math.min(totalPorts - faultPorts, Math.round(totalPorts * occupancy)));
+    const idlePorts = Math.max(0, totalPorts - chargingPorts - faultPorts);
+    const wait = Math.max(0, Number(station?.wait ?? station?.p50) || 0);
+    const queueVehicles = Math.max(0, Math.min(24, Math.round(Math.max(0, wait - 4) / 6)));
+    const averageSessionMinutes = station?.type === "加油站" ? 8 : 35;
+    const estimatedReleaseMinutes = Array.from({ length: chargingPorts }, (_, index) => Number(Math.max(0, wait * (0.8 + (index % 4) * 0.1)).toFixed(1)));
+    return {
+      totalPorts,
+      idlePorts,
+      chargingPorts,
+      faultPorts,
+      queueVehicles,
+      estimatedReleaseMinutes,
+      averageSessionMinutes,
+      snapshotTime: `simulation@${formatClock(state.departureMinutes)}`,
+      dataSource: "FlowTwin 演示仿真 · 端口状态推演",
+      freshnessSeconds: null
+    };
+  }
+
   async function ensureStationForecasts(baseRoute) {
     const stations = Array.isArray(state.stations) ? state.stations : [];
     if (!stations.length || !baseRoute) return null;
     const scenarioKey = forecastScenarioKey(baseRoute);
-    if (state.stationForecastScenarioKey === scenarioKey && stations.every((station) => Array.isArray(station.forecast) && station.forecast.length)) return null;
+    if (state.stationForecastScenarioKey === scenarioKey && stations.every((station) => (
+      Array.isArray(station.forecast) && station.forecast.length && station.forecastMethod
+    ))) return null;
     const requestId = ++state.stationForecastRequestVersion;
     const duration = Math.max(30, Number(baseRoute.duration || 30));
     const horizonMinutes = Math.min(240, Math.max(30, Math.ceil(duration / 5) * 5));
     const inputStations = stations.map((station) => Object.assign({}, station, {
       stationSource: station.source,
+      ...(station.forecastInputSnapshot ? {} : buildDemoPortSnapshot(station)),
       arrivalOffsetMinutes: Math.max(0, Number.isFinite(Number(station.routeProgress))
         ? Number(station.routeProgress) * Number(baseRoute.duration || 0)
         : 0)
@@ -1670,6 +1715,12 @@
           p90: Number.isFinite(p90) ? p90 : station.p90,
           forecastSource: entry.source || payload.source || "simulation",
           forecastAsOf: entry.asOf || payload.asOf || null,
+          forecastMethod: entry.method || payload.method || "aggregate-flow-simulation",
+          forecastDataAsOf: entry.dataAsOf || payload.dataAsOf || entry.asOf || payload.asOf || null,
+          forecastFreshnessSeconds: Number.isFinite(Number(entry.freshnessSeconds)) ? Number(entry.freshnessSeconds) : null,
+          forecastInputSnapshot: entry.inputSnapshot || null,
+          forecastArrivalWaitP50: Number.isFinite(Number(prediction.p50)) ? Number(prediction.p50) : null,
+          forecastArrivalWaitP90: Number.isFinite(Number(prediction.p90)) ? Number(prediction.p90) : null,
           forecastConfidence: entry.confidence || payload.confidence || "simulation-only",
           forecastHorizonMinutes: entry.horizonMinutes || payload.horizonMinutes || horizonMinutes,
           forecastSimulation: entry.simulation === true || payload.simulation === true || entry.source === "simulation" || payload.source === "simulation",
@@ -5192,6 +5243,10 @@
 
   function selectStation(station, showPanel) {
     if (!station) return;
+    // Route cards keep their own stop objects. Prefer the canonical station in
+    // state.stations so the forecast evidence returned by /api/forecast is not
+    // lost when a card was built from an earlier station snapshot.
+    station = state.stations.find((candidate) => String(candidate.id) === String(station.id)) || station;
     state.selectedStation = station;
     const forecastCard = byId("forecastChart")?.closest(".forecast-card");
     if (forecastCard) forecastCard.style.display = "";
@@ -5835,7 +5890,15 @@
         campaignBudget: Number(meta.campaignBudget ?? OPERATOR_DEMO_DEFAULTS.campaignBudget),
         dataSource: String(meta.dataSource || OPERATOR_DEMO_DEFAULTS.dataSource),
         asOf: String(meta.asOf || OPERATOR_DEMO_DEFAULTS.asOf),
-        operatorDataLabel: String(meta.label || "演示平台配置（非企业真实字段）")
+        operatorDataLabel: String(meta.label || "演示平台配置（非企业真实字段）"),
+        forecastMethod: station.forecastMethod || null,
+        forecastSource: station.forecastSource || null,
+        forecastDataAsOf: station.forecastDataAsOf || station.forecastAsOf || null,
+        forecastFreshnessSeconds: Number.isFinite(Number(station.forecastFreshnessSeconds)) ? Number(station.forecastFreshnessSeconds) : null,
+        forecastSimulation: station.forecastSimulation !== false,
+        forecastInputSnapshot: station.forecastInputSnapshot || null,
+        forecastArrivalWaitP50: Number.isFinite(Number(station.forecastArrivalWaitP50)) ? Number(station.forecastArrivalWaitP50) : Number(station.p50 || 0),
+        forecastArrivalWaitP90: Number.isFinite(Number(station.forecastArrivalWaitP90)) ? Number(station.forecastArrivalWaitP90) : Number(station.p90 || 0)
       };
     });
   }

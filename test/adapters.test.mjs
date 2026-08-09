@@ -101,3 +101,79 @@ test("Feishu remains an explicit local demo when credentials are absent", async 
   assert.equal(result.mode, "local-demo");
   assert.equal(result.status, "not-configured");
 });
+
+test("Feishu strategy input carries bounded forecast evidence without adding table fields", async () => {
+  clearFeishuCaches();
+  const config = {
+    feishuBaseUrl: "https://open.feishu.cn",
+    feishuAppId: "app-evidence",
+    feishuAppSecret: "fake-evidence-secret",
+    feishuAppToken: "base-evidence",
+    feishuSnapshotTableId: "tbl-evidence-snapshot",
+    feishuStrategyTableId: "tbl-evidence-strategy",
+    feishuAiStrategyField: "AI策略"
+  };
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).includes("tenant_access_token")) return response({ code: 0, tenant_access_token: "tenant-evidence", expire: 7200 });
+    if (String(url).includes("batch_create")) return response({ code: 0, data: { records: [{ record_id: "snapshot-evidence" }] } });
+    if (options.method === "POST") return response({ code: 0, data: { record: { record_id: "strategy-evidence" } } });
+    return response({ code: 0, data: { record: { fields: { AI策略: "已读取仿真证据" } } } });
+  };
+  const station = {
+    id: "station-evidence",
+    name: "端口演示站",
+    type: "充电站",
+    p50: 8,
+    p90: 18,
+    forecastMethod: "port-discrete-event",
+    forecastSource: "simulation",
+    forecastDataAsOf: "simulation@12:00",
+    forecastSimulation: true,
+    forecastFreshnessSeconds: null,
+    forecastInputSnapshot: {
+      totalPorts: 20,
+      idlePorts: 4,
+      chargingPorts: 14,
+      faultPorts: 2,
+      queueVehicles: 6,
+      estimatedReleaseMinutes: Array.from({ length: 30 }, (_, index) => index * 3),
+      averageSessionMinutes: 35,
+      dataSource: "FlowTwin 演示仿真 · 端口状态推演"
+    }
+  };
+  const started = await startFeishuSync({
+    config,
+    fetchImpl,
+    payload: {
+      runId: "run-evidence-1",
+      source: "FlowTwin 演示仿真",
+      stations: [station],
+      strategy: {
+        sourceStation: station,
+        targetStation: station,
+        stations: [station],
+        targetUser: "准时敏感用户",
+        discountAmount: 4,
+        impact: { divertedVehicles: 3, roi: 1.1 }
+      }
+    }
+  });
+  assert.equal(started.used, true);
+  const strategyCall = calls.find((call) => call.url.includes("tbl-evidence-strategy") && call.options.method === "POST");
+  assert.ok(strategyCall);
+  const strategyBody = JSON.parse(strategyCall.options.body);
+  const fields = strategyBody.fields;
+  assert.deepEqual(Object.keys(fields).sort(), [
+    "创建时间", "优惠金额", "审批状态", "承接站", "拥堵站", "策略ID", "策略输入", "目标", "预计ROI", "预计分流", "预计等待变化", "风险说明", "运行批次"
+  ].sort());
+  const evidence = JSON.parse(fields["策略输入"]);
+  assert.equal(evidence.source, "FlowTwin 演示仿真");
+  assert.match(evidence.analysisBoundary, /不得把仿真说成企业实时经营数据/);
+  assert.equal(evidence.forecastEvidence[0].method, "port-discrete-event");
+  assert.equal(evidence.forecastEvidence[0].arrivalWaitP90, 18);
+  assert.equal(evidence.forecastEvidence[0].portSnapshot.estimatedReleaseMinutes.length, 12);
+  assert.equal(evidence.forecastEvidence[0].portSnapshot.totalPorts, 20);
+  assert.equal(evidence.evidenceTruncated, undefined);
+});
