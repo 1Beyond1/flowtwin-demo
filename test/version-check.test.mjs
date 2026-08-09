@@ -213,7 +213,7 @@ test("an unknown local commit is unavailable", async () => {
   assert.equal(result.checked, false);
   assert.equal(result.status, "unavailable");
   assert.equal(result.updateAvailable, null);
-  assert.equal(result.reason, "GITHUB_NOT_FOUND");
+  assert.equal(result.reason, "LOCAL_COMMIT_NOT_PUBLISHED");
 });
 
 test("compare timeout and rate limit are unavailable", async () => {
@@ -283,7 +283,7 @@ test("GitHub rate limits are explicit and do not trigger a false update result",
   assert.equal(result.reason, "GITHUB_RATE_LIMITED");
 });
 
-test("version checks cache successful and degraded results for fifteen minutes", async () => {
+test("version checks cache successful results for fifteen minutes", async () => {
   let now = Date.parse("2026-08-08T03:00:00.000Z");
   let calls = 0;
   const checker = createVersionChecker({
@@ -304,6 +304,25 @@ test("version checks cache successful and degraded results for fifteen minutes",
   now += 15 * 60 * 1000 + 1;
   const third = await checker.check();
   assert.equal(third.cached, false);
+  assert.equal(calls, 2);
+});
+
+test("degraded version checks are immediately retryable", async () => {
+  let calls = 0;
+  const checker = createVersionChecker({
+    localVersion,
+    fetchImpl: async () => {
+      calls += 1;
+      throw Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    }
+  });
+
+  const first = await checker.check();
+  const second = await checker.check();
+  assert.equal(first.cached, false);
+  assert.equal(second.cached, false);
+  assert.equal(first.reason, "GITHUB_TIMEOUT");
+  assert.equal(second.reason, "GITHUB_TIMEOUT");
   assert.equal(calls, 2);
 });
 

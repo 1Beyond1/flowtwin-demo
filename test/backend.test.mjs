@@ -272,7 +272,7 @@ test("a bare city query resolves to the city, not a same-prefix station", async 
 test("plan response reports why the model was skipped instead of failing silently", async () => {
   const result = await parseTripIntent({
     message: "去北京南站",
-    config: { webServiceKey: "geo-key", aiBaseUrl: "https://ai.example.com/v1", aiApiKey: "sk-test", aiModel: "m" },
+    config: { webServiceKey: "geo-key", aiBaseUrl: "https://ai.example.com/v1", aiApiKey: "test-key", aiModel: "m" },
     fetchImpl: async (url) => {
       if (String(url).includes("chat/completions")) {
         return new Response(JSON.stringify({ error: { message: "quota exceeded" } }), { status: 429 });
@@ -307,21 +307,21 @@ test("place scoring prefers scenic names over bare admin roads", () => {
 
 test("place scoring prefers a university campus over a same-name metro station", () => {
   const campus = scorePlaceCandidate({
-    name: "南京工业大学",
+    name: "示例大学",
     type: "科教文化服务;学校;高等院校",
     typecode: "141201",
     province: "江苏省",
     city: "南京市",
     source: "高德地点检索"
-  }, "南京工业大学");
+  }, "示例大学");
   const metro = scorePlaceCandidate({
-    name: "南京工业大学(地铁站)",
+    name: "示例大学(地铁站)",
     type: "交通设施服务;地铁站;地铁站",
     typecode: "150500",
     province: "江苏省",
     city: "南京市",
     source: "高德地点检索"
-  }, "南京工业大学");
+  }, "示例大学");
   assert.ok(campus > metro);
 });
 

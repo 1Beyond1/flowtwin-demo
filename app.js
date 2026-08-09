@@ -395,6 +395,24 @@
     }
   }
 
+  function versionUnavailableMessage(payload) {
+    switch (payload?.reason) {
+      case "LOCAL_COMMIT_NOT_PUBLISHED":
+        return "当前为尚未发布的开发版本";
+      case "LOCAL_COMMIT_UNAVAILABLE":
+        return "当前部署缺少提交版本标识";
+      case "GITHUB_RATE_LIMITED":
+        return "GitHub 请求受限，请稍后重试";
+      case "GITHUB_TIMEOUT":
+      case "GITHUB_OFFLINE":
+        return "暂时无法连接 GitHub";
+      case "GITHUB_REPOSITORY_OR_MAIN_NOT_FOUND":
+        return "无法读取 GitHub 主分支";
+      default:
+        return "暂时无法检查";
+    }
+  }
+
   async function checkVersion() {
     const button = byId("checkVersionButton");
     if (button?.disabled) return;
@@ -411,7 +429,7 @@
       } else if (payload?.status === "update-available" || payload?.updateAvailable === true) {
         renderVersionCheckState("update", "发现新版本", payload);
       } else {
-        renderVersionCheckState("unavailable", "暂时无法检查", payload);
+        renderVersionCheckState("unavailable", versionUnavailableMessage(payload), payload);
       }
     } catch (_) {
       // A failed request is never treated as an old version.
