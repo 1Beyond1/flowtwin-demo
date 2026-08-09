@@ -19,6 +19,7 @@ import {
   approveFeishuStrategy
 } from "./lib/feishu-bitable.mjs";
 import { createVersionChecker, loadVersionInfo, resolveVersionRoute } from "./lib/version.mjs";
+import { AMAP_CACHE_TTLS, createAmapFileCache } from "./lib/amap-cache.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 let config = null;
@@ -76,7 +77,6 @@ async function routeApi(requestUrl, response) {
   const strategies = { fastest: "38", reliable: "33", cheapest: "36" };
   if (!origin || !destination || !strategies[key]) return json(response, 400, { error: "INVALID_ROUTE_PARAMS" });
 
-  if (!hasAmapServiceKey(config)) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
   const params = new URLSearchParams({
     origin,
     destination,
@@ -86,14 +86,24 @@ async function routeApi(requestUrl, response) {
     show_fields: "cost,navi,polyline"
   });
   if (waypoint) params.set("waypoints", waypoint);
-  const result = (await requestAmapJson("https://restapi.amap.com/v5/direction/driving", params, { config, timeoutMs: 15000 })).payload || {};
+  let cached;
+  try {
+    cached = await requestCachedAmap("route", "https://restapi.amap.com/v5/direction/driving", params, {
+      timeoutMs: 15000,
+      staleIfErrorMs: 2 * 60 * 60 * 1000
+    });
+  } catch (error) {
+    return errorResponseForAmap(error, response, "AMAP_ROUTE_FAILED");
+  }
+  const result = cached.payload || {};
   const paths = Array.isArray(result.route?.paths) ? result.route.paths : [];
   if (result.status !== "1" || !paths.length) return json(response, 502, { error: result.info || "AMAP_ROUTE_FAILED", infocode: result.infocode || null });
   const station = waypoint ? { location: waypoint.split(",").map(Number) } : null;
   return json(response, 200, {
     route: normalizePath(paths[0], key, station),
     alternatives: paths.length,
-    source: "高德 Web 服务路线规划 2.0"
+    source: cached.cache?.state === "stale" ? "高德路线缓存 · 上游暂不可用" : "高德 Web 服务路线规划 2.0",
+    cache: cached.cache || { state: "bypass" }
   });
 }
 
@@ -113,6 +123,51 @@ function cleanPoiKeyword(value) {
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .trim()
     .slice(0, 60);
+}
+
+function amapError(result, fallback = "AMAP_REQUEST_FAILED") {
+  const error = new Error(result?.error || fallback);
+  error.amapResult = result || null;
+  return error;
+}
+
+/**
+ * Read/write normalized AMap payloads through the optional disk cache. The
+ * loader still goes through requestAmapJson, so key rotation and provider
+ * error handling remain in one place. A stale successful payload can be
+ * returned only when the upstream request fails; its response metadata makes
+ * that boundary visible to the browser.
+ */
+async function requestCachedAmap(kind, endpoint, params, options = {}) {
+  const load = async () => {
+    const result = await requestAmapJson(endpoint, params, {
+      config,
+      timeoutMs: options.timeoutMs || 10000
+    });
+    if (!result.ok) throw amapError(result);
+    return result.payload || {};
+  };
+  if (!config?.amapCache) return { payload: await load(), cache: { state: "bypass" } };
+  const cached = await config.amapCache.getOrLoad(kind, params.toString(), load, {
+    ttlMs: options.ttlMs || AMAP_CACHE_TTLS[kind] || AMAP_CACHE_TTLS.route,
+    staleIfErrorMs: options.staleIfErrorMs
+  });
+  return {
+    payload: cached.value || {},
+    cache: cached.cache,
+    upstreamError: cached.upstreamError || null
+  };
+}
+
+function errorResponseForAmap(error, response, fallback = "AMAP_UPSTREAM_UNAVAILABLE") {
+  const result = error?.amapResult;
+  if (result?.error === "AMAP_WEB_SERVICE_KEY_MISSING") {
+    return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
+  }
+  return json(response, 502, {
+    error: result?.error || fallback,
+    infocode: result?.infocode || null
+  });
 }
 
 /**
@@ -152,8 +207,29 @@ async function poiApi(requestUrl, response) {
   });
   if (!search) return json(response, 400, { error: "INVALID_POI_LOCATION" });
   const { location, type, keyword, params } = search;
-  if (!hasAmapServiceKey(config)) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
-  const result = (await requestAmapJson("https://restapi.amap.com/v5/place/around", params, { config, timeoutMs: 15000 })).payload || {};
+  let around;
+  try {
+    around = await requestCachedAmap("poi", "https://restapi.amap.com/v5/place/around", params, {
+      timeoutMs: 15000,
+      staleIfErrorMs: 7 * 24 * 60 * 60 * 1000
+    });
+  } catch (error) {
+    const failure = error?.amapResult;
+    if (failure?.error === "AMAP_WEB_SERVICE_KEY_MISSING") return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
+    // POI discovery is an optional enrichment layer. A temporary quota or
+    // upstream failure should let the browser use its SDK/fallback candidates
+    // without turning the normal planning flow into a wall of 502 errors.
+    return json(response, 200, {
+      pois: [],
+      source: "高德 POI 暂不可用 · 已进入候选降级",
+      degraded: true,
+      warning: failure?.error || "AMAP_POI_FAILED",
+      infocode: failure?.infocode || null,
+      kind: type,
+      cache: { state: "miss" }
+    });
+  }
+  const result = around.payload || {};
   let pois = Array.isArray(result.pois) ? result.pois : [];
   if (result.status !== "1") {
     // POI discovery is an optional enrichment layer. A temporary quota or
@@ -167,7 +243,8 @@ async function poiApi(requestUrl, response) {
       degraded: true,
       warning: result.info || "AMAP_POI_FAILED",
       infocode: result.infocode || null,
-      kind: type
+      kind: type,
+      cache: around.cache || { state: "bypass" }
     });
   }
   let source = "高德周边 POI";
@@ -179,14 +256,22 @@ async function poiApi(requestUrl, response) {
   if (!pois.length) {
     try {
       const reverseParams = new URLSearchParams({ location, radius: "1000", extensions: "base" });
-      const reversePayload = (await requestAmapJson("https://restapi.amap.com/v3/geocode/regeo", reverseParams, { config, timeoutMs: 10000 })).payload || {};
+      const reverse = await requestCachedAmap("regeo", "https://restapi.amap.com/v3/geocode/regeo", reverseParams, {
+        timeoutMs: 10000,
+        staleIfErrorMs: 30 * 24 * 60 * 60 * 1000
+      });
+      const reversePayload = reverse.payload || {};
       const cityValue = reversePayload?.regeocode?.addressComponent?.city;
       const city = Array.isArray(cityValue) ? cityValue.find(Boolean) : cityValue;
       if (reversePayload.status === "1" && typeof city === "string" && city.trim()) {
         const textParams = new URLSearchParams({
           keywords: keyword, city: city.trim(), citylimit: "true", offset: "25", page: "1", extensions: "base"
         });
-        const textPayload = (await requestAmapJson("https://restapi.amap.com/v3/place/text", textParams, { config, timeoutMs: 10000 })).payload || {};
+        const text = await requestCachedAmap("place", "https://restapi.amap.com/v3/place/text", textParams, {
+          timeoutMs: 10000,
+          staleIfErrorMs: 30 * 24 * 60 * 60 * 1000
+        });
+        const textPayload = text.payload || {};
         if (textPayload.status === "1" && Array.isArray(textPayload.pois)) {
           pois = textPayload.pois;
           source = "高德城市文本 POI";
@@ -207,7 +292,8 @@ async function poiApi(requestUrl, response) {
     })),
     source,
     kind: type,
-    requestedKeyword: keyword
+    requestedKeyword: keyword,
+    cache: around.cache || { state: "bypass" }
   });
 }
 
@@ -431,10 +517,10 @@ export function buildLongTripApiInput(body = {}) {
   copyNumber(source, target, "durationMinutes", 0, 7 * 24 * 60);
   copyNumber(source, target, "soc", 0, 100);
   copyNumber(source, target, "minArrivalSoc", 0, 100);
-  // Adaptive browser planning derives its stop budget from the returned
-  // candidate corridor. Do not reintroduce a fixed API-side six/twelve cap.
-  // Keep the six-stop bound only for legacy direct callers that do not opt in.
-  if (source.adaptiveMaxStops !== true) copyNumber(source, target, "maxStops", 0, 6, { integer: true });
+  // Normal callers remain at six stops. The browser's long-trip mode gets a
+  // separate twelve-stop ceiling so a long route can be planned without
+  // allowing an unbounded request to multiply AMap segment calls.
+  copyNumber(source, target, "maxStops", 0, source.adaptiveMaxStops === true ? 12 : 6, { integer: true });
   copyNumber(source, target, "maxDetourKm", 0, 1000);
   copyDeparture(source, target);
   copyNumber(source, target, "deadlineOffsetMinutes", 0, 7 * 24 * 60);
@@ -505,9 +591,6 @@ function weatherImpactFor(condition) {
   return { weatherFactor: 1, severe: false };
 }
 
-const weatherCache = new Map();
-const WEATHER_CACHE_MS = 10 * 60 * 1000;
-
 async function weatherApi(requestUrl, response) {
   const location = parseCoordinate(requestUrl.searchParams.get("location"));
   if (!location) return json(response, 400, { error: "INVALID_LOCATION" });
@@ -518,23 +601,28 @@ async function weatherApi(requestUrl, response) {
   let adcode = null;
   let cityName = null;
   try {
-    const regeoJson = (await requestAmapJson("https://restapi.amap.com/v3/geocode/regeo", regeoParams, { config, timeoutMs: 10000 })).payload || {};
+    const regeo = await requestCachedAmap("regeo", "https://restapi.amap.com/v3/geocode/regeo", regeoParams, {
+      timeoutMs: 10000,
+      staleIfErrorMs: 30 * 24 * 60 * 60 * 1000
+    });
+    const regeoJson = regeo.payload || {};
     const component = regeoJson?.regeocode?.addressComponent;
     adcode = component?.adcode ? String(component.adcode) : null;
     cityName = component?.city ? String(component.city) : (component?.province ? String(component.province) : null);
   } catch { /* 落到下面的报错 */ }
   if (!adcode) return json(response, 502, { error: "AMAP_REGEO_FAILED" });
 
-  const cached = weatherCache.get(adcode);
-  if (cached && cached.expiresAt > Date.now()) return json(response, 200, cached.data);
-
   const weatherParams = new URLSearchParams({ city: adcode, extensions: "base" });
-  let result;
+  let weather;
   try {
-    result = (await requestAmapJson("https://restapi.amap.com/v3/weather/weatherInfo", weatherParams, { config, timeoutMs: 10000 })).payload || {};
+    weather = await requestCachedAmap("weather", "https://restapi.amap.com/v3/weather/weatherInfo", weatherParams, {
+      timeoutMs: 10000,
+      staleIfErrorMs: 2 * 60 * 60 * 1000
+    });
   } catch {
     return json(response, 502, { error: "AMAP_WEATHER_UNREACHABLE" });
   }
+  const result = weather.payload || {};
   const live = Array.isArray(result.lives) ? result.lives[0] : null;
   if (result.status !== "1" || !live) return json(response, 502, { error: result.info || "AMAP_WEATHER_FAILED", infocode: result.infocode || null });
 
@@ -549,9 +637,9 @@ async function weatherApi(requestUrl, response) {
     reporttime: live.reporttime || null,
     weatherFactor,
     severe,
-    source: "高德天气实况"
+    source: weather.cache?.state === "stale" ? "高德天气缓存 · 上游暂不可用" : "高德天气实况",
+    cache: weather.cache || { state: "bypass" }
   };
-  weatherCache.set(adcode, { data, expiresAt: Date.now() + WEATHER_CACHE_MS });
   return json(response, 200, data);
 }
 
@@ -613,7 +701,8 @@ async function feishuApproveApi(request, response, strategyRecordId) {
 async function staticFile(pathname, response) {
   const requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
   const protectedNames = new Set([".env", ".env.example", "config.local.js", "server.mjs", "package.json", "package-lock.json"]);
-  if (protectedNames.has(requested) || requested.startsWith(".git") || requested.includes("..")) {
+  if (protectedNames.has(requested) || requested.startsWith(".git") || requested.includes("..")
+    || requested === "runtime" || requested.startsWith("runtime/")) {
     response.writeHead(404).end();
     return;
   }
@@ -656,7 +745,8 @@ async function requestHandler(request, response) {
       dependencies: {
         amapConfigured: hasAmapServiceKey(config),
         feishu: feishuConfigSummary(config)
-      }
+      },
+      amapCache: config.amapCache?.getStats?.() || null
     });
     if (request.method === "GET" && requestUrl.pathname === "/api/contracts") return json(response, 200, API_CONTRACTS);
     if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
@@ -689,6 +779,9 @@ async function requestHandler(request, response) {
 
 async function startServer() {
   config = await loadConfig({ root });
+  // Disk cache is ignored by Git and blocked from static serving. It lowers
+  // repeated-demo quota use without replacing live route verification.
+  config.amapCache = createAmapFileCache({ root });
   versionInfo = await loadVersionInfo({ root });
   versionChecker = createVersionChecker({ localVersion: versionInfo });
   const port = config.port;

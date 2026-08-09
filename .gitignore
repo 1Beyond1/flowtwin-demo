@@ -5,6 +5,7 @@ runtime-config.js
 *.log
 server-*.log
 .playwright-cli/
+runtime/cache/
 node_modules/
 dist/
 output/

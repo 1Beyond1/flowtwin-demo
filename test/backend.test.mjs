@@ -117,6 +117,35 @@ test("plan parser leaves deadline and arrival reserve unset when the user did no
   assert.equal(result.minArrivalSoc, null);
 });
 
+test("plan parser treats a service follow-up as a supplement to the current trip", async () => {
+  const result = await parseTripIntent({
+    message: "中途想去吃麦当劳",
+    context: {
+      hasPlannedRoute: true,
+      currentDestination: "上海东方明珠广播电视塔"
+    },
+    config: {},
+    fetchImpl: async () => { throw new Error("offline"); }
+  });
+  assert.equal(result.requestMode, "supplement");
+  assert.equal(result.destination, "上海东方明珠广播电视塔");
+  assert.deepEqual(result.services, ["餐饮"]);
+});
+
+test("plan parser treats an explicit new destination as a new trip", async () => {
+  const result = await parseTripIntent({
+    message: "我想去南京",
+    context: {
+      hasPlannedRoute: true,
+      currentDestination: "上海东方明珠广播电视塔"
+    },
+    config: {},
+    fetchImpl: async () => { throw new Error("offline"); }
+  });
+  assert.equal(result.requestMode, "new_trip");
+  assert.equal(result.destination, "南京");
+});
+
 test("an explicit new destination wins over a stale airport completion", async () => {
   const result = await parseTripIntent({
     message: "从能链北京总部前往燕郊站，到达至少保留30%",
@@ -526,7 +555,7 @@ test("energy model skips charging when a full EV can meet the destination reserv
 test("energy model rejects a low-SOC EV station that cannot be reached with the safety reserve", () => {
   const result = evaluateStationStop({
     energyType: "electric", soc: 5, minArrivalSoc: 20,
-    firstLegKm: 18, totalDistanceKm: 60, detourKm: 3, maxDetourKm: 8
+    firstLegKm: 25, totalDistanceKm: 60, detourKm: 3, maxDetourKm: 8
   });
   assert.equal(result.canReachStation, false);
   assert.equal(result.feasible, false);
@@ -560,8 +589,8 @@ test("long-trip planner generates a safe multi-stop EV sequence", () => {
     distanceKm: 900,
     durationMinutes: 600,
     energyType: "electric",
-    soc: 65,
-    minArrivalSoc: 20,
+    soc: 45,
+    minArrivalSoc: 30,
     maxStops: 3,
     maxDetourKm: 8,
     stations: [
@@ -582,8 +611,8 @@ test("long-trip planner exposes distinct fastest, reliable and cheapest objectiv
     distanceKm: 620,
     durationMinutes: 440,
     energyType: "electric",
-    soc: 60,
-    minArrivalSoc: 20,
+    soc: 50,
+    minArrivalSoc: 40,
     maxStops: 3,
     maxDetourKm: 8,
     stations: [
@@ -637,8 +666,8 @@ test("long-trip planner accounts for every leg of a three-stop national EV trip"
     distanceKm: 900,
     durationMinutes: 600,
     energyType: "electric",
-    soc: 65,
-    minArrivalSoc: 20,
+    soc: 45,
+    minArrivalSoc: 30,
     maxStops: 3,
     maxDetourKm: 8,
     stations: [
@@ -660,8 +689,8 @@ test("long-trip planner accounts for every leg of a three-stop national EV trip"
 
 test("long-trip planner supports a six-stop national EV corridor", () => {
   const result = buildLongTripPlans({
-    distanceKm: 1700,
-    durationMinutes: 1080,
+    distanceKm: 2700,
+    durationMinutes: 1715,
     energyType: "electric",
     soc: 40,
     minArrivalSoc: 20,
@@ -669,11 +698,11 @@ test("long-trip planner supports a six-stop national EV corridor", () => {
     maxDetourKm: 8,
     stations: [
       { id: "s1", name: "第一站", progressKm: 150, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 },
-      { id: "s2", name: "第二站", progressKm: 400, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 },
-      { id: "s3", name: "第三站", progressKm: 650, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 },
-      { id: "s4", name: "第四站", progressKm: 900, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 },
-      { id: "s5", name: "第五站", progressKm: 1150, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 },
-      { id: "s6", name: "第六站", progressKm: 1400, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 }
+      { id: "s2", name: "第二站", progressKm: 600, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 },
+      { id: "s3", name: "第三站", progressKm: 1050, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 },
+      { id: "s4", name: "第四站", progressKm: 1500, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 },
+      { id: "s5", name: "第五站", progressKm: 1950, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 },
+      { id: "s6", name: "第六站", progressKm: 2400, detourKm: 0.5, p50: 4, p90: 8, price: 1.2 }
     ]
   });
   const sixStopPlan = result.plans.find((plan) => plan.stopCount === 6);

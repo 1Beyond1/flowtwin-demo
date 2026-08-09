@@ -21,6 +21,7 @@
   // 的同名常量保持一致，两边算的是同一条路线的同一个 P90。
   const Z90 = 1.2816;
   const DEFAULT_LONG_TRIP_MAX_STOPS = 6;
+  const ADAPTIVE_LONG_TRIP_MAX_STOPS = 12;
 
   const FALLBACK = {
     origin: [116.491, 39.951],
@@ -161,6 +162,8 @@
     routeErrors: {},
     aiContext: null,
     aiActive: false,
+    voiceAutoPlan: true,
+    lastIntentSignature: null,
     lastRequestMode: "new_trip",
     forecastRequestVersion: 0,
     validationLoaded: false,
@@ -192,18 +195,23 @@
   const DEFAULT_DEMO_INTENT = "从能链北京总部前往上海东方明珠广播电视塔，优先准时";
 
   const ENERGY_PROFILES = {
-    electric: { capacity: 82, consumptionPerKm: 0.18, transferEfficiency: 0.92, safetyReservePercent: 2, unit: "kWh" },
-    fuel: { capacity: 55, consumptionPerKm: 0.075, transferEfficiency: 0.95, safetyReservePercent: 3, unit: "L" },
+    // Keep the browser mirror identical to lib/energy.mjs: the demo EV is
+    // calibrated to a 600 km full-charge reference, while the fuel baseline
+    // remains a little above the requested 600 km floor.
+    electric: { capacity: 108, consumptionPerKm: 0.18, transferEfficiency: 0.92, safetyReservePercent: 2, unit: "kWh", nominalFullRangeKm: 600 },
+    fuel: { capacity: 55, consumptionPerKm: 0.075, transferEfficiency: 0.95, safetyReservePercent: 3, unit: "L", nominalFullRangeKm: 733 },
     // A plug-in hybrid is not a BEV with a tank bolted on: its pack is roughly a
     // quarter the size and its engine runs in a more efficient regime. Reusing
     // the pure-EV profile would overstate its electric range about fourfold and
     // make every 油电 comparison meaningless.
-    hybridElectric: { capacity: 20, consumptionPerKm: 0.165, transferEfficiency: 0.92, safetyReservePercent: 2, unit: "kWh" },
-    hybridFuel: { capacity: 50, consumptionPerKm: 0.056, transferEfficiency: 0.95, safetyReservePercent: 3, unit: "L" }
+    hybridElectric: { capacity: 20, consumptionPerKm: 0.165, transferEfficiency: 0.92, safetyReservePercent: 2, unit: "kWh", nominalFullRangeKm: 121 },
+    hybridFuel: { capacity: 60, consumptionPerKm: 0.056, transferEfficiency: 0.95, safetyReservePercent: 3, unit: "L", nominalFullRangeKm: 1071 }
   };
+  const VEHICLE_RANGE_GUIDANCE = { electricFullRangeKm: 600, fuelFullRangeKm: 733, hybridCombinedFullRangeKm: 1200 };
 
   const ENERGY_TYPES = ["electric", "fuel", "hybrid"];
   const DISPLAY_MODE_STORAGE_KEY = "FLOWTWIN_DISPLAY_MODE";
+  const VOICE_AUTO_PLAN_STORAGE_KEY = "FLOWTWIN_VOICE_AUTO_PLAN";
 
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -219,6 +227,24 @@
     } catch (_) {
       return "reviewer";
     }
+  }
+
+  function readVoiceAutoPlan() {
+    try {
+      return window.localStorage.getItem(VOICE_AUTO_PLAN_STORAGE_KEY) !== "false";
+    } catch (_) {
+      return true;
+    }
+  }
+
+  function setVoiceAutoPlan(enabled, options = {}) {
+    state.voiceAutoPlan = Boolean(enabled);
+    const toggle = byId("voiceAutoPlanToggle");
+    if (toggle) toggle.checked = state.voiceAutoPlan;
+    if (options.persist === false) return;
+    try {
+      window.localStorage.setItem(VOICE_AUTO_PLAN_STORAGE_KEY, String(state.voiceAutoPlan));
+    } catch (_) { /* ignore storage failures */ }
   }
 
   function isUserDisplayMode() {
@@ -454,6 +480,11 @@
       if (event.target === byId("settingsBackdrop")) closeSettings();
     });
     byId("checkVersionButton")?.addEventListener("click", checkVersion);
+    setVoiceAutoPlan(readVoiceAutoPlan(), { persist: false });
+    byId("voiceAutoPlanToggle")?.addEventListener("change", (event) => {
+      setVoiceAutoPlan(event.target.checked);
+      showToast(event.target.checked ? "语音识别后将自动开始规划" : "语音识别结果将保留在输入框", 2400);
+    });
     $$('[data-display-mode-option]').forEach((button) => {
       button.addEventListener("click", () => setDisplayMode(button.dataset.displayModeOption));
     });
@@ -616,6 +647,7 @@
     button.setAttribute("aria-label", voiceIntent.active ? "正在录音，再次点击结束" : "开始语音输入");
     button.title = voiceIntent.active ? "正在录音 · 再次点击结束" : "语音输入";
     button.dataset.recording = voiceIntent.active ? "true" : "false";
+    setAiStatus(voiceIntent.active ? "正在录音" : "正在识别语音", voiceIntent.active ? "recording" : "loading");
   }
 
   async function stopVoiceIntent() {
@@ -630,6 +662,7 @@
 
   async function submitVoiceIntent(blob) {
     if (!blob || !blob.size) {
+      setAiStatus("等待出行需求", "idle");
       showToast("未采集到有效语音，请重试", 2800);
       return;
     }
@@ -641,12 +674,14 @@
       const response = await fetch("/api/stt", { method: "POST", body: form, headers: { Accept: "application/json" } });
       const payload = await response.json().catch(() => ({}));
       if (response.status === 503 || payload.error === "STT_NOT_CONFIGURED" || payload.code === "STT_NOT_CONFIGURED") {
+        setAiStatus("语音识别未配置", "unresolved");
         showToast("未配置语音识别", 3200);
         return;
       }
       if (!response.ok) throw new Error(payload.error || `HTTP_${response.status}`);
       const text = String(payload.text || payload.transcript || payload.result || "").trim();
       if (!text) {
+        setAiStatus("未识别到语音", "unresolved");
         showToast("未识别到有效文本，请重试", 2800);
         return;
       }
@@ -657,8 +692,16 @@
         state.manualDeadlineOverride = null;
         state.manualArrivalReserveOverride = null;
       }
-      showToast("语音已写入输入框，请确认后点「开始 AI 智能规划」", 3400);
+      if (state.voiceAutoPlan) {
+        showToast("语音已识别，正在自动规划", 2200);
+        await parseIntent({ source: "voice", force: true });
+      } else {
+        setAiStatus("语音已识别", "idle");
+        setAiReply("语音内容已写入输入框，请检查后提交。 ");
+        showToast("语音已写入输入框，可检查后提交", 3000);
+      }
     } catch (error) {
+      setAiStatus("语音识别失败", "unresolved");
       if (String(error?.message || "").includes("STT_NOT_CONFIGURED")) showToast("未配置语音识别", 3200);
       else showToast("语音识别失败，请稍后重试", 3200);
     }
@@ -750,6 +793,7 @@
     const meta = byId("aiModelLabel");
     const metaByState = {
       idle: "等待出行需求",
+      recording: "正在采集语音",
       loading: "正在理解需求并调用路线工具",
       ready: "自然语言规划已完成",
       fallback: "本地规则已完成规划",
@@ -2675,15 +2719,15 @@
     const initialSafeRange = Math.max(0, startEnergy - safetyEnergy) / profile.consumptionPerKm;
     const fullSafeRange = Math.max(0.001, profile.capacity - safetyEnergy) / profile.consumptionPerKm;
     const finalLegRange = Math.max(0, profile.capacity - profile.capacity * targetReserve / 100) / profile.consumptionPerKm;
-    if (distanceKm <= initialSafeRange + 1e-6) return { minimumStops: 0, maxStops: null, adaptiveMaxStops: true };
+    if (distanceKm <= initialSafeRange + 1e-6) return { minimumStops: 0, maxStops: ADAPTIVE_LONG_TRIP_MAX_STOPS, adaptiveMaxStops: true };
     const remainingAfterFirstAndFinal = distanceKm - initialSafeRange - finalLegRange;
     const minimumStops = remainingAfterFirstAndFinal <= 1e-6
       ? 1
       : Math.ceil(remainingAfterFirstAndFinal / fullSafeRange) + 1;
-    // The browser does not impose a fixed stop-count limit. The backend uses
-    // the available corridor candidates as the search boundary and the energy
-    // model decides how many stops are actually necessary.
-    return { minimumStops, maxStops: null, adaptiveMaxStops: true };
+    // Long-trip mode is adaptive, but deliberately bounded. Twelve stops is
+    // enough for the long-route demo while keeping real AMap segment calls
+    // predictable (each additional stop adds another verified leg).
+    return { minimumStops, maxStops: ADAPTIVE_LONG_TRIP_MAX_STOPS, adaptiveMaxStops: true };
   }
 
   function buildValidatedLongTripRecord(key, baseRoute, route, waypoints, servicePlan = null) {
@@ -2853,6 +2897,7 @@
         energyType: backendEnergyTypeKey(),
         soc: state.energyPercent,
         minArrivalSoc: effectiveArrivalReserveSoc(getEnergyProfile(isFuelActive())),
+        maxStops: stopBudget.maxStops,
         adaptiveMaxStops: stopBudget.adaptiveMaxStops,
         maxDetourKm: effectiveLongTripDetourLimit(base),
         departureMinutes: state.departureMinutes,
@@ -2873,14 +2918,14 @@
       // one.
       state.multiStopPlanningMeta = {
         candidatesConsidered: planningStations.length,
-        maxStops: null,
+        maxStops: stopBudget.maxStops,
         minimumStops: stopBudget.minimumStops,
         adaptiveMaxStops: stopBudget.adaptiveMaxStops,
         reason: "PLANNER_UNAVAILABLE",
         error: error?.message || "LONGTRIP_API_UNAVAILABLE",
         failure: "多站规划服务暂时不可用，未把单站估算冒充为全程补能方案。请稍后重试。"
       };
-      return { plans: [], candidatesConsidered: planningStations.length, maxStops: null, minimumStops: stopBudget.minimumStops, adaptiveMaxStops: true, reason: "PLANNER_UNAVAILABLE" };
+      return { plans: [], candidatesConsidered: planningStations.length, maxStops: stopBudget.maxStops, minimumStops: stopBudget.minimumStops, adaptiveMaxStops: true, reason: "PLANNER_UNAVAILABLE" };
     }
   }
 
@@ -4010,7 +4055,7 @@
       const minimumStops = Number(planningMeta.minimumStops) || 0;
       const maxStops = Number(planningMeta.maxStops) || DEFAULT_LONG_TRIP_MAX_STOPS;
       if (evidence[1]) evidence[1].textContent = planningMeta.adaptiveMaxStops === true
-        ? `系统未设置固定补能次数上限，已按车辆能量模型动态搜索；本次检索到 ${planningMeta.candidatesConsidered || 0} 个沿线候选。`
+        ? `长途模式按车辆能量模型动态安排补能，单次最多校验 ${maxStops} 站；本次检索到 ${planningMeta.candidatesConsidered || 0} 个沿线候选。`
         : minimumStops > maxStops
         ? `按当前车辆${isFuelActive() ? "油量" : "电量"}模型，理论至少约需 ${minimumStops} 次补能；当前规划上限为 ${maxStops} 次，未把单站估算冒充全程方案。`
         : `系统最多支持连续补能 ${maxStops} 次，未用默认目的地或单站路线冒充结果。`;
@@ -5005,14 +5050,35 @@
     showToast(message, 4600);
   }
 
+  function buildIntentSignature(value, options = {}) {
+    return JSON.stringify({
+      value: String(value || "").trim(),
+      explicitDestination: options.explicitDestination || null,
+      destinationLocation: options.destinationLocation || null,
+      energyType: state.energyType,
+      energyPercent: state.energyPercent,
+      departure: state.departureMinutes,
+      deadline: state.deadlineEnabled ? state.deadlineMinutes : null,
+      reserve: state.arrivalReserveEnabled ? state.minArrivalSoc : null,
+      destination: state.hasPlannedRoute ? state.destinationName : null,
+      waypointCount: state.tripWaypoints.length,
+      serviceCount: state.aiContext?.services?.length || 0
+    });
+  }
+
   async function parseIntent(options = {}) {
     const input = byId("intentInput");
     const typedValue = input ? input.value.trim() : "";
     const value = typedValue || DEFAULT_DEMO_INTENT;
     if (state.aiActive) return;
     if (input && !typedValue) input.value = value;
-    clearDestinationCandidates();
     readManualControls();
+    const signature = buildIntentSignature(value, options);
+    if (!options.force && state.hasPlannedRoute && signature === state.lastIntentSignature) {
+      showToast("出行要求没有变化，已保留当前规划", 2200);
+      return;
+    }
+    clearDestinationCandidates();
     state.hybridFailedBranches = new Set();
     state.aiActive = true;
     setComposerSubmitting(true);
@@ -5040,6 +5106,8 @@
           destinationLocation: options.destinationLocation || null
         }
       }, 60000);
+      setAiStatus("正在确认目的地与意图", "loading");
+      setAiReply("已收到出行要求，正在确认目的地、补充停靠与路线偏好……");
       const parsed = payload.parsed || payload.intent || payload.plan || localIntentFallback(value);
       if (options.explicitDestination) parsed.destination = options.explicitDestination;
       if (options.destinationLocation) {
@@ -5102,9 +5170,11 @@
       }
       clearDestinationCandidates();
       const preRouteOutcome = await applyPreRouteActions(actions);
-      setAiReply(payload.assistantReply || parsedForApply.assistantReply || "已识别出行约束，正在计算真实路线和补能站。 ");
+      setAiStatus("正在请求路线与沿线补能站", "loading");
+      setAiReply(payload.assistantReply || parsedForApply.assistantReply || "已识别出行约束，正在请求真实路线与沿线补能站……");
       await recomputePlan({ manageButton: false, silent: true });
       setPlanningVisibility(true);
+      setAiStatus("正在校验多目标方案", "loading");
       const postRouteOutcome = await applyPostRouteActions(actions);
       const failedActions = preRouteOutcome.failed.concat(postRouteOutcome.failed);
       const actionText = actions.length
@@ -5121,6 +5191,7 @@
       setAiReply([actionText, planningCompletionMessage()].filter(Boolean).join("。"));
       setText("aiReplyMeta", usedAi ? "规划已完成" : fallbackReason);
       showToast(usedAi ? (actionText || planningCompletionMessage()) : fallbackReason);
+      state.lastIntentSignature = signature;
     } catch (error) {
       const parsed = localIntentFallback(value);
       if (options.explicitDestination) parsed.destination = options.explicitDestination;
@@ -5147,8 +5218,10 @@
       const preRouteOutcome = await applyPreRouteActions(actions);
       setAiStatus("本地降级", "fallback");
       setAiReply("模型连接暂时不可用，已按本地规则保留核心规划能力。");
+      setAiStatus("正在请求路线与沿线补能站", "loading");
       await recomputePlan({ manageButton: false, silent: true });
       setPlanningVisibility(true);
+      setAiStatus("正在校验多目标方案", "loading");
       const postRouteOutcome = await applyPostRouteActions(actions);
       const failedActions = preRouteOutcome.failed.concat(postRouteOutcome.failed);
       const actionText = actions.length
@@ -5159,6 +5232,7 @@
       setAiReply([actionText, planningCompletionMessage()].filter(Boolean).join("。"));
       setText("aiReplyMeta", "规划已完成");
       showToast("模型连接失败，已切换本地规则", 3600);
+      state.lastIntentSignature = signature;
     } finally {
       state.aiActive = false;
       setComposerSubmitting(false);
@@ -5774,6 +5848,10 @@
     return Math.max(0, Math.floor(profile.capacity * hybridBranchLevel(kind) / 100 / profile.consumptionPerKm));
   }
 
+  function hybridCombinedRangeKm() {
+    return hybridBranchRangeKm("electric") + hybridBranchRangeKm("fuel");
+  }
+
   function updateEnergyControls() {
     const isFuel = isFuelActive();
     const hybrid = isHybrid();
@@ -5789,7 +5867,7 @@
       const profile = getEnergyProfile(isFuel);
       const estimatedRange = Math.max(0, Math.floor(profile.capacity * state.energyPercent / 100 / profile.consumptionPerKm));
       vehicleRange.textContent = hybrid
-        ? `纯电 ${hybridBranchRangeKm("electric")} km · 燃油 ${hybridBranchRangeKm("fuel")} km`
+        ? `当前合计约 ${hybridCombinedRangeKm()} km · 满载参考约 ${VEHICLE_RANGE_GUIDANCE.hybridCombinedFullRangeKm} km`
         : `预计可行驶 ${estimatedRange} km`;
     }
     const hybridPanel = byId("hybridLevels");
@@ -5831,6 +5909,7 @@
   async function setEnergyType(type, replan) {
     if (!ENERGY_TYPES.includes(type)) return;
     const changed = adoptEnergyType(type);
+    state.lastIntentSignature = null;
     state.routeSelectionTouched = false;
     state.selectedRoute = "reliable";
     updateEnergyControls();
@@ -6032,6 +6111,7 @@
       }
     });
     byId("intentInput").addEventListener("input", () => {
+      state.lastIntentSignature = null;
       state.manualDeadlineOverride = null;
       state.manualArrivalReserveOverride = null;
       fitIntentInput();
@@ -6046,16 +6126,19 @@
     });
     $$('[data-energy-type]').forEach((button) => button.addEventListener("click", () => setEnergyType(button.dataset.energyType)));
     [byId("topEnergyPercentInput"), byId("departureTimeInput"), byId("deadlineInput"), byId("minArrivalSocInput")].filter(Boolean).forEach((input) => input.addEventListener("change", () => {
+      state.lastIntentSignature = null;
       readManualControls({ markArrivalOverrides: input.id === "deadlineInput" || input.id === "minArrivalSocInput" });
       showToast("出行状态已更新，点击 AI 智能规划后重新计算", 2200);
     }));
     [byId("deadlineInput"), byId("minArrivalSocInput")].filter(Boolean).forEach((input) => input.addEventListener("input", () => {
+      state.lastIntentSignature = null;
       readManualControls({ markArrivalOverrides: true });
     }));
     // 混动的两格电/油量直接写进 hybridLevels；当前规划分支那一格同步到
     // energyPercent，另一格只用于油电对比与切换分支后的起始能量。
     [["hybridElectricInput", "electric"], ["hybridFuelInput", "fuel"]].forEach(([id, kind]) => {
       byId(id)?.addEventListener("change", (event) => {
+        state.lastIntentSignature = null;
         state.hybridLevels[kind] = clampPercent(event.target.value, kind === "fuel" ? 60 : 35);
         if (activeEnergyKind() === kind) state.energyPercent = state.hybridLevels[kind];
         syncHybridLevels();

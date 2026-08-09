@@ -3,22 +3,22 @@ import assert from "node:assert/strict";
 import { buildLongTripPlans } from "../lib/longtrip.mjs";
 import { buildLongTripApiInput } from "../server.mjs";
 
-test("adaptive HTTP input does not reintroduce a legacy maxStops field", () => {
+test("adaptive HTTP input keeps a bounded twelve-stop budget", () => {
   const input = buildLongTripApiInput({
     distanceKm: 3000,
     durationMinutes: 1900,
     energyType: "electric",
     soc: 40,
     minArrivalSoc: 20,
-    maxStops: 1,
+    maxStops: 99,
     adaptiveMaxStops: true
   });
 
   assert.equal(input.adaptiveMaxStops, true);
-  assert.equal(Object.hasOwn(input, "maxStops"), false);
+  assert.equal(input.maxStops, 12);
 });
 
-test("adaptive planning is not constrained by the legacy six-stop budget", () => {
+test("adaptive planning can exceed six stops but never exceeds twelve", () => {
   const stations = Array.from({ length: 10 }, (_, index) => ({
     id: `adaptive-${index + 1}`,
     name: `自适应候选点 ${index + 1}`,
@@ -35,9 +35,10 @@ test("adaptive planning is not constrained by the legacy six-stop budget", () =>
     energyType: "electric",
     soc: 40,
     minArrivalSoc: 20,
-    // Deliberately keep the old value in the request. The adaptive flag must
-    // take precedence so a browser/client cannot accidentally inherit it.
-    maxStops: 6,
+    // Deliberately keep the old value in the request. The adaptive flag still
+    // takes precedence, but now clamps the route to the explicit twelve-stop
+    // quota budget rather than allowing an unbounded sequence.
+    maxStops: 99,
     adaptiveMaxStops: true,
     maxDetourKm: 8,
     stations
@@ -45,8 +46,9 @@ test("adaptive planning is not constrained by the legacy six-stop budget", () =>
 
   assert.equal(result.reason, null);
   assert.equal(result.adaptiveMaxStops, true);
-  assert.equal(result.maxStops, result.candidatesConsidered);
+  assert.equal(result.maxStops, 12);
   assert.ok(result.maxStops > 6);
   assert.ok(result.plans.some((plan) => plan.stopCount > 6));
+  assert.ok(result.plans.every((plan) => plan.stopCount <= 12));
   assert.ok(result.plans.every((plan) => plan.legs.length === plan.stopCount + 1));
 });

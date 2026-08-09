@@ -3568,6 +3568,22 @@
       .display-mode-option.active { border-color: #b9caf5; background: #ffffff; color: var(--text); box-shadow: 0 2px 8px rgba(22, 29, 30, 0.08); }
       .display-mode-option:hover:not(.active), .display-mode-option:focus-visible { border-color: #c9d5f3; color: var(--text); outline: 0; }
 
+      .settings-toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--surface-soft);
+        cursor: pointer;
+      }
+      .settings-toggle-row > span { display: grid; gap: 4px; min-width: 0; }
+      .settings-toggle-row strong { color: var(--text); font-size: 12px; }
+      .settings-toggle-row small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+      .settings-toggle-row input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); flex: 0 0 auto; }
+
       .version-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -4921,6 +4937,14 @@
             <span class="version-check-status" id="versionCheckStatus" data-state="idle" role="status" aria-live="polite">尚未检查</span>
           </div>
           <a class="version-update-link" id="versionUpdateLink" href="#" target="_blank" rel="noopener" hidden>在 GitHub 查看新版本 <i data-lucide="external-link"></i></a>
+        </section>
+
+        <section class="settings-section" aria-labelledby="voiceSettingsTitle">
+          <div class="settings-section-head"><h3 id="voiceSettingsTitle">语音输入</h3><span>可随时关闭</span></div>
+          <label class="settings-toggle-row" for="voiceAutoPlanToggle">
+            <span><strong>识别后自动规划</strong><small>语音转成文字后直接走文字规划流程；关闭则只写入输入框。</small></span>
+            <input id="voiceAutoPlanToggle" type="checkbox" checked />
+          </label>
         </section>
 
         <section class="settings-section settings-boundary" aria-labelledby="boundaryTitle">
