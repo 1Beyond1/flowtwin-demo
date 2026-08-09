@@ -2206,19 +2206,68 @@
 
       .parsed-analysis-factor {
         display: grid;
-        grid-template-columns: minmax(54px, auto) minmax(0, 1fr);
-        gap: 7px;
+        gap: 3px;
         color: var(--muted);
         font-size: 9px;
         line-height: 1.45;
       }
 
-      .parsed-analysis-factor strong {
+      .parsed-analysis-factor-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 7px;
+        min-width: 0;
+      }
+
+      .parsed-analysis-factor-label {
+        min-width: 0;
         color: var(--text);
         font-size: inherit;
       }
 
-      .parsed-analysis-factor span {
+      .parsed-analysis-factor-meta {
+        display: inline-flex;
+        align-items: center;
+        flex: 0 0 auto;
+        gap: 5px;
+        font-family: var(--mono);
+        font-size: 8px;
+        font-weight: 750;
+        letter-spacing: 0.04em;
+      }
+
+      .parsed-analysis-factor-status {
+        padding: 1px 4px;
+        border-radius: 999px;
+        background: var(--surface);
+      }
+
+      .parsed-analysis-factor-status.pass {
+        color: #16725f;
+        background: #e6f5f0;
+      }
+
+      .parsed-analysis-factor-status.warn {
+        color: #976717;
+        background: #fbf1d9;
+      }
+
+      .parsed-analysis-factor-status.fail {
+        color: #a14b42;
+        background: #fbe8e5;
+      }
+
+      .parsed-analysis-factor-delta {
+        color: var(--muted);
+      }
+
+      .parsed-analysis-factor-evidence {
+        overflow-wrap: anywhere;
+        color: var(--muted);
+      }
+
+      .parsed-analysis-factor-head span {
         overflow-wrap: anywhere;
       }
 

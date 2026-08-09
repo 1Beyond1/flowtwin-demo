@@ -1271,30 +1271,63 @@
 
   function normalizeParseAnalysis(value) {
     if (!value || typeof value !== "object") return null;
-    const scoreValue = Number(value.score);
+    const rawScore = value.score;
+    const scoreValue = typeof rawScore === "number"
+      ? rawScore
+      : typeof rawScore === "string" && rawScore.trim() !== ""
+        ? Number(rawScore)
+        : NaN;
     const score = Number.isFinite(scoreValue) ? scoreValue : null;
     const level = String(value.level ?? "").trim();
     const rawFactors = Array.isArray(value.factors)
       ? value.factors
       : value.factors && typeof value.factors === "object"
-        ? Object.entries(value.factors).map(([label, detail]) => ({ label, detail }))
+        ? Object.entries(value.factors).map(([label, evidence]) => ({ label, evidence }))
         : [];
     const factors = rawFactors.map((factor, index) => {
       if (factor && typeof factor === "object") {
         const label = String(factor.label ?? factor.name ?? factor.key ?? factor.title ?? `依据 ${index + 1}`).trim();
-        const detail = String(factor.detail ?? factor.reason ?? factor.value ?? factor.text ?? factor.description ?? "").trim();
-        return { label, detail };
+        const rawStatus = String(factor.status ?? "").trim().toLowerCase();
+        const status = ["pass", "warn", "fail"].includes(rawStatus) ? rawStatus : "";
+        const rawDelta = factor.delta;
+        const deltaValue = typeof rawDelta === "number"
+          ? rawDelta
+          : typeof rawDelta === "string" && rawDelta.trim() !== ""
+            ? Number(rawDelta)
+            : NaN;
+        const delta = Number.isFinite(deltaValue) ? deltaValue : null;
+        const evidence = String(factor.evidence ?? factor.detail ?? factor.reason ?? factor.value ?? factor.text ?? factor.description ?? "").trim();
+        return { label, status, delta, evidence };
       }
-      return { label: `依据 ${index + 1}`, detail: String(factor ?? "").trim() };
-    }).filter((factor) => factor.detail || factor.label).slice(0, 8);
+      return { label: `依据 ${index + 1}`, status: "", delta: null, evidence: String(factor ?? "").trim() };
+    }).filter((factor) => factor.label || factor.status || factor.delta !== null || factor.evidence).slice(0, 8);
     if (score === null && !level && !factors.length) return null;
     return { score, level, factors };
   }
 
   function formatParseScore(score) {
     if (!Number.isFinite(score)) return "";
-    const percent = score >= 0 && score <= 1 ? score * 100 : score;
-    return `${Math.round(Math.max(0, Math.min(100, percent)))}%`;
+    const points = score >= 0 && score <= 1 ? score * 100 : score;
+    return `${Math.round(Math.max(0, Math.min(100, points)))}/100`;
+  }
+
+  function formatParseLevel(level) {
+    const normalized = String(level ?? "").trim().toLowerCase();
+    return {
+      high: "高",
+      medium: "中",
+      confirm: "需确认",
+      low: "需确认",
+      "高": "高",
+      "中": "中",
+      "需确认": "需确认"
+    }[normalized] || String(level ?? "").trim();
+  }
+
+  function formatFactorDelta(delta) {
+    if (!Number.isFinite(delta)) return "";
+    const rounded = Number.isInteger(delta) ? String(delta) : String(Math.round(delta * 100) / 100);
+    return delta >= 0 ? `+${rounded}` : rounded;
   }
 
   function renderParseAnalysis(value) {
@@ -1318,18 +1351,43 @@
     }
 
     const summary = [];
-    if (analysis.score !== null) summary.push(`解析置信度 ${formatParseScore(analysis.score)}`);
-    if (analysis.level) summary.push(`等级 ${analysis.level}`);
+    if (analysis.score !== null) summary.push(`需求解析可信度 ${formatParseScore(analysis.score)}`);
+    const levelLabel = formatParseLevel(analysis.level);
+    if (levelLabel) summary.push(levelLabel);
     confidence.textContent = summary.join(" · ") || "解析依据已生成";
 
     analysis.factors.forEach((factor) => {
       const row = document.createElement("div");
       row.className = "parsed-analysis-factor";
+      const head = document.createElement("div");
+      head.className = "parsed-analysis-factor-head";
       const label = document.createElement("strong");
+      label.className = "parsed-analysis-factor-label";
       label.textContent = factor.label;
-      const detail = document.createElement("span");
-      detail.textContent = factor.detail;
-      row.append(label, detail);
+      head.appendChild(label);
+      const meta = document.createElement("span");
+      meta.className = "parsed-analysis-factor-meta";
+      if (factor.status) {
+        const status = document.createElement("span");
+        status.className = `parsed-analysis-factor-status ${factor.status}`;
+        status.textContent = factor.status.toUpperCase();
+        meta.appendChild(status);
+      }
+      const delta = formatFactorDelta(factor.delta);
+      if (delta) {
+        const deltaNode = document.createElement("span");
+        deltaNode.className = "parsed-analysis-factor-delta";
+        deltaNode.textContent = delta;
+        meta.appendChild(deltaNode);
+      }
+      if (meta.childElementCount) head.appendChild(meta);
+      row.appendChild(head);
+      if (factor.evidence) {
+        const evidence = document.createElement("span");
+        evidence.className = "parsed-analysis-factor-evidence";
+        evidence.textContent = factor.evidence;
+        row.appendChild(evidence);
+      }
       factorsPanel.appendChild(row);
     });
     toggle.hidden = !analysis.factors.length;
