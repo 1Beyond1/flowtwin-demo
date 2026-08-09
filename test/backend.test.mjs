@@ -115,12 +115,19 @@ test("simple explicit new trips stay local and do not call AI", async () => {
     }
   });
   assert.equal(result.aiUsed, false);
-  assert.equal(result.analysis.mode, "local");
-  assert.equal(result.analysis.ai.requested, false);
+  assert.equal(result.analysis.mode, "rules");
+  assert.deepEqual(result.analysis.ai, {
+    configured: true,
+    attempted: false,
+    used: false,
+    fallback: false,
+    reason: null
+  });
   assert.equal(calls.length, 0);
   assert.ok(result.analysis.score > 0);
   assert.ok(result.analysis.factors.every((factor) => ["pass", "warn", "fail"].includes(factor.status)));
-  assert.equal(formatPlanResponse(result).analysis.mode, "local");
+  assert.ok(result.analysis.factors.every((factor) => Object.keys(factor).sort().join(",") === "delta,evidence,id,label,status"));
+  assert.equal(formatPlanResponse(result).analysis.mode, "rules");
 });
 
 test("multi-turn composite service requests call AI after local parsing", async () => {
@@ -149,11 +156,43 @@ test("multi-turn composite service requests call AI after local parsing", async 
     }
   });
   assert.equal(calls.length, 1);
-  assert.equal(result.analysis.mode, "ai");
-  assert.equal(result.analysis.ai.requested, true);
+  assert.equal(result.analysis.mode, "hybrid");
+  assert.equal(result.analysis.ai.attempted, true);
   assert.equal(result.analysis.ai.used, true);
+  assert.equal(result.analysis.ai.reason, null);
   assert.equal(result.requestMode, "supplement");
   assert.deepEqual(result.services, ["餐饮"]);
+});
+
+test("existing-trip destination modifications still enter AI", async () => {
+  let callCount = 0;
+  const result = await parseTripIntent({
+    message: "把目的地改成南京",
+    context: { hasPlannedRoute: true, currentDestination: "上海东方明珠广播电视塔" },
+    config: { aiBaseUrl: "https://primary.example/v1", aiApiKey: "primary-secret", aiModel: "primary-model" },
+    fetchImpl: async (url) => {
+      if (!String(url).includes("chat/completions")) throw new Error("unexpected lookup");
+      callCount += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        origin: null,
+        destination: "南京",
+        arrivalDeadline: null,
+        minArrivalSoc: null,
+        energyType: "unknown",
+        priority: "balanced",
+        maxDetourKm: null,
+        services: [],
+        requestMode: "new_trip",
+        actions: [{ type: "CHANGE_DESTINATION", destination: "南京" }],
+        clarificationNeeded: false,
+        assistantReply: "已更换目的地"
+      }) } }] }), { status: 200 });
+    }
+  });
+  assert.equal(callCount, 1);
+  assert.equal(result.analysis.mode, "hybrid");
+  assert.equal(result.requestMode, "new_trip");
+  assert.equal(result.destination, "南京");
 });
 
 test("AI failure falls back without exposing provider details in analysis", async () => {
@@ -169,8 +208,11 @@ test("AI failure falls back without exposing provider details in analysis", asyn
   const publicResult = formatPlanResponse(result);
   assert.equal(result.aiUsed, false);
   assert.equal(result.aiFailureCode, "quota");
-  assert.equal(publicResult.analysis.mode, "local-fallback");
+  assert.equal(publicResult.analysis.mode, "rules-fallback");
+  assert.equal(publicResult.analysis.ai.configured, true);
+  assert.equal(publicResult.analysis.ai.attempted, true);
   assert.equal(publicResult.analysis.ai.fallback, true);
+  assert.equal(publicResult.analysis.ai.reason, "quota");
   assert.equal(JSON.stringify(publicResult.analysis).includes("primary.example"), false);
   assert.equal(JSON.stringify(publicResult.analysis).includes("quota exceeded"), false);
   assert.equal(JSON.stringify(publicResult.analysis).includes("https://"), false);
@@ -185,8 +227,8 @@ test("confidence analysis is deterministic for identical local evidence", async 
   const first = await parseTripIntent(input);
   const second = await parseTripIntent(input);
   assert.deepEqual(first.analysis, second.analysis);
-  assert.equal(first.analysis.mode, "local");
-  assert.equal(first.analysis.ai.requested, false);
+  assert.equal(first.analysis.mode, "rules");
+  assert.equal(first.analysis.ai.attempted, false);
 });
 
 test("plan parser keeps parsing the destination arrival reserve", async () => {
@@ -223,6 +265,13 @@ test("plan parser treats a service follow-up as a supplement to the current trip
   assert.equal(result.requestMode, "supplement");
   assert.equal(result.destination, "上海东方明珠广播电视塔");
   assert.deepEqual(result.services, ["餐饮"]);
+  assert.deepEqual(result.analysis.ai, {
+    configured: false,
+    attempted: true,
+    used: false,
+    fallback: true,
+    reason: "not_configured"
+  });
 });
 
 test("plan parser treats an explicit new destination as a new trip", async () => {
@@ -257,6 +306,7 @@ test("an explicit new destination wins over a stale airport completion", async (
   assert.equal(result.destination, "燕郊站");
   assert.equal(result.clarificationNeeded, false);
   assert.equal(result.locations.destination, null);
+  assert.equal(result.analysis.factors.find((factor) => factor.id === "geographic-match")?.status, "fail");
 });
 
 test("national geocoding accepts a destination outside Beijing", async () => {
@@ -270,6 +320,29 @@ test("national geocoding accepts a destination outside Beijing", async () => {
   });
   assert.equal(result.destination, "燕郊站");
   assert.deepEqual(result.locations.destination.coordinate, [116.814, 39.999]);
+  assert.equal(result.analysis.factors.find((factor) => factor.id === "geographic-match")?.status, "pass");
+});
+
+test("geographic ambiguity is surfaced as a confirmation factor", async () => {
+  const result = await parseTripIntent({
+    message: "从能链北京总部前往测试地点",
+    config: { webServiceKey: "geo-key" },
+    fetchImpl: async (url) => {
+      const href = String(url);
+      if (href.includes("place/text")) {
+        return new Response(JSON.stringify({
+          status: "1",
+          pois: [
+            { name: "测试地点甲", location: "120.1000,30.1000", type: "风景名胜", typecode: "110200", pname: "浙江省", cityname: "杭州市" },
+            { name: "测试地点乙", location: "120.2000,30.2000", type: "风景名胜", typecode: "110200", pname: "浙江省", cityname: "杭州市" }
+          ]
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ status: "1", geocodes: [] }), { status: 200 });
+    }
+  });
+  assert.equal(result.locations.destination.needsPick, true);
+  assert.equal(result.analysis.factors.find((factor) => factor.id === "geographic-match")?.status, "warn");
 });
 
 test("ambiguous 东方明珠 is canonicalized to the Shanghai landmark before geocoding", async () => {
@@ -376,7 +449,9 @@ test("plan response reports why the model was skipped instead of failing silentl
   });
   assert.equal(result.aiUsed, false);
   assert.equal(result.aiFailureCode, "quota");
-  assert.equal(formatPlanResponse(result).aiFallbackReason, "AI 配额已用尽，已用本地规则解析");
+  const response = formatPlanResponse(result);
+  assert.equal(response.aiFallbackReason, "AI 配额已用尽，已用本地规则解析");
+  assert.equal(response.analysis.ai.reason, "quota");
 });
 
 test("place scoring prefers scenic names over bare admin roads", () => {
