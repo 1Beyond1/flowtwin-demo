@@ -35,11 +35,81 @@ test("forecast uses departure clock and station ETA, with explicit simulation me
   assert.equal(atTwenty.simulation, true);
   assert.equal(atTwenty.confidence, "simulation-only");
   assert.equal(atTwenty.horizonMinutes, 30);
+  assert.equal(atTwenty.method, "aggregate-flow-simulation");
+  assert.equal(atTwenty.inputSnapshot, null);
   for (const point of atTwenty.forecast) {
     for (const key of ["wait", "p50", "p90", "asOf", "source", "confidence", "horizonMinutes"]) {
       assert.ok(point[key] !== undefined, `forecast point is missing ${key}`);
     }
   }
+});
+
+function portStation(overrides = {}) {
+  return {
+    id: "port-station",
+    name: "端口预测站",
+    capacity: 2,
+    arrivalRate: 0,
+    serviceRate: 1,
+    totalPorts: 2,
+    idlePorts: 0,
+    chargingPorts: 2,
+    faultPorts: 0,
+    queueVehicles: 0,
+    estimatedReleaseMinutes: [0, 30],
+    averageSessionMinutes: 30,
+    arrivalOffsetMinutes: 0,
+    snapshotTime: "2026-08-09T12:00:00Z",
+    dataSource: "test snapshot",
+    freshnessSeconds: 60,
+    ...overrides
+  };
+}
+
+test("port discrete-event forecast changes when a charging port release changes", () => {
+  const released = forecastStations([portStation({ estimatedReleaseMinutes: [0, 0] })]).stations[0];
+  const delayed = forecastStations([portStation({ estimatedReleaseMinutes: [30, 30] })]).stations[0];
+  assert.equal(released.method, "port-discrete-event");
+  assert.ok(delayed.wait > released.wait);
+  assert.equal(delayed.dataAsOf, "2026-08-09T12:00:00Z");
+  assert.equal(delayed.freshnessSeconds, 60);
+  assert.match(delayed.explanation, /simulation 仿真/);
+});
+
+test("port discrete-event forecast never lowers wait when the current queue grows", () => {
+  const noQueue = forecastStations([portStation({ queueVehicles: 0 })]).stations[0];
+  const queue = forecastStations([portStation({ queueVehicles: 3 })]).stations[0];
+  assert.ok(queue.wait >= noQueue.wait);
+  assert.ok(queue.p90 >= queue.p50 && queue.p50 >= 0);
+});
+
+test("port inputs are clipped to safe ranges and keep counts within total ports", () => {
+  const result = forecastStations([portStation({
+    totalPorts: 2,
+    idlePorts: 99,
+    chargingPorts: 99,
+    faultPorts: 99,
+    queueVehicles: -10,
+    estimatedReleaseMinutes: Array.from({ length: 700 }, (_, index) => index - 20),
+    averageSessionMinutes: 999,
+    freshnessSeconds: 99999999
+  })]).stations[0];
+  const snapshot = result.inputSnapshot;
+  assert.equal(snapshot.estimatedReleaseMinutes.length, 2);
+  assert.ok(snapshot.estimatedReleaseMinutes.every((value) => value >= 0 && value <= 240));
+  assert.ok(snapshot.idlePorts + snapshot.chargingPorts + snapshot.faultPorts <= snapshot.totalPorts);
+  assert.equal(snapshot.queueVehicles, 0);
+  assert.equal(snapshot.averageSessionMinutes, 240);
+  assert.equal(snapshot.freshnessSeconds, 604800);
+});
+
+test("port forecast is deterministic and demand/weather factors are monotonic", () => {
+  const first = forecastStations([portStation()], { demandFactor: 1.2, weatherFactor: 1.2 });
+  const second = forecastStations([portStation()], { demandFactor: 1.2, weatherFactor: 1.2 });
+  const calm = forecastStations([portStation()], { demandFactor: 1, weatherFactor: 1 }).stations[0];
+  const stressed = first.stations[0];
+  assert.deepEqual(first, second);
+  assert.ok(stressed.forecast.at(-1).p90 >= calm.forecast.at(-1).p90);
 });
 
 test("forecast selection interpolates the queue wait at an ETA offset", () => {
