@@ -106,6 +106,8 @@
     origin: FALLBACK.origin,
     destination: FALLBACK.destination,
     routeRecords: {},
+    routeDisplayKeys: [],
+    routeDisplayGroups: [],
     routeCandidates: {},
     baseRouteRecords: {},
     multiStopRouteRecords: null,
@@ -2602,6 +2604,41 @@
     ].join(";");
   }
 
+  // The three objective calculations can legitimately land on the same
+  // physical corridor. Keep the full records internally (other parts of the
+  // page still use the objective aliases), but use a geometry/stop signature
+  // for the cards so we do not present the same trip three times.
+  function routeDisplayIdentity(record) {
+    const identity = String(record?.routeIdentity || "");
+    const parts = identity.split(";");
+    // routeIdentity is distance;duration;tolls;sample;stops. Duration and
+    // tolls can differ between AMap policies even when the road corridor is
+    // identical, so they are intentionally omitted for display grouping.
+    if (parts.length >= 5) return `${parts[3]};${parts.slice(4).join(";")}`;
+    return identity || `key:${record?.key || "unknown"}`;
+  }
+
+  function buildRouteDisplayGroups(records = {}) {
+    const order = ["fastest", "reliable", "cheapest"];
+    const groups = [];
+    order.forEach((key) => {
+      const record = records[key];
+      if (!record) return;
+      const identity = routeDisplayIdentity(record);
+      const existing = groups.find((candidate) => candidate.identity === identity);
+      if (existing) {
+        existing.keys.push(key);
+      } else {
+        groups.push({ identity, keys: [key], representative: key });
+      }
+    });
+    const preferred = [state.recommendedRoute, "reliable", "fastest", "cheapest"].filter(Boolean);
+    groups.forEach((group) => {
+      group.representative = preferred.find((key) => group.keys.includes(key)) || group.keys[0];
+    });
+    return groups;
+  }
+
   async function queryRouteSequence(key, stops, options = {}) {
     const routeStops = routeStopsWithTripWaypoints(stops, options.includeTripWaypoints !== false);
     const locations = [state.origin].concat(routeStops.map((station) => station.location), [state.destination]);
@@ -3510,17 +3547,58 @@
 
   function renderRouteCards() {
     calculateRouteRecords();
-    if (!state.routeSelectionTouched) state.selectedRoute = state.recommendedRoute || "reliable";
+    const displayGroups = buildRouteDisplayGroups(state.routeRecords);
+    state.routeDisplayGroups = displayGroups;
+    state.routeDisplayKeys = displayGroups.map((group) => group.representative);
+    const selectedGroup = displayGroups.find((group) => group.keys.includes(state.selectedRoute));
+    if (selectedGroup && selectedGroup.representative !== state.selectedRoute) {
+      state.selectedRoute = selectedGroup.representative;
+    }
+    if (!state.routeSelectionTouched) {
+      const recommendedGroup = displayGroups.find((group) => group.keys.includes(state.recommendedRoute));
+      state.selectedRoute = recommendedGroup?.representative || state.routeDisplayKeys[0] || state.recommendedRoute || "reliable";
+    }
     const current = state.routeRecords[state.selectedRoute];
     if (!state.routeSelectionTouched && !current?.feasible) {
-      const fallback = Object.values(state.routeRecords).filter((record) => record.feasible).sort((a, b) => a.arrival - b.arrival)[0];
-      if (fallback) state.selectedRoute = fallback.key;
+      const fallbackGroup = displayGroups
+        .filter((group) => state.routeRecords[group.representative]?.feasible)
+        .sort((a, b) => state.routeRecords[a.representative].arrival - state.routeRecords[b.representative].arrival)[0];
+      if (fallbackGroup) state.selectedRoute = fallbackGroup.representative;
     }
-    $$(".route-option").forEach((button) => setOptionText(button, state.routeRecords[button.dataset.route]));
+    const allSameRoute = displayGroups.length === 1 && displayGroups[0].keys.length > 1;
+    $$(".route-option").forEach((button) => {
+      const routeKey = button.dataset.route;
+      const group = displayGroups.find((candidate) => candidate.representative === routeKey);
+      const visible = Boolean(group);
+      button.hidden = !visible;
+      button.setAttribute("aria-hidden", String(!visible));
+      button.tabIndex = visible ? 0 : -1;
+      if (!visible) return;
+      const record = state.routeRecords[routeKey];
+      const displayRecord = allSameRoute
+        ? Object.assign({}, record, {
+          displayName: "最佳方案",
+          objectiveBadges: ["最快", "最稳妥", "最低成本"]
+        })
+        : record;
+      setOptionText(button, displayRecord);
+    });
+    const routeOptions = byId("routeOptions");
+    routeOptions?.classList.toggle("single-route", displayGroups.length === 1);
+    routeOptions?.classList.toggle("two-routes", displayGroups.length === 2);
+    routeOptions?.classList.toggle("three-routes", displayGroups.length >= 3);
     $$(".route-option").forEach((button) => button.classList.toggle("selected", button.dataset.route === state.selectedRoute));
-    const feasibleCount = Object.values(state.routeRecords).filter((record) => record.feasible).length;
+    const feasibleCount = displayGroups.filter((group) => state.routeRecords[group.representative]?.feasible).length;
     const heading = $(".sheet-heading h2");
-    if (heading) heading.textContent = feasibleCount === 3 ? "3 条可行方案" : `${feasibleCount} 条可行 · ${3 - feasibleCount} 条备用`;
+    if (heading) heading.textContent = allSameRoute
+      ? (state.routeRecords[displayGroups[0].representative]?.feasible ? "最佳方案" : "当前方案不可执行")
+      : feasibleCount === displayGroups.length
+        ? `${displayGroups.length} 条可行方案`
+        : `${feasibleCount} 条可行 · ${displayGroups.length - feasibleCount} 条备用`;
+    const headingNote = $(".sheet-heading span");
+    if (headingNote) headingNote.textContent = allSameRoute
+      ? "时间、风险与成本均落在同一条可执行路线上"
+      : "按最终时间、风险和成本生成可解释对比";
     renderActiveRouteSummary();
     renderHybridCompare();
     updateInsight(state.routeRecords[state.selectedRoute]);
@@ -4956,9 +5034,10 @@
 
   function selectRoute(key) {
     if (!state.routeRecords[key]) return;
-    state.selectedRoute = key;
+    const group = state.routeDisplayGroups.find((candidate) => candidate.keys.includes(key));
+    state.selectedRoute = group?.representative || key;
     state.routeSelectionTouched = true;
-    $$(".route-option").forEach((button) => button.classList.toggle("selected", button.dataset.route === key));
+    $$(".route-option").forEach((button) => button.classList.toggle("selected", button.dataset.route === state.selectedRoute));
     if (state.live) {
       drawAmapRoutes();
     } else {
