@@ -737,7 +737,10 @@ async function cvHealthApi(response) {
 }
 
 async function cvAnalyzeApi(request, response) {
-  const body = await readJsonBody(request, 5 * 1024 * 1024);
+  // A 4 MB binary image becomes roughly 5.4 MB after base64 encoding. Keep
+  // the JSON envelope above that size so the browser's 4 MB image limit and
+  // the optional Python adapter agree instead of failing at different layers.
+  const body = await readJsonBody(request, 8 * 1024 * 1024);
   // An optional local Python adapter may provide actual CPU inference. It is
   // never required for route planning, and a timeout immediately returns to a
   // clearly labelled local fallback.

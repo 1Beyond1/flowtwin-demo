@@ -168,6 +168,32 @@ test("forecast selection interpolates the queue wait at an ETA offset", () => {
   assert.equal(selected.interpolated, true);
 });
 
+test("interpolated forecast keeps confidence metadata aligned with its score", () => {
+  const points = [
+    {
+      minute: 0,
+      wait: 4,
+      confidenceScore: 52,
+      confidenceLevel: "low",
+      confidenceLabel: "低（演示口径）",
+      confidenceReasons: ["低点证据"]
+    },
+    {
+      minute: 10,
+      wait: 14,
+      confidenceScore: 88,
+      confidenceLevel: "high",
+      confidenceLabel: "高（演示口径）",
+      confidenceReasons: ["高点证据"]
+    }
+  ];
+  const selected = selectForecastPoint(points, 5);
+  assert.equal(selected.confidenceScore, 70);
+  assert.equal(selected.confidenceLevel, "medium");
+  assert.equal(selected.confidenceLabel, "中（演示口径）");
+  assert.deepEqual(selected.confidenceReasons, ["低点证据", "高点证据"]);
+});
+
 test("long-trip ETA and objective sorting use arrival-time forecast values", () => {
   const makeStation = (id, progressKm, wait, p50, p90) => ({
     id,

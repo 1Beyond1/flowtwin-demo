@@ -3212,6 +3212,24 @@
     const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
     if (!base || !Number.isFinite(Number(base.distance))) return null;
     const stopBudget = longTripStopBudget(base);
+    // Do not wait for the combinatorial planner to discover that a low-SOC
+    // trip has no first public POI inside the safe range. Add a clearly
+    // labelled corridor anchor before the request, so 5% starts can still
+    // express a safe “nearest first stop” plan instead of spending the whole
+    // search budget on unreachable combinations.
+    if (!state.provisionalCorridorActive && state.energyPercent < 100) {
+      const profile = getEnergyProfile(isFuelActive());
+      const safetyEnergy = profile.capacity * profile.safetyReservePercent / 100;
+      const initialSafeRange = Math.max(0, profile.capacity * state.energyPercent / 100 - safetyEnergy) / profile.consumptionPerKm;
+      const hasSafeFirstCandidate = stationsForActiveBranch(state.stations).some((station) => {
+        const progressKm = Number(station.progressKm);
+        const detourKm = Math.max(0, Number(station.detourKm ?? station.detour ?? 0));
+        return Number.isFinite(progressKm) && progressKm > 1 && progressKm + detourKm / 2 <= initialSafeRange + 1e-6;
+      });
+      if (Number(base.distance) > initialSafeRange + 1e-6 && !hasSafeFirstCandidate) {
+        injectProvisionalCorridorStations();
+      }
+    }
     await ensureStationForecasts(base);
     // Once route verification has proved that public POI coverage is too sparse,
     // plan only with the explicit corridor anchors. Mixing the original sparse
@@ -3280,7 +3298,12 @@
     const strideKm = Math.max(180, Math.min(310, fullSafeRange * 0.68));
     const generated = [];
     let previousProgress = 0;
-    let desiredProgress = Math.max(28, Math.min(totalDistanceKm - maxFinalLeg, initialSafeRange * 0.7));
+    // The first anchor must itself be reachable with the driver's current
+    // energy. A fixed 28 km floor made a 5% battery start impossible even
+    // though the corridor fallback was meant to rescue exactly that case.
+    // Keep a small geometric floor, but let the energy model choose the
+    // position when the safe first-leg range is shorter.
+    let desiredProgress = Math.max(5, Math.min(totalDistanceKm - maxFinalLeg, initialSafeRange * 0.7));
     // Keep adding corridor anchors until the final leg is reachable. There is
     // deliberately no fixed six/twelve-stop condition here; the energy model
     // and route length determine how many candidates are needed.
@@ -3349,7 +3372,14 @@
     // explicitly-labelled provisional corridor anchors and run the same energy
     // and real-road checks again. These anchors are never presented as a real
     // station or real-time availability signal.
-    if (proposal?.reason === "NO_FEASIBLE_SEQUENCE" && injectProvisionalCorridorStations()) {
+    // A dense POI pool can exhaust the bounded subset search before it finds a
+    // safe sequence, especially when the current SOC requires the first stop
+    // to be close to the origin.  In that case the missing result is a search
+    // coverage problem, not evidence that the corridor is impossible. Retry
+    // with explicitly-labelled corridor anchors just as we do for a completed
+    // but infeasible public-POI search.
+    if (["NO_FEASIBLE_SEQUENCE", "SEARCH_BUDGET_EXHAUSTED"].includes(proposal?.reason)
+      && injectProvisionalCorridorStations()) {
       proposal = await requestLongTripPlans();
     }
     // The long-trip evaluator deliberately includes a zero-stop candidate

@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
+MAX_REQUEST_BYTES = 8 * 1024 * 1024
 IMAGE_RE = re.compile(r"^data:image/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$", re.I)
 
 try:  # Optional. Do not make the adapter unstartable without these packages.
@@ -144,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length <= 0 or length > 5 * 1024 * 1024:
+            if length <= 0 or length > MAX_REQUEST_BYTES:
                 raise ValueError("REQUEST_TOO_LARGE")
             body = json.loads(self.rfile.read(length).decode("utf-8"))
             if not isinstance(body, dict):
