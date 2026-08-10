@@ -2053,6 +2053,17 @@
     return pool.filter((station) => station.type === desiredType);
   }
 
+  // Hybrid planning keeps both the fuel and electric POI pools in the same
+  // state array.  A single boolean saying that a corridor fallback exists is
+  // therefore not enough: after switching from fuel to electric (or back),
+  // the other branch's fallback must not suppress injection for the active
+  // branch.  Derive the flag from the active network instead of trusting the
+  // stale value left by the previous branch.
+  function activeProvisionalCorridorActive(pool = state.stations) {
+    return stationsForActiveBranch(Array.isArray(pool) ? pool : [])
+      .some((station) => station && station.provisionalCorridor === true);
+  }
+
   function profileForStationType(stationType) {
     const isFuel = stationType === "加油站";
     if (isHybrid()) return isFuel ? ENERGY_PROFILES.hybridFuel : ENERGY_PROFILES.hybridElectric;
@@ -3217,7 +3228,7 @@
     // labelled corridor anchor before the request, so 5% starts can still
     // express a safe “nearest first stop” plan instead of spending the whole
     // search budget on unreachable combinations.
-    if (!state.provisionalCorridorActive && state.energyPercent < 100) {
+    if (!activeProvisionalCorridorActive() && state.energyPercent < 100) {
       const profile = getEnergyProfile(isFuelActive());
       const safetyEnergy = profile.capacity * profile.safetyReservePercent / 100;
       const initialSafeRange = Math.max(0, profile.capacity * state.energyPercent / 100 - safetyEnergy) / profile.consumptionPerKm;
@@ -3234,9 +3245,10 @@
     // Once route verification has proved that public POI coverage is too sparse,
     // plan only with the explicit corridor anchors. Mixing the original sparse
     // POIs back in can repeatedly select an unverified urban station instead.
-    const planningStations = stationsForActiveBranch(state.provisionalCorridorActive
-      ? state.stations.filter((station) => station.provisionalCorridor)
-      : state.stations).map(compactLongTripStation);
+    const activeBranchStations = stationsForActiveBranch(state.stations);
+    const activeCorridorStations = activeBranchStations.filter((station) => station.provisionalCorridor === true);
+    const planningStations = (activeCorridorStations.length ? activeCorridorStations : activeBranchStations)
+      .map(compactLongTripStation);
     try {
       const proposal = await postJson("/api/longtrip", {
         distanceKm: base.distance,
@@ -3450,7 +3462,7 @@
         // than being presented as a real charging facility.
         const energyWaypoints = stops.map((station) => Object.assign({}, station, { kind: "energy" }));
         const routeStops = routeStopsWithTripWaypoints(energyWaypoints, true);
-        const route = state.provisionalCorridorActive && !state.tripWaypoints.length && stops.every((station) => station.provisionalCorridor)
+        const route = activeProvisionalCorridorActive() && !state.tripWaypoints.length && stops.every((station) => station.provisionalCorridor)
           ? buildProvisionalCorridorRoute(role, base, plan, stops)
           : await queryRouteSequence(role, routeStops, { includeTripWaypoints: false });
         const record = route && buildValidatedLongTripRecord(role, base, route, routeStops);
@@ -3467,7 +3479,7 @@
       // their actual motorway approach is routed. Treat that exactly like an
       // empty corridor: add explicitly-labelled planning anchors and retry
       // before reporting that the long trip has no safe route.
-      if (!state.provisionalCorridorActive && injectProvisionalCorridorStations()) {
+      if (!activeProvisionalCorridorActive() && injectProvisionalCorridorStations()) {
         return replanLongTripRoutes();
       }
       // "未通过核验"曾经是一句什么都没说的话：候选路线其实已经算完了，
@@ -6447,7 +6459,7 @@
       fitAmapView();
       setMapStatus("高德地图已连接 · 真实路线与 POI 已更新", "ready");
       setText("mapAttribution", "高德地图 · 真实路线与 POI / 演示预测状态");
-      setText("stationDataNote", state.provisionalCorridorActive
+      setText("stationDataNote", activeProvisionalCorridorActive()
         ? "等待、实时负载和价格为演示模拟数据；高德 POI 以外的路线补能兜底候选仅用于规划演示，需在出发前确认现场设备。"
         : "等待、实时负载和价格为演示模拟数据；站点名称、坐标和地址来自高德真实 POI。服务区候选的补能设施需现场确认。");
       renderRouteCards();
@@ -6509,7 +6521,7 @@
       fitAmapView();
       setMapStatus("高德地图已连接 · 真实路线与 POI 已更新", "ready");
       setText("mapAttribution", "高德地图 · 真实路线与 POI / 演示预测状态");
-      setText("stationDataNote", state.provisionalCorridorActive
+      setText("stationDataNote", activeProvisionalCorridorActive()
         ? "等待、实时负载和价格为演示模拟数据；高德 POI 以外的路线补能兜底候选仅用于规划演示，需在出发前确认现场设备。"
         : "等待、实时负载和价格为演示模拟数据；站点名称、坐标和地址来自高德真实 POI。服务区候选的补能设施需现场确认。");
     } else {
@@ -6827,7 +6839,7 @@
     // 这两种情况对应完全不同的修法，不区分开就只能靠猜。
     maxDetourKm: state.maxDetourKm,
     longTripActive: state.longTripActive,
-    provisionalCorridorActive: state.provisionalCorridorActive,
+    provisionalCorridorActive: activeProvisionalCorridorActive(),
     multiStopPlanningMeta: state.multiStopPlanningMeta || null,
     directEnergy: (() => {
       const base = state.baseRouteRecords[state.selectedRoute] || state.baseRouteRecords.reliable;
