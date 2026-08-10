@@ -2389,6 +2389,41 @@
         flex: 0 0 auto;
       }
 
+      .forecast-evidence-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        min-height: 24px;
+        margin-top: 8px;
+        padding: 0 7px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+        color: var(--blue);
+        font: inherit;
+        font-size: 9px;
+        font-weight: 700;
+      }
+      .forecast-evidence-toggle:hover,
+      .forecast-evidence-toggle:focus-visible { border-color: #b9caf5; background: #f5f7ff; outline: 0; }
+      .forecast-evidence-toggle svg { width: 11px; height: 11px; transition: transform 160ms ease; }
+      .forecast-evidence-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+      .forecast-evidence-panel {
+        display: grid;
+        gap: 7px;
+        margin-top: 8px;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-soft);
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.55;
+      }
+      .forecast-evidence-panel strong { color: var(--text); }
+      .forecast-evidence-panel ul { margin: 0; padding-left: 16px; }
+      .forecast-evidence-panel code { color: #315bb8; font-family: var(--mono); }
+
       .arrival-steps {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4679,6 +4714,73 @@
         .strategy-controls { grid-template-columns: 1fr; }
         .arrival-inputs { max-width: 210px; }
       }
+      /* Optional local vision evidence panel. It is intentionally calm and
+         dense: the reviewer should see the business chain, not a black-box
+         computer-vision claim. */
+      .vision-panel {
+        position: absolute;
+        inset: 112px 24px 24px;
+        z-index: 760;
+        display: none;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 24px 28px 34px;
+        border: 1px solid rgba(216, 220, 215, 0.92);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.95);
+        box-shadow: 0 18px 42px rgba(22, 29, 30, 0.14);
+        backdrop-filter: blur(14px);
+      }
+
+      .vision-panel.visible { display: block; }
+      .vision-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+      .vision-head h2 { margin: 6px 0 8px; font-size: clamp(22px, 2.4vw, 34px); letter-spacing: -0.04em; }
+      .vision-head p { max-width: 740px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+      .vision-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+      .vision-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 20px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+      .vision-toolbar label { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; font-weight: 650; }
+      .vision-toolbar input[type="file"] { max-width: 240px; font-size: 10px; }
+      .vision-action { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--text); font-size: 11px; font-weight: 700; }
+      .vision-action.primary { border-color: var(--blue); background: var(--blue); color: #fff; }
+      .vision-action:hover:not(:disabled), .vision-action:focus-visible { border-color: #aebff1; background: #f5f7ff; outline: 0; }
+      .vision-action.primary:hover:not(:disabled), .vision-action.primary:focus-visible { background: #3c6fe5; color: #fff; }
+      .vision-action:disabled { cursor: wait; opacity: .55; }
+      .vision-action svg { width: 14px; height: 14px; }
+      .vision-status { margin-left: auto; color: var(--muted); font-size: 10px; }
+      .vision-status[data-state="ready"] { color: var(--teal); font-weight: 700; }
+      .vision-status[data-state="degraded"] { color: #976717; font-weight: 700; }
+      .vision-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); gap: 16px; margin-top: 16px; }
+      .vision-preview-card, .vision-detail-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+      .vision-preview-card h3, .vision-detail-card h3 { margin: 0 0 10px; font-size: 13px; }
+      .vision-preview { display: block; width: 100%; max-height: 430px; min-height: 180px; object-fit: contain; border-radius: 8px; background: #eef2ef; }
+      .vision-preview-empty { display: grid; min-height: 260px; place-items: center; padding: 24px; border: 1px dashed #cbd6d1; border-radius: 8px; color: var(--quiet); font-size: 12px; text-align: center; }
+      .vision-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .vision-metric { min-width: 0; padding: 10px; border-radius: 8px; background: var(--surface-soft); }
+      .vision-metric span { display: block; color: var(--quiet); font-size: 9px; }
+      .vision-metric strong { display: block; margin-top: 4px; overflow-wrap: anywhere; color: var(--text); font-size: 15px; }
+      .vision-detail-list { display: grid; gap: 8px; margin: 14px 0 0; }
+      .vision-detail-list div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 8px; padding-bottom: 8px; border-bottom: 1px solid #edf0ed; font-size: 10px; line-height: 1.45; }
+      .vision-detail-list dt { color: var(--quiet); }
+      .vision-detail-list dd { margin: 0; overflow-wrap: anywhere; color: var(--muted); }
+      .vision-evidence { margin: 14px 0 0; padding-left: 18px; color: var(--muted); font-size: 10px; line-height: 1.6; }
+      .vision-boundary { margin-top: 14px; padding: 10px 12px; border-left: 3px solid var(--blue); background: #f5f7ff; color: var(--muted); font-size: 10px; line-height: 1.55; }
+      .vision-json { margin-top: 14px; padding: 10px; max-height: 220px; overflow: auto; border-radius: 7px; background: #1f2729; color: #d8ebe5; font: 10px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+      .vision-panel .close-button { flex: 0 0 auto; }
+      body[data-display-mode="user"] .mode-switch button[data-mode="operator"],
+      body[data-display-mode="user"] .mode-switch button[data-mode="validation"],
+      body[data-display-mode="user"] .mode-switch button[data-mode="vision"] { display: none; }
+      @media (max-width: 900px) {
+        .vision-panel { inset: 96px 14px 14px; padding: 18px; }
+        .vision-grid { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 620px) {
+        .vision-panel { inset: 82px 10px 10px; padding: 14px; }
+        .vision-head { gap: 10px; }
+        .vision-head h2 { font-size: 22px; }
+        .vision-toolbar { align-items: flex-start; flex-direction: column; }
+        .vision-status { margin-left: 0; }
+      }
+
     </style>
   </head>
   <body data-display-mode="reviewer">
@@ -4732,6 +4834,7 @@
             <button class="active" data-mode="driver" role="tab" aria-selected="true"><i data-lucide="navigation"></i>出行</button>
             <button data-mode="operator" role="tab" aria-selected="false" disabled title="完成一次 AI 规划后可用"><i data-lucide="activity"></i>运营</button>
             <button data-mode="validation" role="tab" aria-selected="false" disabled title="完成一次 AI 规划后可用"><i data-lucide="bar-chart-3"></i>验证</button>
+            <button data-mode="vision" role="tab" aria-selected="false"><i data-lucide="scan-face"></i>视觉</button>
           </div>
         </div>
           <button class="settings-trigger" id="settingsButton" type="button" aria-label="打开设置" aria-controls="settingsBackdrop" aria-expanded="false" title="设置">
@@ -4842,6 +4945,8 @@
           </svg>
           <div class="forecast-legend" id="forecastLegend"><span><i></i><span data-reviewer-copy="P50 典型等待" data-user-copy="典型等待">P50 典型等待</span></span><span><i></i><span data-reviewer-copy="P90 尾部风险" data-user-copy="拥堵风险">P90 尾部风险</span></span></div>
           <div class="forecast-source" id="forecastMeta" data-reviewer-only><i data-lucide="database"></i><span>真实站点与路线 · 当前负载、价格及预测为本次仿真；入围后替换为能链脱敏数据。</span></div>
+          <button class="forecast-evidence-toggle" id="forecastEvidenceToggle" type="button" aria-expanded="false" aria-controls="forecastEvidencePanel"><span>查看计算依据</span><i data-lucide="chevron-down"></i></button>
+          <div class="forecast-evidence-panel" id="forecastEvidencePanel" hidden></div>
         </div>
         <div class="evidence-list">
           <div class="evidence-row"><i data-lucide="check"></i><span>绕行较小，预计 19:08 抵达机场</span></div>
@@ -4980,6 +5085,50 @@
           </table>
         </div>
         <div class="validation-foot"><p id="validationFootText">尚未运行。结果将在固定种子下由当前站点输入生成。</p><span class="source-badge" id="validationSourceBadge">可复现实验 / 非企业真实经营结论</span></div>
+      </section>
+
+      <section class="vision-panel" id="visionPanel" aria-label="站内视觉演示" data-reviewer-only>
+        <div class="vision-head">
+          <div>
+            <div class="eyebrow">Station vision evidence</div>
+            <h2>站内到站识别与车位感知</h2>
+            <p>把“到站识别 → 车位/枪位状态 → 等待预测输入 → 模拟收据”串成可演示的视觉链路。当前优先展示本地合成画面；可选 CV 服务接入后再替换推理适配器，不影响路线规划主流程。</p>
+          </div>
+          <div class="vision-head-actions"><button class="close-button" id="closeVision" aria-label="关闭视觉演示"><i data-lucide="x"></i></button></div>
+        </div>
+        <div class="vision-toolbar">
+          <button class="vision-action primary" id="visionSampleButton" type="button"><i data-lucide="sparkles"></i>分析内置合成画面</button>
+          <label for="visionFileInput"><span>可选：上传一张站内图片</span><input id="visionFileInput" type="file" accept="image/png,image/jpeg,image/webp" /></label>
+          <button class="vision-action" id="visionUploadButton" type="button" disabled><i data-lucide="scan-search"></i>分析上传图片</button>
+          <span class="vision-status" id="visionStatus" data-state="idle" role="status" aria-live="polite">尚未运行</span>
+        </div>
+        <div class="vision-grid">
+          <article class="vision-preview-card">
+            <h3>标注画面</h3>
+            <div class="vision-preview-empty" id="visionPreviewEmpty">点击“分析内置合成画面”查看完整演示。<br />结果会明确标注是真实推理、规则分析还是合成降级。</div>
+            <img class="vision-preview" id="visionPreviewImage" alt="站内视觉分析标注画面" hidden />
+          </article>
+          <article class="vision-detail-card">
+            <h3>识别结果</h3>
+            <div class="vision-metrics">
+              <div class="vision-metric"><span>车辆检测</span><strong id="visionVehicleCount">—</strong></div>
+              <div class="vision-metric"><span>空闲车位</span><strong id="visionIdleSlots">—</strong></div>
+              <div class="vision-metric"><span>排队车辆</span><strong id="visionQueueCount">—</strong></div>
+              <div class="vision-metric"><span>到站识别</span><strong id="visionArrivalState">—</strong></div>
+              <div class="vision-metric"><span>识别置信度</span><strong id="visionConfidence">—</strong></div>
+              <div class="vision-metric"><span>处理来源</span><strong id="visionSource">—</strong></div>
+            </div>
+            <dl class="vision-detail-list">
+              <div><dt>车牌</dt><dd id="visionPlate">—</dd></div>
+              <div><dt>支付收据</dt><dd id="visionReceipt">—</dd></div>
+              <div><dt>检测时间</dt><dd id="visionObservedAt">—</dd></div>
+              <div><dt>处理耗时</dt><dd id="visionProcessingTime">—</dd></div>
+            </dl>
+            <ul class="vision-evidence" id="visionEvidence"><li>等待分析结果</li></ul>
+            <div class="vision-boundary" id="visionBoundary">视觉模块只用于本地演示，不接入真实摄像头、不保存原始车牌、不执行真实扣款。</div>
+            <pre class="vision-json" id="visionJson" hidden></pre>
+          </article>
+        </div>
       </section>
 
       <div class="evidence-backdrop" id="validationEvidenceBackdrop" hidden data-reviewer-only>

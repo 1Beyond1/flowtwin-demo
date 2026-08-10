@@ -39,7 +39,9 @@ test("rate-limit defaults and environment overrides stay bounded", () => {
     stt: 10,
     map: 180,
     "feishu-sync": 10,
-    approve: 20
+    approve: 20,
+    "version-check": 12,
+    execution: 6
   });
   assert.equal(defaults.windowMs, 600_000);
   assert.equal(defaults.maxEntries, 10_000);
@@ -50,11 +52,13 @@ test("rate-limit defaults and environment overrides stay bounded", () => {
     FLOWTWIN_RATE_LIMIT_MAP: "12",
     FLOWTWIN_RATE_LIMIT_FEISHU_SYNC: "2",
     FLOWTWIN_RATE_LIMIT_APPROVE: "5",
+    FLOWTWIN_RATE_LIMIT_VERSION_CHECK: "4",
+    FLOWTWIN_RATE_LIMIT_EXECUTION: "3",
     FLOWTWIN_RATE_LIMIT_WINDOW_MS: "5000",
     FLOWTWIN_RATE_LIMIT_MAX_CLIENTS: "7"
   });
   assert.deepEqual(overridden, {
-    limits: { plan: 4, stt: 3, map: 12, "feishu-sync": 2, approve: 5 },
+    limits: { plan: 4, stt: 3, map: 12, "feishu-sync": 2, approve: 5, "version-check": 4, execution: 3 },
     windowMs: 5000,
     maxEntries: 7
   });
@@ -155,6 +159,8 @@ test("route gate limits expensive routes, leaves health alone, and skips OPTIONS
   assert.equal(rateLimitScopeForRequest("POST", "/api/plan"), "plan");
   assert.equal(rateLimitScopeForRequest("GET", "/api/route"), "map");
   assert.equal(rateLimitScopeForRequest("POST", "/api/feishu/strategy/rec-1/approve"), "approve");
+  assert.equal(rateLimitScopeForRequest("GET", "/api/version/check"), "version-check");
+  assert.equal(rateLimitScopeForRequest("POST", "/api/execution"), "execution");
   assert.equal(rateLimitScopeForRequest("GET", "/api/health"), null);
   assert.equal(rateLimitScopeForRequest("GET", "/api/version"), null);
 

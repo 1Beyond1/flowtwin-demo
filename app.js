@@ -189,7 +189,10 @@
     lastAction: null,
     lastActionSummary: "",
     stationForecastRequestVersion: 0,
-    stationForecastScenarioKey: null
+    stationForecastScenarioKey: null,
+    visionResult: null,
+    visionFile: null,
+    visionRequestVersion: 0
   };
 
   // The first-run example intentionally leaves arrival time and reserve open.
@@ -925,7 +928,7 @@
     if (parsedOutput) parsedOutput.hidden = !hasPlan;
     if (tripContext) tripContext.hidden = !hasPlan;
     if (serviceNudge && !hasPlan) serviceNudge.hidden = true;
-    $$('[data-mode]').filter((button) => button.dataset.mode !== "driver").forEach((button) => {
+    $$('[data-mode]').filter((button) => !["driver", "vision"].includes(button.dataset.mode)).forEach((button) => {
       button.disabled = !hasPlan;
       button.title = hasPlan ? "" : "完成一次 AI 规划后可用";
     });
@@ -1530,8 +1533,38 @@
       const portSummary = entry.method === "port-discrete-event" && snapshot
         ? `总枪位 ${snapshot.totalPorts ?? "—"} · 空闲 ${snapshot.idlePorts ?? "—"} · 排队 ${snapshot.queueVehicles ?? "—"}`
         : "";
-      text.textContent = `${entry.explanation || payload?.model || "可解释队列近似"}${entry.asOf ? ` · ${entry.asOf}` : ""}${portSummary ? ` · ${portSummary}` : ""}`;
+      const confidenceText = Number.isFinite(Number(entry.confidenceScore))
+        ? ` · 置信度 ${entry.confidenceLabel || `${Math.round(Number(entry.confidenceScore))}/100`}`
+        : "";
+      text.textContent = `${entry.explanation || payload?.model || "可解释队列近似"}${entry.asOf ? ` · ${entry.asOf}` : ""}${portSummary ? ` · ${portSummary}` : ""}${confidenceText}`;
     }
+    renderForecastEvidence(entry, payload);
+  }
+
+  function renderForecastEvidence(entry, payload) {
+    const panel = byId("forecastEvidencePanel");
+    const toggle = byId("forecastEvidenceToggle");
+    if (!panel || !toggle) return;
+    const snapshot = entry?.inputSnapshot || {};
+    const scenario = payload?.scenario || entry?.scenario || {};
+    const method = entry?.method === "port-discrete-event" ? "端口级离散事件仿真" : "聚合流量仿真";
+    const points = Array.isArray(entry?.forecast) ? entry.forecast : [];
+    const current = points[0] || {};
+    const lines = [
+      ["预测方法", method],
+      ["输入状态", `总枪位 ${snapshot.totalPorts ?? "—"} · 空闲 ${snapshot.idlePorts ?? "—"} · 充电中 ${snapshot.chargingPorts ?? "—"} · 排队 ${snapshot.queueVehicles ?? "—"}`],
+      ["服务参数", `平均服务 ${snapshot.averageSessionMinutes ?? "—"} 分钟 · 预计释放 ${Array.isArray(snapshot.estimatedReleaseMinutes) ? snapshot.estimatedReleaseMinutes.slice(0, 4).join(" / ") : "—"} 分钟`],
+      ["情景输入", `到站偏移 ${scenario.arrivalOffsetMinutes ?? scenario.etaMinutes ?? 0} 分钟 · 天气因子 ${scenario.weatherFactor ?? 1} · 需求因子 ${scenario.demandFactor ?? 1}`],
+      ["当前输出", `P50 ${Number(current.p50 ?? current.wait ?? 0).toFixed(1)} 分钟 · P90 ${Number(current.p90 ?? current.wait ?? 0).toFixed(1)} 分钟`],
+      ["置信度依据", Number.isFinite(Number(entry?.confidenceScore))
+        ? `${entry.confidenceLabel || `${Math.round(Number(entry.confidenceScore))}/100`} · ${(entry.confidenceReasons || []).slice(0, 3).join("；")}`
+        : "当前版本未计算动态置信度"],
+      ["数据时间", entry?.asOf || snapshot.snapshotTime || "本次演示计算"],
+      ["数据来源", entry?.dataSource || "FlowTwin 演示仿真"]
+    ];
+    panel.innerHTML = `${lines.map(([label, value]) => `<div><strong>${escapeHtml(label)}：</strong>${escapeHtml(value)}</div>`).join("")}<div><strong>计算口径：</strong>先按到站时刻选择预测点，再用端口释放事件估计队列等待，并从等待分布计算 P50/P90；这是演示仿真，不是能链企业实时数据。</div>${entry?.explanation ? `<div><strong>解释：</strong>${escapeHtml(entry.explanation)}</div>` : ""}`;
+    panel.hidden = true;
+    toggle.setAttribute("aria-expanded", "false");
   }
 
   // 天气来自高德实况（按起点所在区县）。它只影响预测的方向--雨雪天抬高峰值等待，
@@ -1722,6 +1755,10 @@
           forecastArrivalWaitP50: Number.isFinite(Number(prediction.p50)) ? Number(prediction.p50) : null,
           forecastArrivalWaitP90: Number.isFinite(Number(prediction.p90)) ? Number(prediction.p90) : null,
           forecastConfidence: entry.confidence || payload.confidence || "simulation-only",
+          forecastConfidenceScore: Number.isFinite(Number(entry.confidenceScore)) ? Number(entry.confidenceScore) : null,
+          forecastConfidenceLevel: entry.confidenceLevel || null,
+          forecastConfidenceLabel: entry.confidenceLabel || null,
+          forecastConfidenceReasons: Array.isArray(entry.confidenceReasons) ? entry.confidenceReasons.slice(0, 8) : [],
           forecastHorizonMinutes: entry.horizonMinutes || payload.horizonMinutes || horizonMinutes,
           forecastSimulation: entry.simulation === true || payload.simulation === true || entry.source === "simulation" || payload.source === "simulation",
           status: risk,
@@ -3186,6 +3223,7 @@
       const proposal = await postJson("/api/longtrip", {
         distanceKm: base.distance,
         durationMinutes: base.duration,
+        roadTolls: Math.max(0, Number(base.tolls || 0)),
         stations: planningStations,
         energyType: backendEnergyTypeKey(),
         soc: state.energyPercent,
@@ -3324,9 +3362,12 @@
       if (proposal?.reason) {
         state.multiStopPlanningMeta = {
           candidatesConsidered: proposal.candidatesConsidered || 0,
+          candidatesAvailable: proposal.candidatesAvailable || proposal.candidatesConsidered || 0,
           maxStops: proposal.maxStops ?? null,
           minimumStops: proposal.minimumStops || 0,
           adaptiveMaxStops: Boolean(proposal.adaptiveMaxStops),
+          candidateSearchComplete: proposal.candidateSearchComplete !== false,
+          sequenceSearchComplete: proposal.sequenceSearchComplete !== false,
           reason: proposal.reason,
           failure: proposal.reason === "NO_FEASIBLE_SEQUENCE"
             ? (() => {
@@ -3339,7 +3380,9 @@
                 ? `已检索 ${proposal.candidatesConsidered || 0} 个沿线补能候选；按当前${isFuelActive() ? "油量" : "电量"}与安全下限，理论上至少约需 ${minimum} 次补能，超过本次最多 ${cap} 次的规划预算。`
                 : `已检索 ${proposal.candidatesConsidered || 0} 个沿线补能候选；在到达余量、绕行和站点可达性约束下，最多 ${cap} 次补能仍无法形成安全全程方案。`;
             })()
-            : "多站补能候选未能完成计算。"
+            : proposal.reason === "SEARCH_BUDGET_EXHAUSTED"
+              ? "候选组合较多，本次搜索预算已用尽，系统没有把未完成的搜索冒充为“已证明不可行”。请减少候选范围或稍后重试。"
+              : "多站补能候选未能完成计算。"
         };
         return "no-feasible-sequence";
       }
@@ -3462,8 +3505,14 @@
     });
     state.multiStopPlanningMeta = {
       candidatesConsidered: proposal.candidatesConsidered,
+      candidatesAvailable: proposal.candidatesAvailable || proposal.candidatesConsidered,
       maxStops: proposal.maxStops,
-      uniqueStopPlans: new Set(Object.values(plansByObjective).map((plan) => (plan?.stops || []).map((stop) => stop.id).join("|"))).size
+      uniqueStopPlans: new Set(Object.values(plansByObjective).map((plan) => (plan?.stops || []).map((stop) => stop.id).join("|"))).size,
+      candidateSearchComplete: proposal.candidateSearchComplete !== false,
+      sequenceSearchComplete: proposal.sequenceSearchComplete !== false,
+      searchCaveat: proposal.sequenceSearchComplete === false || proposal.candidateSearchComplete === false
+        ? "当前结果来自有界搜索，未把搜索预算内的最佳结果表述为全局最优。"
+        : null
     };
     state.routeCandidates = Object.assign({}, state.multiStopRouteRecords);
     state.routeRecords = Object.assign({}, state.multiStopRouteRecords);
@@ -5272,7 +5321,15 @@
     const priceValue = byId("stationPriceValue");
     if (priceValue) priceValue.innerHTML = Number.isFinite(Number(station.price))
       ? `¥${Number(station.price).toFixed(2)} <small>/${station.priceUnit || (isFuelActive() ? "L" : "kWh")}</small>`
-      : "— <small>待确认</small>";
+       : "— <small>待确认</small>";
+    const forecastEvidencePanel = byId("forecastEvidencePanel");
+    const forecastEvidenceToggle = byId("forecastEvidenceToggle");
+    if (forecastEvidencePanel) forecastEvidencePanel.hidden = true;
+    if (forecastEvidenceToggle) {
+      forecastEvidenceToggle.setAttribute("aria-expanded", "false");
+      const label = forecastEvidenceToggle.querySelector("span");
+      if (label) label.textContent = "查看计算依据";
+    }
     requestForecast(station);
     refreshIcons();
     if (showPanel !== false) {
@@ -5323,6 +5380,7 @@
     byId("insightPanel").classList.toggle("hidden", mode !== "driver" || hideMobileInsight);
     byId("operatorPanel").classList.toggle("visible", mode === "operator");
     byId("validationPanel").classList.toggle("visible", mode === "validation");
+    byId("visionPanel")?.classList.toggle("visible", mode === "vision");
     byId("routeSheet").style.display = mode === "driver" && !state.mobileInsightOpen ? "" : "none";
     if (mode === "driver") byId("mapAttribution").textContent = state.live ? "高德地图 · 真实路线与 POI / 演示预测状态" : "固定场景地图 · POI 示意 / 演示预测状态";
     if (mode === "operator") {
@@ -5333,6 +5391,7 @@
     }
     if (mode === "validation") byId("mapAttribution").textContent = "高德地图 · 固定种子验证场景";
     if (mode === "validation" && !state.validationLoaded) loadValidation();
+    if (mode === "vision") byId("mapAttribution").textContent = "站内视觉演示 · 合成画面 / 可选本地推理";
   }
 
   function planningCompletionMessage() {
@@ -5343,7 +5402,8 @@
     if (!feasibleCount && state.multiStopPlanningMeta?.failure) return `未生成虚假的可行路线：${state.multiStopPlanningMeta.failure}`;
     if (!feasibleCount) return "未生成虚假的可行路线：当前余量无法安全抵达符合绕行约束的补能站。";
     if (state.energyPercent <= 12) return `已进入低电量救援模式：先锁定最近的安全可达站，再比较 ${feasibleCount} 条后续路线。`;
-    return `已生成 ${feasibleCount} 条通过首段可达性、${state.arrivalReserveEnabled ? "到达余量" : "车辆安全下限"}和绕行约束校验的方案。`;
+    const caveat = state.multiStopPlanningMeta?.searchCaveat ? "候选搜索有界，结果仍需按展示口径理解" : "";
+    return `已生成 ${feasibleCount} 条通过首段可达性、${state.arrivalReserveEnabled ? "到达余量" : "车辆安全下限"}和绕行约束校验的方案。${caveat ? ` ${caveat}。` : ""}`;
   }
 
   function clearPlanForUnresolvedDestination() {
@@ -5993,6 +6053,93 @@
     state.validationLoaded = true;
   }
 
+  function visionText(value, fallback = "—") {
+    const text = String(value ?? "").trim();
+    return text || fallback;
+  }
+
+  function renderVisionResult(result) {
+    state.visionResult = result;
+    const preview = byId("visionPreviewImage");
+    const empty = byId("visionPreviewEmpty");
+    const image = result?.annotatedImage || result?.previewImage;
+    if (preview && image) {
+      preview.src = image;
+      preview.hidden = false;
+      if (empty) empty.hidden = true;
+    } else {
+      if (preview) { preview.hidden = true; preview.removeAttribute("src"); }
+      if (empty) empty.hidden = false;
+    }
+
+    const vehicles = Array.isArray(result?.vehicles) ? result.vehicles : [];
+    const parking = Array.isArray(result?.parking) ? result.parking : [];
+    setText("visionVehicleCount", result?.mode === "upload-fallback" ? "未执行" : `${vehicles.length} 辆`);
+    setText("visionIdleSlots", result?.mode === "upload-fallback" ? "未执行" : `${parking.filter((slot) => slot.status === "idle").length} 个`);
+    setText("visionQueueCount", result?.queueVehicles == null ? "未执行" : `${result.queueVehicles} 辆`);
+    setText("visionArrivalState", result?.arrivalRecognition?.status === "recognized" ? "已识别（演示）" : "未执行");
+    setText("visionConfidence", Number.isFinite(Number(result?.confidence)) ? `${Math.round(Number(result.confidence) * 100)}%` : "—");
+    setText("visionSource", visionText(result?.source));
+    setText("visionPlate", visionText(result?.arrivalRecognition?.plate, "未识别"));
+    setText("visionReceipt", visionText(result?.paymentReceipt?.message, "未生成"));
+    setText("visionObservedAt", visionText(result?.observedAt));
+    setText("visionProcessingTime", Number.isFinite(Number(result?.processingMs)) ? `${result.processingMs} ms` : "—");
+    const evidence = byId("visionEvidence");
+    if (evidence) evidence.innerHTML = (Array.isArray(result?.evidence) && result.evidence.length ? result.evidence : ["暂无可展示的计算依据"]).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+    setText("visionBoundary", visionText(result?.dataBoundary, "视觉结果边界待确认"));
+    const json = byId("visionJson");
+    if (json) {
+      const safe = Object.assign({}, result || {});
+      delete safe.annotatedImage;
+      delete safe.previewImage;
+      json.textContent = JSON.stringify(safe, null, 2);
+      json.hidden = !result;
+    }
+    const status = byId("visionStatus");
+    if (status) {
+      const degraded = result?.mode === "upload-fallback" || String(result?.mode || "").includes("fallback");
+      status.dataset.state = degraded ? "degraded" : "ready";
+      status.textContent = degraded ? "已降级 · 未执行视觉推理" : "分析完成 · 结果可追溯";
+    }
+  }
+
+  async function readVisionFile(file) {
+    if (!file) return null;
+    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) throw new Error("只支持 PNG、JPEG 或 WebP 图片");
+    if (file.size > 4 * 1024 * 1024) throw new Error("图片不能超过 4 MB");
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("读取图片失败"));
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function runVisionAnalysis(mode = "sample") {
+    const requestId = ++state.visionRequestVersion;
+    const sampleButton = byId("visionSampleButton");
+    const uploadButton = byId("visionUploadButton");
+    const status = byId("visionStatus");
+    [sampleButton, uploadButton].filter(Boolean).forEach((button) => { button.disabled = true; button.setAttribute("aria-busy", "true"); });
+    if (status) { status.dataset.state = "processing"; status.textContent = "正在准备本地视觉分析…"; }
+    try {
+      const body = { mode, seed: "flowtwin-vision-01" };
+      if (mode === "upload") {
+        if (!state.visionFile) throw new Error("请先选择一张图片");
+        body.imageData = await readVisionFile(state.visionFile);
+        body.fileName = state.visionFile.name;
+      }
+      const result = await postJson("/api/cv/analyze", body, 25000);
+      if (requestId !== state.visionRequestVersion) return;
+      renderVisionResult(result);
+    } catch (error) {
+      if (status) { status.dataset.state = "error"; status.textContent = error?.message || "视觉分析失败"; }
+      showToast(error?.message || "视觉分析失败", 3200);
+    } finally {
+      [sampleButton, uploadButton].filter(Boolean).forEach((button) => { button.disabled = button === uploadButton ? !state.visionFile : false; button.removeAttribute("aria-busy"); });
+    }
+  }
+
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
   }
@@ -6445,6 +6592,16 @@
     });
     byId("closeOperator").addEventListener("click", () => setMode("driver"));
     byId("closeValidation").addEventListener("click", () => setMode("driver"));
+    byId("closeVision")?.addEventListener("click", () => setMode("driver"));
+    byId("visionSampleButton")?.addEventListener("click", () => runVisionAnalysis("sample"));
+    byId("visionUploadButton")?.addEventListener("click", () => runVisionAnalysis("upload"));
+    byId("visionFileInput")?.addEventListener("change", (event) => {
+      state.visionFile = event.target.files?.[0] || null;
+      const button = byId("visionUploadButton");
+      if (button) button.disabled = !state.visionFile;
+      const status = byId("visionStatus");
+      if (status && state.visionFile) { status.dataset.state = "idle"; status.textContent = `已选择 · ${state.visionFile.name}`; }
+    });
     byId("validationEvidenceButton")?.addEventListener("click", openValidationEvidence);
     byId("closeValidationEvidence")?.addEventListener("click", closeValidationEvidence);
     byId("validationEvidenceBackdrop")?.addEventListener("click", (event) => {
@@ -6477,6 +6634,16 @@
       factorsPanel.hidden = expanded;
       const label = toggle.querySelector("span");
       if (label) label.textContent = expanded ? "查看依据" : "收起依据";
+    });
+    byId("forecastEvidenceToggle")?.addEventListener("click", () => {
+      const toggle = byId("forecastEvidenceToggle");
+      const panel = byId("forecastEvidencePanel");
+      if (!toggle || !panel) return;
+      const expanded = toggle.getAttribute("aria-expanded") === "true";
+      toggle.setAttribute("aria-expanded", String(!expanded));
+      panel.hidden = expanded;
+      const label = toggle.querySelector("span");
+      if (label) label.textContent = expanded ? "查看计算依据" : "收起计算依据";
     });
     byId("voiceIntentButton")?.addEventListener("click", () => { toggleVoiceIntent(); });
     byId("composerSubmitButton")?.addEventListener("click", parseIntent);

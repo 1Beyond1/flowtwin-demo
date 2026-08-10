@@ -44,6 +44,17 @@ test("forecast uses departure clock and station ETA, with explicit simulation me
   }
 });
 
+test("forecast confidence is dynamic and explainable rather than a fixed percentage", () => {
+  const inWindow = forecastStations([forecastStation({ arrivalOffsetMinutes: 10 })], { departureMinutes: 480 }).stations[0];
+  const outOfWindow = forecastStations([forecastStation({ arrivalOffsetMinutes: 90 })], { departureMinutes: 480 }).stations[0];
+  assert.ok(Number.isInteger(inWindow.confidenceScore));
+  assert.ok(inWindow.confidenceScore > outOfWindow.confidenceScore);
+  assert.ok(["low", "medium", "high"].includes(inWindow.confidenceLevel));
+  assert.match(inWindow.confidenceLabel, /演示口径/);
+  assert.ok(inWindow.confidenceReasons.length > 0);
+  assert.equal(inWindow.confidence, "simulation-only");
+});
+
 function portStation(overrides = {}) {
   return {
     id: "port-station",

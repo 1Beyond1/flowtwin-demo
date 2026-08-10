@@ -21,11 +21,15 @@ import {
 import { createVersionChecker, loadVersionInfo, resolveVersionRoute } from "./lib/version.mjs";
 import { AMAP_CACHE_TTLS, createAmapFileCache } from "./lib/amap-cache.mjs";
 import { createRateLimiter, readRateLimitConfig } from "./lib/rate-limit.mjs";
+import { localVisionFallback, validateVisionResult, visionHealthSummary } from "./lib/cv.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 let config = null;
 let versionInfo = null;
 let versionChecker = null;
+const executionCache = new Map();
+const EXECUTION_CACHE_TTL_MS = 15 * 60 * 1000;
+const EXECUTION_CACHE_MAX = 1_000;
 const rateLimiter = createRateLimiter({
   ...readRateLimitConfig(),
   trustProxy: process.env.FLOWTWIN_TRUST_PROXY === "1"
@@ -38,11 +42,14 @@ export function rateLimitScopeForRequest(method, pathname) {
     if (normalizedPath === "/api/plan") return "plan";
     if (normalizedPath === "/api/stt") return "stt";
     if (normalizedPath === "/api/forecast" || normalizedPath === "/api/longtrip") return "map";
+    if (normalizedPath === "/api/cv/analyze") return "cv";
     if (normalizedPath === "/api/feishu/sync") return "feishu-sync";
     if (normalizedPath.startsWith("/api/feishu/strategy/") && normalizedPath.endsWith("/approve")) return "approve";
+    if (normalizedPath === "/api/execution") return "execution";
     return null;
   }
   if (normalizedMethod === "GET" && ["/api/route", "/api/poi", "/api/weather"].includes(normalizedPath)) return "map";
+  if (normalizedMethod === "GET" && normalizedPath === "/api/version/check") return "version-check";
   return null;
 }
 
@@ -82,6 +89,9 @@ const mimeTypes = {
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
   ".svg": "image/svg+xml"
 };
 
@@ -566,6 +576,8 @@ export function buildLongTripApiInput(body = {}) {
   copyNumber(source, target, "durationMinutes", 0, 7 * 24 * 60);
   copyNumber(source, target, "soc", 0, 100);
   copyNumber(source, target, "minArrivalSoc", 0, 100);
+  copyNumber(source, target, "roadTolls", 0, 100000);
+  copyNumber(source, target, "serviceCost", 0, 100000);
   // Normal callers remain at six stops. The browser's long-trip mode gets a
   // separate twelve-stop ceiling so a long route can be planned without
   // allowing an unbounded request to multiply AMap segment calls.
@@ -720,9 +732,59 @@ async function validateApi(request, response) {
   return json(response, 200, validateStrategies({ seed: body.seed, trips: body.trips, stations: body.stations }));
 }
 
+async function cvHealthApi(response) {
+  return json(response, 200, visionHealthSummary(config));
+}
+
+async function cvAnalyzeApi(request, response) {
+  const body = await readJsonBody(request, 5 * 1024 * 1024);
+  // An optional local Python adapter may provide actual CPU inference. It is
+  // never required for route planning, and a timeout immediately returns to a
+  // clearly labelled local fallback.
+  if (config.cvServiceUrl) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    try {
+      const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      const result = await upstream.json().catch(() => null);
+      if (upstream.ok && validateVisionResult(result)) {
+        return json(response, 200, result);
+      }
+    } catch {
+      // The fallback below is intentional; do not turn optional CV into a
+      // blocker for the rest of the Demo.
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  const fallback = localVisionFallback(body);
+  return json(response, fallback.ok === false ? 400 : 200, fallback);
+}
+
 async function executionApi(request, response) {
   const body = await readJsonBody(request, 16000);
+  const rawKey = body?.runId ?? body?.executionId ?? body?.idempotencyKey;
+  const key = typeof rawKey === "string" && /^[A-Za-z0-9._:-]{1,160}$/.test(rawKey.trim())
+    ? rawKey.trim()
+    : null;
+  const now = Date.now();
+  for (const [cachedKey, cached] of executionCache) {
+    if (cached.expiresAt <= now) executionCache.delete(cachedKey);
+  }
+  if (key) {
+    const cached = executionCache.get(key);
+    if (cached) return json(response, 200, { ...cached.result, idempotent: true });
+  }
   const result = await executeFeishu({ payload: body, config });
+  if (key && result?.mode !== "error") {
+    if (executionCache.size >= EXECUTION_CACHE_MAX) executionCache.delete(executionCache.keys().next().value);
+    executionCache.set(key, { result, expiresAt: now + EXECUTION_CACHE_TTL_MS });
+  }
   return json(response, 200, result);
 }
 
@@ -781,6 +843,7 @@ async function requestHandler(request, response) {
   try {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
     if (request.method === "OPTIONS") return json(response, 204, {});
+    if (!applyRateLimit(request, response, rateLimiter, requestUrl)) return;
     const versionRoute = await resolveVersionRoute({
       method: request.method,
       pathname: requestUrl.pathname,
@@ -794,11 +857,11 @@ async function requestHandler(request, response) {
       dependencies: {
         amapConfigured: hasAmapServiceKey(config),
         ai: buildAiHealthSummary(config),
-        feishu: feishuConfigSummary(config)
+        feishu: feishuConfigSummary(config),
+        cv: visionHealthSummary(config)
       },
       amapCache: config.amapCache?.getStats?.() || null
     });
-    if (!applyRateLimit(request, response, rateLimiter, requestUrl)) return;
     if (request.method === "GET" && requestUrl.pathname === "/api/contracts") return json(response, 200, API_CONTRACTS);
     if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
     if (requestUrl.pathname === "/api/poi") return await poiApi(requestUrl, response);
@@ -808,6 +871,8 @@ async function requestHandler(request, response) {
     if (request.method === "POST" && requestUrl.pathname === "/api/longtrip") return await longTripApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/operator/simulate") return await operatorApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/validate") return await validateApi(request, response);
+    if (request.method === "GET" && requestUrl.pathname === "/api/cv/health") return await cvHealthApi(response);
+    if (request.method === "POST" && requestUrl.pathname === "/api/cv/analyze") return await cvAnalyzeApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/execution") return await executionApi(request, response);
     if (request.method === "GET" && requestUrl.pathname === "/api/feishu/health") return json(response, 200, { ok: true, ...feishuConfigSummary(config) });
     if (request.method === "POST" && requestUrl.pathname === "/api/feishu/sync") return await feishuSyncApi(request, response);

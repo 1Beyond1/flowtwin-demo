@@ -52,3 +52,29 @@ test("adaptive planning can exceed six stops but never exceeds twelve", () => {
   assert.ok(result.plans.every((plan) => plan.stopCount <= 12));
   assert.ok(result.plans.every((plan) => plan.legs.length === plan.stopCount + 1));
 });
+
+test("adaptive search reports an incomplete search instead of claiming proof", () => {
+  const stations = Array.from({ length: 36 }, (_, index) => ({
+    id: `dense-${index}`,
+    progressKm: 10 + index * 50,
+    detourKm: 0.1,
+    p50: 3,
+    p90: 6,
+    price: 1
+  }));
+  const result = buildLongTripPlans({
+    distanceKm: 2000,
+    durationMinutes: 1400,
+    energyType: "electric",
+    soc: 30,
+    minArrivalSoc: 2,
+    adaptiveMaxStops: true,
+    maxStops: 12,
+    maxDetourKm: 8,
+    stations
+  });
+  assert.equal(result.reason, null);
+  assert.equal(result.sequenceSearchComplete, false);
+  assert.ok(result.sequenceEvaluations >= 12000);
+  assert.ok(result.plans.length > 0);
+});

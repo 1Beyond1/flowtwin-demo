@@ -15,6 +15,8 @@ window.FLOWTWIN_CONFIG = {
   sttApiKey: "YOUR_STT_API_KEY",
   sttBaseUrl: "https://your-stt-gateway.example.com/v1",
   sttModel: "YOUR_SPEECH_TO_TEXT_MODEL",
+  // Optional local CV adapter; blank uses the labelled synthetic demo.
+  cvServiceUrl: "",
   feishuWebhookUrl: "",
   // Optional Feishu Bitable + AI field integration. Credentials stay server-side.
   feishuBaseUrl: "https://open.feishu.cn",

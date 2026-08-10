@@ -60,3 +60,27 @@ test("a 100% EV short trip remains direct and does not force a charging stop", (
   assert.ok(result.plans.some((plan) => plan.stopCount === 0));
   assert.ok(result.plans.every((plan) => plan.stopCount === 0));
 });
+
+test("duplicate station identities are removed before sequence enumeration", () => {
+  const result = buildLongTripPlans({
+    distanceKm: 900,
+    durationMinutes: 620,
+    energyType: "electric",
+    soc: 35,
+    minArrivalSoc: 2,
+    maxStops: 6,
+    maxDetourKm: 8,
+    stations: [
+      { id: "same-station", name: "重复候选", progressKm: 90, detourKm: 0.4, p50: 4, p90: 8, price: 1.2 },
+      { id: "same-station", name: "重复候选的另一条记录", progressKm: 90, detourKm: 0.4, p50: 30, p90: 60, price: 5 },
+      { id: "mid-station", name: "中途候选", progressKm: 360, detourKm: 0.4, p50: 4, p90: 8, price: 1.2 },
+      { id: "late-station", name: "后段候选", progressKm: 650, detourKm: 0.4, p50: 4, p90: 8, price: 1.2 }
+    ]
+  });
+
+  assert.equal(result.duplicatesRemoved, 1);
+  for (const plan of result.plans) {
+    const ids = plan.stops.map((stop) => stop.id);
+    assert.equal(new Set(ids).size, ids.length);
+  }
+});

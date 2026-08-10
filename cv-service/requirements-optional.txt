@@ -1,0 +1,7 @@
+# Optional only; the Node demo and synthetic CV mode do not require these.
+opencv-python-headless>=4.10,<5
+pillow>=10,<12
+# Install PaddlePaddle/PaddleOCR only if the local CPU environment is prepared.
+# No model weights are bundled or downloaded by the project.
+paddlepaddle>=3.0,<4
+paddleocr>=2.9,<3
