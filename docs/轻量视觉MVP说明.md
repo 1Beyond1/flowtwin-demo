@@ -15,14 +15,27 @@
 - 评审模式提供“视觉”入口；
 - `POST /api/cv/analyze` 支持内置合成画面和上传图片两种输入；
 - 内置合成结果由 `lib/cv.mjs` 的固定种子生成，包含车辆框、车位、排队车辆、到站识别、置信度和模拟收据；
-- 上传图片默认只检查 Data URL、格式和 4 MB 大小上限，未配置推理服务时返回 `not-run`；
+- 上传图片默认检查 Data URL、PNG/JPEG/WebP 文件头和 4 MB 大小上限，未配置推理服务时返回 `not-run`；
 - 图片经过 Base64 编码后请求体上限为 8 MB，Node 与可选 Python 适配器使用同一组边界；
 - 上游 CV 服务返回 HTTP 200 但字段不完整时，`validateVisionResult()` 会拒绝结果并回退，不把空对象显示成识别成功；
 - 车牌和收据均为虚构/模拟内容，不保存原图、不执行真实扣款。
 
 ### 可选 CPU 服务
 
-`cv-service/app.py` 是独立的本地适配器，默认监听 `127.0.0.1:5099`。它可以检查 OpenCV、Pillow、Paddle 和 PaddleOCR 是否存在，但仓库不包含模型权重；没有权重时只返回“未执行推理”。
+`cv-service/app.py` 是独立的本地适配器，默认监听 `127.0.0.1:5099`。它可以检查 OpenCV、Pillow、Paddle 和 PaddleOCR 是否存在，但仓库不包含模型权重；没有权重时只返回“未执行推理”。Python 适配器与 Node 端使用相同的图片文件头校验，不会仅凭 MIME 类型接受任意字节。
+
+视觉结果的 `inferenceStatus` 只有三种含义：
+
+- `synthetic`：固定种子合成演示，不是模型推理；
+- `executed`：未来接入并实际运行视觉模型时使用；
+- `not-run`：只完成上传/适配器检查，没有执行视觉推理。
+
+本地无额外依赖时可运行以下标准库回归：
+
+```powershell
+python -m compileall -q cv-service
+python -m unittest discover -s cv-service -p "test_*.py"
+```
 
 这使得 8 核 8 GB 的 VPS 也能运行主 Demo，不需要下载大型模型。4060M 笔记本可以作为后续实验机，但当前 MVP 不依赖 GPU。
 

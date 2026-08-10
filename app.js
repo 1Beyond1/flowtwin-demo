@@ -628,6 +628,21 @@
     }));
   }
 
+  function replaceDestinationInIntent(value, destination) {
+    const current = String(value || "").trim();
+    const nextDestination = String(destination || "").trim();
+    if (!current || !nextDestination) return current;
+
+    // Replace the destination clause up to the first constraint separator.
+    // A lazy match here could replace only "去"/"前往", leaving the old
+    // ambiguous query behind (例如：南京南站南京).
+    const replaced = current.replace(
+      /((?:前往|去|到(?!达))\s*)[^，,。；;]+(?=[，,。；;]|$)/,
+      `$1${nextDestination}`
+    );
+    return replaced === current ? `${current}，目的地定为${nextDestination}` : replaced;
+  }
+
   async function pickDestinationCandidate(index) {
     const box = byId("destinationCandidates");
     if (!box?.dataset.candidates) return;
@@ -644,7 +659,7 @@
     // 规划，点选目的地候选时输入框会突然跳回"从能链北京总部前往…"。
     const originForSuggestion = state.originName || DEFAULT_ORIGIN_NAME;
     const nextMessage = current
-      ? (/前往|去|到/.test(current) ? current.replace(/(前往|去|到)\s*[^，,。；;]*?/, `$1${name}`) : `${current}，目的地定为${name}`)
+      ? replaceDestinationInIntent(current, name)
       : `从${originForSuggestion}前往${name}`;
     if (input) {
       input.value = nextMessage.includes(name) ? nextMessage : `从${originForSuggestion}前往${name}`;
@@ -1366,8 +1381,53 @@
       }
       return { label: `依据 ${index + 1}`, status: "", delta: null, evidence: String(factor ?? "").trim() };
     }).filter((factor) => factor.label || factor.status || factor.delta !== null || factor.evidence).slice(0, 8);
-    if (score === null && !level && !factors.length) return null;
-    return { score, level, factors };
+    const rawComparison = value.comparison && typeof value.comparison === "object" ? value.comparison : null;
+    const snapshot = (input) => {
+      if (!input || typeof input !== "object") return null;
+      const optionalNumber = (raw) => {
+        // Number(null) is 0, but a blank arrival reserve/detour is not an
+        // explicit zero constraint. Preserve the distinction in the evidence
+        // panel so it agrees with the route card and manual controls.
+        if (raw === null || raw === undefined || raw === "") return null;
+        return Number.isFinite(Number(raw)) ? Number(raw) : null;
+      };
+      return {
+        destination: String(input.destination ?? "").trim() || null,
+        arrivalDeadline: String(input.arrivalDeadline ?? "").trim() || null,
+        minArrivalSoc: optionalNumber(input.minArrivalSoc),
+        energyType: String(input.energyType ?? "").trim() || null,
+        priority: String(input.priority ?? "").trim() || null,
+        maxDetourKm: optionalNumber(input.maxDetourKm),
+        services: Array.isArray(input.services) ? input.services.slice(0, 6).map((item) => String(item).slice(0, 40)) : [],
+        requestMode: String(input.requestMode ?? "").trim() || null,
+        actions: Array.isArray(input.actions) ? input.actions.slice(0, 8).filter((item) => item && typeof item === "object") : []
+      };
+    };
+    const comparison = rawComparison ? {
+      originalText: String(rawComparison.originalText ?? "").trim().slice(0, 1200),
+      status: String(rawComparison.status ?? "rules-only").trim(),
+      statusLabel: String(rawComparison.statusLabel ?? "").trim(),
+      rules: snapshot(rawComparison.rules),
+      ai: snapshot(rawComparison.ai),
+      final: snapshot(rawComparison.final),
+      agreement: {
+        compared: rawComparison.agreement?.compared === true,
+        score: Number.isFinite(Number(rawComparison.agreement?.score)) ? Number(rawComparison.agreement.score) : null,
+        label: String(rawComparison.agreement?.label ?? "").trim(),
+        differences: Array.isArray(rawComparison.agreement?.differences) ? rawComparison.agreement.differences.slice(0, 10) : []
+      },
+      actions: {
+        accepted: Array.isArray(rawComparison.actions?.accepted) ? rawComparison.actions.accepted.slice(0, 8) : [],
+        rejected: Array.isArray(rawComparison.actions?.rejected) ? rawComparison.actions.rejected.slice(0, 8) : []
+      },
+      safety: {
+        status: String(rawComparison.safety?.status ?? "review").trim(),
+        conclusion: String(rawComparison.safety?.conclusion ?? "").trim(),
+        checks: Array.isArray(rawComparison.safety?.checks) ? rawComparison.safety.checks.slice(0, 8) : []
+      }
+    } : null;
+    if (score === null && !level && !factors.length && !comparison) return null;
+    return { score, level, factors, comparison };
   }
 
   function formatParseScore(score) {
@@ -1393,6 +1453,93 @@
     if (!Number.isFinite(delta)) return "";
     const rounded = Number.isInteger(delta) ? String(delta) : String(Math.round(delta * 100) / 100);
     return delta >= 0 ? `+${rounded}` : rounded;
+  }
+
+  function formatIntentComparisonValue(value, field) {
+    if (value === null || value === undefined || value === "") return "—";
+    const energyLabels = { electric: "纯电", fuel: "燃油", mixed: "混动", unknown: "未指定" };
+    const priorityLabels = { on_time: "准时", fastest: "最快", cheapest: "最低成本", wait: "少等待", balanced: "综合" };
+    const modeLabels = { new_trip: "新行程", supplement: "补充行程" };
+    if (field === "energyType") return energyLabels[value] || String(value);
+    if (field === "priority") return priorityLabels[value] || String(value);
+    if (field === "requestMode") return modeLabels[value] || String(value);
+    if (field === "minArrivalSoc") return `${value}%`;
+    if (field === "maxDetourKm") return `${value} km`;
+    if (field === "services") return Array.isArray(value) && value.length ? value.join("、") : "无";
+    if (field === "actions") return Array.isArray(value) && value.length ? value.map(actionSummary).join("；") : "无";
+    return String(value);
+  }
+
+  function renderIntentComparison(factorsPanel, comparison) {
+    if (!comparison) return;
+    const panel = document.createElement("section");
+    panel.className = "parsed-intent-comparison";
+    const header = document.createElement("div");
+    header.className = "parsed-intent-comparison-head";
+    const title = document.createElement("strong");
+    title.textContent = "AI / 规则解析对比";
+    const status = document.createElement("span");
+    status.className = `parsed-intent-comparison-status ${comparison.status || "rules-only"}`;
+    status.textContent = comparison.statusLabel || "解析链路已记录";
+    header.append(title, status);
+    panel.appendChild(header);
+
+    if (comparison.originalText) {
+      const original = document.createElement("p");
+      original.className = "parsed-intent-comparison-original";
+      original.textContent = `原始输入：${comparison.originalText}`;
+      panel.appendChild(original);
+    }
+
+    const columns = document.createElement("div");
+    columns.className = "parsed-intent-comparison-grid";
+    const columnsData = [
+      ["规则解析", comparison.rules],
+      ["AI 解析", comparison.ai],
+      ["最终规划输入", comparison.final]
+    ];
+    const fields = [
+      ["destination", "终点"],
+      ["arrivalDeadline", "到达时间"],
+      ["minArrivalSoc", "到达余量"],
+      ["energyType", "动力类型"],
+      ["priority", "偏好"],
+      ["services", "服务"],
+      ["requestMode", "行程类型"],
+      ["actions", "动作"]
+    ];
+    columnsData.forEach(([label, snapshot]) => {
+      const column = document.createElement("div");
+      column.className = "parsed-intent-comparison-column";
+      const columnTitle = document.createElement("b");
+      columnTitle.textContent = label;
+      column.appendChild(columnTitle);
+      fields.forEach(([field, fieldLabel]) => {
+        const row = document.createElement("div");
+        row.className = "parsed-intent-comparison-row";
+        const key = document.createElement("span");
+        key.textContent = fieldLabel;
+        const value = document.createElement("strong");
+        value.textContent = formatIntentComparisonValue(snapshot?.[field], field);
+        row.append(key, value);
+        column.appendChild(row);
+      });
+      columns.appendChild(column);
+    });
+    panel.appendChild(columns);
+
+    const agreement = document.createElement("p");
+    agreement.className = "parsed-intent-comparison-note";
+    agreement.textContent = comparison.agreement?.compared
+      ? `字段一致性：${comparison.agreement.label || `${comparison.agreement.score ?? "—"}%`}。不一致字段不会直接写入路线计算。`
+      : (comparison.agreement?.label || "本轮未进行模型字段对比。");
+    panel.appendChild(agreement);
+
+    const safety = document.createElement("div");
+    safety.className = `parsed-intent-comparison-safety ${comparison.safety?.status || "review"}`;
+    safety.textContent = `最终安全校验：${comparison.safety?.conclusion || "等待校验"}`;
+    panel.appendChild(safety);
+    factorsPanel.appendChild(panel);
   }
 
   function renderParseAnalysis(value) {
@@ -1455,7 +1602,8 @@
       }
       factorsPanel.appendChild(row);
     });
-    toggle.hidden = !analysis.factors.length;
+    renderIntentComparison(factorsPanel, analysis.comparison);
+    toggle.hidden = !analysis.factors.length && !analysis.comparison;
   }
 
   // The current backend returns an arrival-time `prediction`. Older local
@@ -6100,8 +6248,20 @@
     return text || fallback;
   }
 
+  function visionInferenceStatus(result = {}) {
+    const explicit = String(result.inferenceStatus || "").trim().toLowerCase();
+    if (["synthetic", "executed", "not-run"].includes(explicit)) return explicit;
+    const mode = String(result.mode || "").trim().toLowerCase();
+    if (mode === "synthetic") return "synthetic";
+    if (mode.includes("fallback") || mode.includes("inspection") || mode === "service-synthetic") return "not-run";
+    if (mode.includes("synthetic")) return "synthetic";
+    return "executed";
+  }
+
   function renderVisionResult(result) {
     state.visionResult = result;
+    const inferenceStatus = visionInferenceStatus(result);
+    const inferenceNotRun = inferenceStatus === "not-run";
     const preview = byId("visionPreviewImage");
     const empty = byId("visionPreviewEmpty");
     const image = result?.annotatedImage || result?.previewImage;
@@ -6116,11 +6276,15 @@
 
     const vehicles = Array.isArray(result?.vehicles) ? result.vehicles : [];
     const parking = Array.isArray(result?.parking) ? result.parking : [];
-    setText("visionVehicleCount", result?.mode === "upload-fallback" ? "未执行" : `${vehicles.length} 辆`);
-    setText("visionIdleSlots", result?.mode === "upload-fallback" ? "未执行" : `${parking.filter((slot) => slot.status === "idle").length} 个`);
-    setText("visionQueueCount", result?.queueVehicles == null ? "未执行" : `${result.queueVehicles} 辆`);
-    setText("visionArrivalState", result?.arrivalRecognition?.status === "recognized" ? "已识别（演示）" : "未执行");
-    setText("visionConfidence", Number.isFinite(Number(result?.confidence)) ? `${Math.round(Number(result.confidence) * 100)}%` : "—");
+    setText("visionVehicleCount", inferenceNotRun ? "未执行" : `${vehicles.length} 辆`);
+    setText("visionIdleSlots", inferenceNotRun ? "未执行" : `${parking.filter((slot) => slot.status === "idle").length} 个`);
+    setText("visionQueueCount", inferenceNotRun || result?.queueVehicles == null ? "未执行" : `${result.queueVehicles} 辆`);
+    setText("visionArrivalState", inferenceNotRun
+      ? "未执行"
+      : result?.arrivalRecognition?.status === "recognized"
+        ? inferenceStatus === "synthetic" ? "已识别（合成演示）" : "已识别"
+        : "未识别");
+    setText("visionConfidence", inferenceNotRun || !Number.isFinite(Number(result?.confidence)) ? "—" : `${Math.round(Number(result.confidence) * 100)}%`);
     setText("visionSource", visionText(result?.source));
     setText("visionPlate", visionText(result?.arrivalRecognition?.plate, "未识别"));
     setText("visionReceipt", visionText(result?.paymentReceipt?.message, "未生成"));
@@ -6139,9 +6303,12 @@
     }
     const status = byId("visionStatus");
     if (status) {
-      const degraded = result?.mode === "upload-fallback" || String(result?.mode || "").includes("fallback");
-      status.dataset.state = degraded ? "degraded" : "ready";
-      status.textContent = degraded ? "已降级 · 未执行视觉推理" : "分析完成 · 结果可追溯";
+      status.dataset.state = inferenceNotRun ? "degraded" : "ready";
+      status.textContent = inferenceNotRun
+        ? "已检查 · 未执行视觉推理"
+        : inferenceStatus === "synthetic"
+          ? "合成演示完成 · 结果可追溯"
+          : "视觉推理完成 · 结果可追溯";
     }
   }
 

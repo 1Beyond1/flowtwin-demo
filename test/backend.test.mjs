@@ -127,6 +127,9 @@ test("simple explicit new trips stay local and do not call AI", async () => {
   assert.ok(result.analysis.score > 0);
   assert.ok(result.analysis.factors.every((factor) => ["pass", "warn", "fail"].includes(factor.status)));
   assert.ok(result.analysis.factors.every((factor) => Object.keys(factor).sort().join(",") === "delta,evidence,id,label,status"));
+  assert.equal(result.analysis.comparison.status, "rules-only");
+  assert.equal(result.analysis.comparison.safety.status, "passed");
+  assert.equal(result.analysis.comparison.ai, null);
   assert.equal(formatPlanResponse(result).analysis.mode, "rules");
 });
 
@@ -160,6 +163,9 @@ test("multi-turn composite service requests call AI after local parsing", async 
   assert.equal(result.analysis.ai.attempted, true);
   assert.equal(result.analysis.ai.used, true);
   assert.equal(result.analysis.ai.reason, null);
+  assert.equal(result.analysis.comparison.status, "compared");
+  assert.equal(result.analysis.comparison.agreement.compared, true);
+  assert.equal(result.analysis.comparison.safety.status, "passed");
   assert.equal(result.requestMode, "supplement");
   assert.deepEqual(result.services, ["餐饮"]);
 });
@@ -213,6 +219,8 @@ test("AI failure falls back without exposing provider details in analysis", asyn
   assert.equal(publicResult.analysis.ai.attempted, true);
   assert.equal(publicResult.analysis.ai.fallback, true);
   assert.equal(publicResult.analysis.ai.reason, "quota");
+  assert.equal(publicResult.analysis.comparison.status, "fallback");
+  assert.equal(publicResult.analysis.comparison.safety.status, "passed");
   assert.equal(JSON.stringify(publicResult.analysis).includes("primary.example"), false);
   assert.equal(JSON.stringify(publicResult.analysis).includes("quota exceeded"), false);
   assert.equal(JSON.stringify(publicResult.analysis).includes("https://"), false);

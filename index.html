@@ -2271,6 +2271,92 @@
         overflow-wrap: anywhere;
       }
 
+      .parsed-intent-comparison {
+        display: grid;
+        gap: 7px;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+      }
+      .parsed-intent-comparison-head,
+      .parsed-intent-comparison-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .parsed-intent-comparison-head {
+        color: var(--text);
+        font-size: 10px;
+      }
+      .parsed-intent-comparison-status {
+        max-width: 62%;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 8px;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .parsed-intent-comparison-status.compared { color: #16725f; }
+      .parsed-intent-comparison-status.fallback { color: #976717; }
+      .parsed-intent-comparison-original,
+      .parsed-intent-comparison-note,
+      .parsed-intent-comparison-safety {
+        margin: 0;
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+      }
+      .parsed-intent-comparison-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 5px;
+      }
+      .parsed-intent-comparison-column {
+        min-width: 0;
+        padding: 6px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+      .parsed-intent-comparison-column > b {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--text);
+        font-size: 9px;
+      }
+      .parsed-intent-comparison-row {
+        align-items: flex-start;
+        padding: 2px 0;
+        color: var(--muted);
+        font-size: 8px;
+        line-height: 1.35;
+      }
+      .parsed-intent-comparison-row span { flex: 0 0 auto; }
+      .parsed-intent-comparison-row strong {
+        min-width: 0;
+        color: var(--text);
+        font-weight: 650;
+        text-align: right;
+        overflow-wrap: anywhere;
+      }
+      .parsed-intent-comparison-safety {
+        padding: 5px 6px;
+        border-radius: 5px;
+        background: #fbf1d9;
+        color: #976717;
+      }
+      .parsed-intent-comparison-safety.passed {
+        background: #e6f5f0;
+        color: #16725f;
+      }
+      @media (max-width: 720px) {
+        .parsed-intent-comparison-grid { grid-template-columns: 1fr; }
+        .parsed-intent-comparison-status { max-width: 58%; }
+      }
+
       .forecast-card,
       .arrival-loop,
       .strategy-lab {

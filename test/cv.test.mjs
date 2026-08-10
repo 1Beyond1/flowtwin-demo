@@ -7,6 +7,7 @@ test("synthetic vision result is deterministic and exposes the business chain", 
   const second = buildSyntheticVisionResult({ seed: "test-seed", observedAt: "2026-08-10T00:00:00.000Z" });
   assert.deepEqual(first, second);
   assert.equal(first.mode, "synthetic");
+  assert.equal(first.inferenceStatus, "synthetic");
   assert.equal(first.vehicles.length, 3);
   assert.equal(first.parking.length, 6);
   assert.equal(first.arrivalRecognition.status, "recognized");
@@ -20,12 +21,16 @@ test("upload fallback validates size and never claims a recognition result", () 
   const result = buildUploadFallback({ imageData: onePixel, fileName: "scene.png" });
   assert.equal(result.ok, true);
   assert.equal(result.mode, "upload-fallback");
+  assert.equal(result.inferenceStatus, "not-run");
   assert.equal(result.arrivalRecognition.status, "not-run");
   assert.equal(result.paymentReceipt.status, "not-run");
   assert.match(result.dataBoundary, /未完成视觉推理/);
 
   const tooLarge = `data:image/png;base64,${"A".repeat(Math.ceil(VISION_MAX_IMAGE_BYTES * 4 / 3) + 10)}`;
   assert.equal(buildUploadFallback({ imageData: tooLarge }).error, "IMAGE_TOO_LARGE");
+  assert.equal(buildUploadFallback({ imageData: "data:image/png;base64,AA==" }).error, "IMAGE_CONTENT_INVALID");
+  const jpegHeader = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64");
+  assert.equal(buildUploadFallback({ imageData: `data:image/jpeg;base64,${jpegHeader}` }).ok, true);
 });
 
 test("vision health only reports optional service configuration", () => {
@@ -50,4 +55,6 @@ test("vision upstream validation rejects a partial success payload", () => {
     ...valid,
     dataBoundary: ""
   }), false);
+  assert.equal(validateVisionResult({ ...valid, inferenceStatus: "not-run" }), true);
+  assert.equal(validateVisionResult({ ...valid, inferenceStatus: "made-up" }), false);
 });

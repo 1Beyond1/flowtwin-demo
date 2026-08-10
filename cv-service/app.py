@@ -9,6 +9,7 @@ Node synthetic mode remains the recommended no-install demo path.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import os
@@ -56,11 +57,31 @@ def upload_metadata(image_data: str) -> dict[str, Any]:
     match = IMAGE_RE.match(str(image_data or ""))
     if not match:
         raise ValueError("IMAGE_DATA_URL_REQUIRED")
-    raw = base64.b64decode(match.group(2), validate=True)
+    try:
+        raw = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("IMAGE_BASE64_INVALID") from exc
     if not raw:
         raise ValueError("IMAGE_EMPTY")
     if len(raw) > MAX_IMAGE_BYTES:
         raise ValueError("IMAGE_TOO_LARGE")
+    mime_type = f"image/{'jpeg' if match.group(1).lower() == 'jpg' else match.group(1).lower()}"
+    signature_ok = (
+        mime_type == "image/png"
+        and raw[:8] == b"\x89PNG\r\n\x1a\n"
+    ) or (
+        mime_type == "image/jpeg"
+        and len(raw) >= 4
+        and raw[:3] == b"\xff\xd8\xff"
+        and raw[-2:] == b"\xff\xd9"
+    ) or (
+        mime_type == "image/webp"
+        and len(raw) >= 12
+        and raw[:4] == b"RIFF"
+        and raw[8:12] == b"WEBP"
+    )
+    if not signature_ok:
+        raise ValueError("IMAGE_CONTENT_INVALID")
     dimensions = None
     if Image is not None:
         try:
@@ -70,7 +91,7 @@ def upload_metadata(image_data: str) -> dict[str, Any]:
         except Exception:
             dimensions = None
     return {
-        "mimeType": f"image/{'jpeg' if match.group(1).lower() == 'jpg' else match.group(1).lower()}",
+        "mimeType": mime_type,
         "bytes": len(raw),
         "dimensions": dimensions,
         "sha256Prefix": hashlib.sha256(raw).hexdigest()[:12],
@@ -84,6 +105,7 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": True,
             "mode": "service-synthetic",
+            "inferenceStatus": "not-run",
             "source": "可选本地 CV 服务 · 合成演示",
             "engine": "OpenCV/Paddle 可插拔适配器（当前无模型权重）",
             "observedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -103,6 +125,7 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": True,
             "mode": "service-upload-inspection",
+            "inferenceStatus": "not-run",
             "source": "可选本地 CV 服务 · 上传图片元数据检查",
             "engine": "OpenCV/Paddle 适配层（未加载模型权重）",
             "observedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
