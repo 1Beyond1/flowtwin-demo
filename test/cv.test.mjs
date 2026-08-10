@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSyntheticVisionResult, buildUploadFallback, buildVideoFallback, DEFAULT_SYNTHETIC_SCENE_IMAGE, VISION_MAX_IMAGE_BYTES, VISION_MAX_VIDEO_BYTES, validateVisionResult, visionHealthSummary } from "../lib/cv.mjs";
+import { buildSyntheticVisionResult, buildUploadFallback, buildVideoFallback, DEFAULT_SYNTHETIC_SCENE_IMAGE, VISION_MAX_IMAGE_BYTES, VISION_MAX_VIDEO_BYTES, localVisionFallback, validateVisionResult, visionHealthSummary } from "../lib/cv.mjs";
 
 test("synthetic vision result is deterministic and exposes the business chain", () => {
   const first = buildSyntheticVisionResult({ seed: "test-seed", observedAt: "2026-08-10T00:00:00.000Z" });
@@ -56,10 +56,20 @@ test("vision health only reports optional service configuration", () => {
   assert.deepEqual(visionHealthSummary({}), {
     configured: false,
     service: "not-configured",
-    fallback: "synthetic-demo",
+    fallback: "safe-not-run",
     modelRuntime: "optional; no model weight is bundled"
   });
   assert.equal(visionHealthSummary({ cvServiceUrl: "http://127.0.0.1:5099" }).configured, true);
+});
+
+test("vision input never fabricates a sample result without media", () => {
+  const missing = localVisionFallback({ mode: "sample", seed: "test-seed" });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.error, "SAMPLE_IMAGE_REQUIRED");
+  const uploadFallback = localVisionFallback({ mode: "sample", imageData: "data:image/png;base64,iVBORw0KGgo=" });
+  assert.equal(uploadFallback.ok, true);
+  assert.equal(uploadFallback.inferenceStatus, "not-run");
+  assert.equal(uploadFallback.arrivalRecognition.plate, null);
 });
 
 test("vision upstream validation rejects a partial success payload", () => {

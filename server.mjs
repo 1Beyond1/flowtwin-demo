@@ -759,19 +759,23 @@ async function cvAnalyzeApi(request, response) {
   // A 24 MB video becomes roughly 32 MB after base64 encoding. Keep the
   // envelope bounded so one request cannot exhaust the small VPS heap.
   const body = await readJsonBody(request, 36 * 1024 * 1024);
-  // The optional Python adapter is only used for uploaded media. The built-in
-  // sample must stay the deterministic Node synthetic demo, while image OCR
-  // and bounded video frame sampling may use the local CPU model.
-  if (config.cvServiceUrl && ["upload", "video"].includes(body.mode)) {
+  // A built-in sample is still an image input. Normalize it to the same upload
+  // path so the local OCR model, rather than a synthetic result generator,
+  // decides whether a plate is actually present.
+  const requestedMode = String(body?.mode || "").trim().toLowerCase();
+  const upstreamBody = requestedMode === "sample" && body?.imageData
+    ? { ...body, mode: "upload" }
+    : body;
+  if (config.cvServiceUrl && ["upload", "video"].includes(String(upstreamBody?.mode || "").toLowerCase())) {
     const controller = new AbortController();
     // PaddleOCR may load local weights on the first request. Video sampling
     // also needs more time than a single image, but must remain bounded.
-    const timeout = setTimeout(() => controller.abort(), body.mode === "video" ? 120000 : 60000);
+    const timeout = setTimeout(() => controller.abort(), upstreamBody.mode === "video" ? 120000 : 60000);
     try {
       const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(upstreamBody),
         signal: controller.signal
       });
       const result = await upstream.json().catch(() => null);
@@ -788,7 +792,7 @@ async function cvAnalyzeApi(request, response) {
       clearTimeout(timeout);
     }
   }
-  const fallback = localVisionFallback(body);
+  const fallback = localVisionFallback(upstreamBody);
   return json(response, fallback.ok === false ? 400 : 200, fallback);
 }
 

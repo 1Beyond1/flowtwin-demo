@@ -4934,7 +4934,9 @@
       .vision-head h2 { margin: 6px 0 8px; font-size: clamp(22px, 2.4vw, 34px); letter-spacing: -0.04em; }
       .vision-head p { max-width: 740px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
       .vision-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-      .vision-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 20px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+      .vision-guide { display: flex; align-items: flex-start; gap: 7px; margin-top: 14px; padding: 9px 11px; border: 1px solid #dbe5f6; border-radius: 8px; background: #f7f9ff; color: #53637e; font-size: 10px; line-height: 1.55; }
+      .vision-guide svg { width: 14px; height: 14px; flex: 0 0 auto; margin-top: 1px; color: var(--blue); }
+      .vision-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
       .vision-toolbar label { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; font-weight: 650; }
       .vision-toolbar input[type="file"] { max-width: 240px; font-size: 10px; }
       .vision-action { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--text); font-size: 11px; font-weight: 700; }
@@ -5290,20 +5292,21 @@
           <div>
             <div class="eyebrow">Station vision evidence</div>
             <h2>站内视觉链路（轻量 MVP）</h2>
-            <p>把“站内画面 → 车辆/车位状态 → 到站事件”串成可演示的业务链路。内置画面用于固定种子演示；照片或短视频支持本地 PaddleOCR 车牌识别，视频采用受限抽帧并要求连续命中后才判定稳定结果。车辆检测、车位检测、实时摄像头和真实扣款仍单独标注为未执行。</p>
+            <p>把“站内画面 → 车牌 OCR → 到站事件”串成可验证的业务链路。内置样例和上传的照片、短视频都会优先走本地 PaddleOCR；视频采用受限抽帧并要求连续命中后才判定稳定结果。车辆检测、车位检测、实时摄像头和真实扣款仍单独标注为未执行。</p>
           </div>
           <div class="vision-head-actions"><button class="close-button" id="closeVision" aria-label="关闭视觉演示"><i data-lucide="x"></i></button></div>
         </div>
+        <div class="vision-guide"><i data-lucide="info"></i><span>可以先试用内置样例进行本地 OCR 测试，也可以上传自己的车牌照片或短视频体验；如果模型没有识别到车牌，页面会如实显示“未识别”。</span></div>
         <div class="vision-toolbar">
-          <button class="vision-action primary" id="visionSampleButton" type="button"><i data-lucide="sparkles"></i>分析内置模拟画面</button>
+          <button class="vision-action primary" id="visionSampleButton" type="button"><i data-lucide="scan-search"></i>识别内置样例</button>
           <label for="visionFileInput"><span id="visionUploadLabel">上传车牌照片或短视频</span><input id="visionFileInput" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,video/x-matroska" /></label>
           <button class="vision-action" id="visionUploadButton" type="button" disabled><i data-lucide="scan-search"></i>本地 OCR 识别</button>
           <span class="vision-status" id="visionStatus" data-state="idle" role="status" aria-live="polite">尚未运行</span>
         </div>
         <div class="vision-grid">
           <article class="vision-preview-card">
-            <h3>默认模拟摄像头画面</h3>
-            <div class="vision-preview-empty" id="visionPreviewEmpty">点击“分析内置模拟画面”查看默认样板。<br />结果会明确标注是真实推理、规则分析还是模拟演示。</div>
+            <h3>分析画面</h3>
+            <div class="vision-preview-empty" id="visionPreviewEmpty">点击“识别内置样例”进行本地 OCR 测试，也可以上传自己的照片或短视频。</div>
             <img class="vision-preview" id="visionPreviewImage" alt="站内模拟摄像头样板画面" hidden />
             <video class="vision-preview-video" id="visionPreviewVideo" controls muted autoplay loop playsinline preload="auto" hidden></video>
           </article>

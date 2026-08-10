@@ -22,6 +22,7 @@
   const Z90 = 1.2816;
   const DEFAULT_LONG_TRIP_MAX_STOPS = 6;
   const ADAPTIVE_LONG_TRIP_MAX_STOPS = 12;
+  const DEFAULT_VISION_SAMPLE_URL = "/assets/vision/default-camera-scene.png";
 
   const FALLBACK = {
     origin: [116.491, 39.951],
@@ -5766,7 +5767,7 @@
     }
     if (mode === "validation") byId("mapAttribution").textContent = "高德地图 · 固定种子验证场景";
     if (mode === "validation" && !state.validationLoaded) loadValidation();
-    if (mode === "vision") byId("mapAttribution").textContent = "站内视觉演示 · 合成画面 / 可选本地推理";
+    if (mode === "vision") byId("mapAttribution").textContent = "站内视觉演示 · 内置样例/上传媒体 · 本地 OCR";
   }
 
   function planningCompletionMessage() {
@@ -6543,12 +6544,33 @@
     if (!isImage && !isVideo) throw new Error("只支持 PNG、JPEG、WebP 图片或 MP4、WebM、MOV 短视频");
     const maxBytes = isVideo ? 24 * 1024 * 1024 : 4 * 1024 * 1024;
     if (file.size > maxBytes) throw new Error(isVideo ? "视频不能超过 24 MB" : "图片不能超过 4 MB");
+    if (isImage) return readVisionBlob(file, file.name || "上传图片");
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("读取视频失败"));
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function readVisionBlob(blob, label = "图片") {
+    const type = String(blob?.type || "").toLowerCase();
+    if (!/^image\/(png|jpeg|webp)$/i.test(type)) throw new Error(`${label}不是受支持的图片格式`);
+    if (Number(blob?.size || 0) > 4 * 1024 * 1024) {
+      throw new Error(label === "内置样例" ? "内置样例图片不能超过 4 MB" : "图片不能超过 4 MB");
+    }
     return await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onerror = () => reject(new Error("读取图片失败"));
       reader.onload = () => resolve(String(reader.result || ""));
-      reader.readAsDataURL(file);
+      reader.readAsDataURL(blob);
     });
+  }
+
+  async function readBuiltInVisionSample() {
+    const response = await fetch(DEFAULT_VISION_SAMPLE_URL, { cache: "no-store" });
+    if (!response.ok) throw new Error("读取内置视觉样例失败");
+    return readVisionBlob(await response.blob(), "内置样例");
   }
 
   async function runVisionAnalysis(mode = "sample") {
@@ -6557,10 +6579,17 @@
     const uploadButton = byId("visionUploadButton");
     const status = byId("visionStatus");
     [sampleButton, uploadButton].filter(Boolean).forEach((button) => { button.disabled = true; button.setAttribute("aria-busy", "true"); });
-    if (status) { status.dataset.state = "processing"; status.textContent = "正在准备本地视觉分析…"; }
+    if (status) {
+      status.dataset.state = "processing";
+      status.textContent = mode === "sample" ? "正在用本地 OCR 识别内置样例…" : "正在准备本地视觉分析…";
+    }
     try {
       const body = { mode, seed: "flowtwin-vision-01" };
-      if (mode === "upload") {
+      if (mode === "sample") {
+        body.mode = "upload";
+        body.imageData = await readBuiltInVisionSample();
+        body.fileName = "default-camera-scene.png";
+      } else if (mode === "upload") {
         if (!state.visionFile) throw new Error("请先选择一张图片或短视频");
         const isVideo = /^video\//i.test(state.visionFile.type);
         body.mode = isVideo ? "video" : "upload";
@@ -6570,14 +6599,14 @@
         body.fileName = state.visionFile.name;
       }
       const isVideo = body.mode === "video";
-      const result = await postJson("/api/cv/analyze", body, isVideo ? 125000 : mode === "upload" ? 65000 : 25000);
+      const result = await postJson("/api/cv/analyze", body, isVideo ? 125000 : body.mode === "upload" ? 65000 : 25000);
       if (requestId !== state.visionRequestVersion) return;
       // Keep the preview in the browser's existing FileReader data URL. The
       // local CV service should not echo the uploaded plate image back in its
       // JSON response, which reduces memory duplication and data retention.
       renderVisionResult(body.mode === "video"
         ? { ...result, previewVideo: body.videoData }
-        : mode === "upload" ? { ...result, previewImage: body.imageData } : result);
+        : body.mode === "upload" ? { ...result, previewImage: body.imageData } : result);
     } catch (error) {
       if (status) { status.dataset.state = "error"; status.textContent = error?.message || "视觉分析失败"; }
       showToast(error?.message || "视觉分析失败", 3200);

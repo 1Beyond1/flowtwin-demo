@@ -30,7 +30,7 @@
 
 - 默认监听 `127.0.0.1:5099`；
 - `GET /health` 查看运行时能力，不返回密钥或模型绝对路径；
-- `POST /analyze` 接收 `{ "mode": "sample" | "upload" | "video", ... }`；
+- `POST /analyze` 接收 `{ "mode": "upload" | "video", ... }`；没有图片或视频输入时不会生成样例识别结果；
 - 上传原图上限为 4 MB；视频上限为 24 MB；JSON 请求上限为 36 MB；最长边默认缩放到 1600 像素；
 - 视频上限为 24 MB；默认最多处理 15 秒、每秒抽取约 2 帧；视频只在本地临时文件中解码，处理结束后删除；
 - 单进程只允许一个 OCR 推理占用，避免 8G VPS 同时加载或运行多个模型。
@@ -63,7 +63,7 @@ PADDLEOCR_TEXT_REC_MODEL_DIR=C:\path\to\local\rec_model
 & .\cv-service\.venv\Scripts\python.exe -m unittest discover -s cv-service -p "test_*.py"
 ```
 
-Node 主服务只在配置 `CV_SERVICE_URL` 后把**上传图片或短视频**转发给本地服务。内置合成画面仍由 Node 固定种子生成，不调用 OCR。
+Node 主服务只在配置 `CV_SERVICE_URL` 后把**上传图片或短视频**转发给本地服务。视觉页的内置样例也会作为图片上传到本地服务，和用户上传照片使用同一套 PaddleOCR 路径；服务不可用时只展示“未执行/未识别”，不会返回虚构车牌。
 
 视频模式的资源边界：8 核 8 GB、无 GPU 的 VPS 适合单路短视频/低频抽帧演示，不适合多路摄像头 25/30 FPS 全帧实时 OCR。若要接企业 RTSP，应在摄像头侧或边缘节点先做 ROI/抽帧，并对每路设置并发和队列上限。
 
