@@ -5191,16 +5191,16 @@
           <div class="vision-head-actions"><button class="close-button" id="closeVision" aria-label="关闭视觉演示"><i data-lucide="x"></i></button></div>
         </div>
         <div class="vision-toolbar">
-          <button class="vision-action primary" id="visionSampleButton" type="button"><i data-lucide="sparkles"></i>分析内置合成画面</button>
+          <button class="vision-action primary" id="visionSampleButton" type="button"><i data-lucide="sparkles"></i>分析内置模拟画面</button>
           <label for="visionFileInput"><span id="visionUploadLabel">上传车牌照片或短视频</span><input id="visionFileInput" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,video/x-matroska" /></label>
           <button class="vision-action" id="visionUploadButton" type="button" disabled><i data-lucide="scan-search"></i>本地 OCR 识别</button>
           <span class="vision-status" id="visionStatus" data-state="idle" role="status" aria-live="polite">尚未运行</span>
         </div>
         <div class="vision-grid">
           <article class="vision-preview-card">
-            <h3>标注画面</h3>
-            <div class="vision-preview-empty" id="visionPreviewEmpty">点击“分析内置合成画面”查看完整演示。<br />结果会明确标注是真实推理、规则分析还是合成降级。</div>
-            <img class="vision-preview" id="visionPreviewImage" alt="站内视觉分析标注画面" hidden />
+            <h3>默认模拟摄像头画面</h3>
+            <div class="vision-preview-empty" id="visionPreviewEmpty">点击“分析内置模拟画面”查看默认样板。<br />结果会明确标注是真实推理、规则分析还是模拟演示。</div>
+            <img class="vision-preview" id="visionPreviewImage" alt="站内模拟摄像头样板画面" hidden />
             <video class="vision-preview-video" id="visionPreviewVideo" controls muted autoplay loop playsinline preload="auto" hidden></video>
           </article>
           <article class="vision-detail-card">

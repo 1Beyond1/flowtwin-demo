@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSyntheticVisionResult, buildUploadFallback, buildVideoFallback, VISION_MAX_IMAGE_BYTES, VISION_MAX_VIDEO_BYTES, validateVisionResult, visionHealthSummary } from "../lib/cv.mjs";
+import { buildSyntheticVisionResult, buildUploadFallback, buildVideoFallback, DEFAULT_SYNTHETIC_SCENE_IMAGE, VISION_MAX_IMAGE_BYTES, VISION_MAX_VIDEO_BYTES, validateVisionResult, visionHealthSummary } from "../lib/cv.mjs";
 
 test("synthetic vision result is deterministic and exposes the business chain", () => {
   const first = buildSyntheticVisionResult({ seed: "test-seed", observedAt: "2026-08-10T00:00:00.000Z" });
@@ -14,8 +14,10 @@ test("synthetic vision result is deterministic and exposes the business chain", 
   assert.equal(first.paymentReceipt.status, "simulated");
   assert.equal(first.capabilities.plateOcr, "synthetic");
   assert.equal(first.capabilities.payment, "simulated");
-  assert.match(first.dataBoundary, /合成/);
-  assert.match(first.annotatedImage, /^data:image\/svg\+xml/);
+  assert.match(first.dataBoundary, /模拟/);
+  assert.equal(first.annotatedImage, DEFAULT_SYNTHETIC_SCENE_IMAGE);
+  assert.equal(first.input.sceneImage, DEFAULT_SYNTHETIC_SCENE_IMAGE);
+  assert.match(first.dataBoundary, /默认模拟画面/);
 });
 
 test("upload fallback validates size and never claims a recognition result", () => {
