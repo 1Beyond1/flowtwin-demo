@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSyntheticVisionResult, buildUploadFallback, VISION_MAX_IMAGE_BYTES, validateVisionResult, visionHealthSummary } from "../lib/cv.mjs";
+import { buildSyntheticVisionResult, buildUploadFallback, buildVideoFallback, VISION_MAX_IMAGE_BYTES, VISION_MAX_VIDEO_BYTES, validateVisionResult, visionHealthSummary } from "../lib/cv.mjs";
 
 test("synthetic vision result is deterministic and exposes the business chain", () => {
   const first = buildSyntheticVisionResult({ seed: "test-seed", observedAt: "2026-08-10T00:00:00.000Z" });
@@ -34,6 +34,20 @@ test("upload fallback validates size and never claims a recognition result", () 
   assert.equal(buildUploadFallback({ imageData: "data:image/png;base64,AA==" }).error, "IMAGE_CONTENT_INVALID");
   const jpegHeader = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64");
   assert.equal(buildUploadFallback({ imageData: `data:image/jpeg;base64,${jpegHeader}` }).ok, true);
+});
+
+test("video fallback validates a bounded container and never claims recognition", () => {
+  const mp4Header = Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]).toString("base64");
+  const result = buildVideoFallback({ videoData: `data:video/mp4;base64,${mp4Header}`, fileName: "gate.mp4" });
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "video-fallback");
+  assert.equal(result.input.kind, "uploaded-video");
+  assert.equal(result.arrivalRecognition.status, "not-run");
+  assert.equal(result.capabilities.plateOcr, "not-run");
+  assert.match(result.dataBoundary, /不能把本结果当作识别结论/);
+  const tooLarge = `data:video/mp4;base64,${"A".repeat(Math.ceil(VISION_MAX_VIDEO_BYTES * 4 / 3) + 10)}`;
+  assert.equal(buildVideoFallback({ videoData: tooLarge }).error, "VIDEO_TOO_LARGE");
+  assert.equal(buildVideoFallback({ videoData: "data:video/mp4;base64,AA==" }).error, "VIDEO_CONTENT_INVALID");
 });
 
 test("vision health only reports optional service configuration", () => {
@@ -73,4 +87,10 @@ test("vision upstream validation rejects a partial success payload", () => {
     mode: "local-ocr",
     arrivalRecognition: { status: "unrecognized", plate: "京A12345" }
   }), false);
+  assert.equal(validateVisionResult({
+    ...valid,
+    inferenceStatus: "executed",
+    mode: "local-video-ocr",
+    arrivalRecognition: { status: "recognized", plate: "京A12345" }
+  }), true);
 });

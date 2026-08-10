@@ -756,18 +756,17 @@ async function cvHealthApi(response) {
 }
 
 async function cvAnalyzeApi(request, response) {
-  // A 4 MB binary image becomes roughly 5.4 MB after base64 encoding. Keep
-  // the JSON envelope above that size so the browser's 4 MB image limit and
-  // the optional Python adapter agree instead of failing at different layers.
-  const body = await readJsonBody(request, 8 * 1024 * 1024);
-  // The optional Python adapter is only used for an uploaded image. The
-  // built-in sample must stay the deterministic Node synthetic demo, while
-  // real uploaded-image OCR is allowed to use the local CPU model.
-  if (config.cvServiceUrl && body.mode === "upload") {
+  // A 24 MB video becomes roughly 32 MB after base64 encoding. Keep the
+  // envelope bounded so one request cannot exhaust the small VPS heap.
+  const body = await readJsonBody(request, 36 * 1024 * 1024);
+  // The optional Python adapter is only used for uploaded media. The built-in
+  // sample must stay the deterministic Node synthetic demo, while image OCR
+  // and bounded video frame sampling may use the local CPU model.
+  if (config.cvServiceUrl && ["upload", "video"].includes(body.mode)) {
     const controller = new AbortController();
-    // PaddleOCR may load local weights on the first request. Keep this bounded
-    // but longer than the warm inference path, without leaving a request hung.
-    const timeout = setTimeout(() => controller.abort(), 60000);
+    // PaddleOCR may load local weights on the first request. Video sampling
+    // also needs more time than a single image, but must remain bounded.
+    const timeout = setTimeout(() => controller.abort(), body.mode === "video" ? 120000 : 60000);
     try {
       const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
         method: "POST",

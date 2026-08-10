@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from app import _normalize_ocr_text, _plate_candidates, analyze, upload_metadata  # noqa: E402
+from app import _normalize_ocr_text, _plate_candidates, analyze, upload_metadata, upload_video_metadata  # noqa: E402
 
 
 def data_url(mime: str, raw: bytes) -> str:
@@ -41,6 +41,15 @@ class CvAdapterTests(unittest.TestCase):
         self.assertEqual(result["paymentReceipt"]["status"], "not-run")
         self.assertIsNone(result["arrivalRecognition"]["plate"])
         self.assertNotIn("FT2026", json_text(result))
+
+    def test_video_metadata_accepts_container_signature_without_running_ocr(self):
+        raw = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+        metadata, returned = upload_video_metadata(data_url("video/mp4", raw))
+        self.assertEqual(metadata["mimeType"], "video/mp4")
+        self.assertEqual(metadata["bytes"], len(raw))
+        self.assertEqual(returned, raw)
+        with self.assertRaisesRegex(ValueError, "VIDEO_CONTENT_INVALID"):
+            upload_video_metadata(data_url("video/mp4", b"not-a-video"))
 
     def test_plate_text_is_normalized_and_format_checked(self):
         self.assertEqual(_normalize_ocr_text("车牌号：京A·12345"), "京A12345")

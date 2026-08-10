@@ -5,8 +5,9 @@ in memory, passed to a single PaddleOCR CPU instance, and discarded after the
 request.  The Node demo can still run without this optional process and keeps
 its clearly labelled synthetic mode as a fallback.
 
-This adapter currently promises one real capability only: OCR for a clear
-license-plate image.  Vehicle detection, parking-space detection and payment
+This adapter currently promises two bounded real capabilities: OCR for a clear
+license-plate image and OCR over sampled frames from a short uploaded video.
+Vehicle detection, parking-space detection, real camera streaming and payment
 are not inferred from an OCR result and remain explicitly unexecuted.
 """
 
@@ -20,6 +21,7 @@ import math
 import os
 import re
 import threading
+import tempfile
 import time
 from io import BytesIO
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,15 +29,20 @@ from pathlib import Path
 from typing import Any, Iterable
 
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
-MAX_REQUEST_BYTES = 8 * 1024 * 1024
+MAX_VIDEO_BYTES = 24 * 1024 * 1024
+MAX_REQUEST_BYTES = 36 * 1024 * 1024
 MAX_IMAGE_SIDE = max(640, min(int(os.environ.get("CV_MAX_IMAGE_SIDE", "1600")), 2400))
 OCR_WAIT_SECONDS = max(1.0, min(float(os.environ.get("CV_OCR_WAIT_SECONDS", "30")), 120.0))
 OCR_CONCURRENCY = 1
 IMAGE_RE = re.compile(r"^data:image/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$", re.I)
+VIDEO_RE = re.compile(r"^data:video/(mp4|webm|quicktime|x-matroska);base64,([A-Za-z0-9+/=]+)$", re.I)
 PLATE_RE = re.compile(
     r"([京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼港澳台][A-Z][A-Z0-9]{5,6})"
 )
 PLATE_PREFIXES = set("京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼港澳台")
+VIDEO_MAX_SECONDS = max(3.0, min(float(os.environ.get("CV_VIDEO_MAX_SECONDS", "15")), 30.0))
+VIDEO_SAMPLE_FPS = max(0.5, min(float(os.environ.get("CV_VIDEO_SAMPLE_FPS", "2")), 4.0))
+VIDEO_MIN_STABLE_HITS = max(1, min(int(os.environ.get("CV_VIDEO_MIN_STABLE_HITS", "2")), 5))
 
 try:  # Optional. The adapter remains importable without CV dependencies.
     import cv2  # type: ignore
@@ -109,6 +116,10 @@ def runtime_summary() -> dict[str, Any]:
         "device": "cpu",
         "maxImageSide": MAX_IMAGE_SIDE,
         "ocrConcurrency": OCR_CONCURRENCY,
+        "videoSupport": cv2 is not None,
+        "videoMaxSeconds": VIDEO_MAX_SECONDS,
+        "videoSampleFps": VIDEO_SAMPLE_FPS,
+        "videoMinStableHits": VIDEO_MIN_STABLE_HITS,
     }
 
 
@@ -154,6 +165,35 @@ def upload_metadata(image_data: str) -> dict[str, Any]:
         "dimensions": dimensions,
         "sha256Prefix": hashlib.sha256(raw).hexdigest()[:12],
     }
+
+
+def upload_video_metadata(video_data: str) -> tuple[dict[str, Any], bytes]:
+    match = VIDEO_RE.match(str(video_data or ""))
+    if not match:
+        raise ValueError("VIDEO_DATA_URL_REQUIRED")
+    try:
+        raw = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("VIDEO_BASE64_INVALID") from exc
+    if not raw:
+        raise ValueError("VIDEO_EMPTY")
+    if len(raw) > MAX_VIDEO_BYTES:
+        raise ValueError("VIDEO_TOO_LARGE")
+    subtype = match.group(1).lower()
+    mime_type = f"video/{subtype}"
+    header = raw[:64]
+    signature_ok = (
+        subtype in {"mp4", "quicktime"} and b"ftyp" in header
+    ) or (
+        subtype in {"webm", "x-matroska"} and raw[:4] == b"\x1a\x45\xdf\xa3"
+    )
+    if not signature_ok:
+        raise ValueError("VIDEO_CONTENT_INVALID")
+    return {
+        "mimeType": mime_type,
+        "bytes": len(raw),
+        "sha256Prefix": hashlib.sha256(raw).hexdigest()[:12],
+    }, raw
 
 
 def _decode_image(raw: bytes) -> Any:
@@ -398,6 +438,163 @@ def _run_paddle_ocr(image: Any) -> tuple[list[dict[str, Any]], str]:
         _OCR_RUN_LOCK.release()
 
 
+def _video_candidate_summary(temporal: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates = []
+    for plate, item in temporal.items():
+        scores = [score for score in item.get("scores", []) if score is not None]
+        candidates.append({
+            "plate": plate,
+            "hits": int(item.get("hits", 0)),
+            "maxScore": max(scores) if scores else None,
+            "timesSec": [round(float(value), 2) for value in item.get("times", [])[:6]],
+        })
+    return sorted(
+        candidates,
+        key=lambda item: (int(item.get("hits", 0)), _number(item.get("maxScore")) or -1),
+        reverse=True,
+    )[:8]
+
+
+def _analyze_video(video_data: str) -> dict[str, Any]:
+    metadata, raw = upload_video_metadata(video_data)
+    if cv2 is None:
+        raise RuntimeError("VIDEO_DECODER_UNAVAILABLE")
+
+    started = time.perf_counter()
+    temp_path = None
+    capture = None
+    temporal: dict[str, dict[str, Any]] = {}
+    observations: list[dict[str, Any]] = []
+    frames_decoded = 0
+    frames_sampled = 0
+    fps = 0.0
+    frame_width = None
+    frame_height = None
+    try:
+        suffix = ".webm" if metadata["mimeType"] in {"video/webm", "video/x-matroska"} else ".mp4"
+        with tempfile.NamedTemporaryFile(prefix="flowtwin-cv-", suffix=suffix, delete=False) as handle:
+            handle.write(raw)
+            handle.flush()
+            temp_path = handle.name
+
+        capture = cv2.VideoCapture(temp_path)
+        if not capture.isOpened():
+            raise RuntimeError("VIDEO_DECODE_FAILED")
+        fps = _number(capture.get(cv2.CAP_PROP_FPS)) or 25.0
+        fps = max(1.0, min(fps, 120.0))
+        frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0) or None
+        frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0) or None
+        sample_every = max(1, int(round(fps / VIDEO_SAMPLE_FPS)))
+        max_decode_frames = max(1, int(math.ceil(VIDEO_MAX_SECONDS * fps)))
+
+        while frames_decoded < max_decode_frames:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            frame_index = frames_decoded
+            frames_decoded += 1
+            if frame_index % sample_every != 0:
+                continue
+            frames_sampled += 1
+            records, _engine_label = _run_paddle_ocr(_resize_image(frame))
+            valid, _raw_candidates = _plate_candidates(records)
+            if not valid:
+                continue
+            best = max(valid, key=lambda item: _number(item.get("score")) or -1)
+            plate = str(best.get("plate") or "").strip()
+            if not plate:
+                continue
+            score = _number(best.get("score"))
+            time_sec = frame_index / fps
+            item = temporal.setdefault(plate, {"hits": 0, "scores": [], "times": []})
+            item["hits"] += 1
+            if score is not None:
+                item["scores"].append(score)
+            item["times"].append(time_sec)
+            if len(observations) < 24:
+                observations.append({
+                    "timeSec": round(time_sec, 2),
+                    "plate": plate,
+                    "score": score,
+                })
+
+        candidates = _video_candidate_summary(temporal)
+        stable = [candidate for candidate in candidates if candidate["hits"] >= VIDEO_MIN_STABLE_HITS]
+        selected = stable[0] if stable else None
+        ocr_score = _number(selected.get("maxScore")) if selected else None
+        recognition_status = "recognized" if selected else "unrecognized"
+        return {
+            "ok": True,
+            "mode": "local-video-ocr",
+            "inferenceStatus": "executed",
+            "source": "本地视觉服务 · PaddleOCR 视频抽帧车牌 OCR",
+            "engine": "PaddleOCR 本地 CPU",
+            "observedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "processingMs": round((time.perf_counter() - started) * 1000, 2),
+            "input": {"kind": "uploaded-video", **metadata},
+            "video": {
+                "durationSec": round(min(frames_decoded / fps, VIDEO_MAX_SECONDS), 2),
+                "fps": round(fps, 2),
+                "dimensions": [frame_width, frame_height] if frame_width and frame_height else None,
+                "framesDecoded": frames_decoded,
+                "framesSampled": frames_sampled,
+                "sampleFps": VIDEO_SAMPLE_FPS,
+                "maxDurationSec": VIDEO_MAX_SECONDS,
+                "stableHitsRequired": VIDEO_MIN_STABLE_HITS,
+                "observations": observations,
+            },
+            "capabilities": {
+                "plateOcr": "executed",
+                "vehicleDetection": "not-run",
+                "parkingDetection": "not-run",
+                "payment": "not-run",
+            },
+            "vehicles": [],
+            "parking": [],
+            "queueVehicles": None,
+            "arrivalRecognition": {
+                "status": recognition_status,
+                "plate": selected["plate"] if selected else None,
+                "confidence": ocr_score,
+                "confidenceType": "paddleocr-rec-score-temporal" if ocr_score is not None else None,
+                "event": "视频抽帧车牌 OCR 识别" if selected else "视频抽帧未找到稳定车牌",
+                "source": "paddleocr",
+                "candidates": candidates,
+                "formatCheck": "passed" if selected else "not-passed",
+            },
+            "paymentReceipt": {
+                "status": "not-run",
+                "receiptId": None,
+                "amount": None,
+                "message": "未执行任何支付动作",
+                "source": "local-video-ocr",
+            },
+            "confidence": ocr_score,
+            "confidenceType": "paddleocr-rec-score-temporal" if ocr_score is not None else None,
+            "evidence": [
+                "视频仅在本地临时文件中解码，处理结束后删除",
+                "按固定采样频率抽帧，连续命中同一车牌后才判定为稳定识别",
+                "识别结果经过中国车牌格式校验",
+                "本次未执行车辆检测、车位检测或支付",
+            ],
+            "dataBoundary": "本次仅支持短视频抽帧车牌 OCR；未执行实时摄像头、车辆检测、车位检测或真实支付",
+        }
+    except OcrBusyError:
+        raise
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("VIDEO_OCR_FAILED") from exc
+    finally:
+        if capture is not None:
+            capture.release()
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+
 def _base_upload_result(metadata: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
@@ -449,6 +646,39 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
             "evidence": ["样例请求不执行模型推理", "完整合成演示由 Node 主服务提供"],
             "dataBoundary": "本地 CV 服务样例未执行视觉推理",
         }
+    if mode == "video":
+        video_data = str(payload.get("videoData") or "")
+        metadata, _raw = upload_video_metadata(video_data)
+        try:
+            return _analyze_video(video_data)
+        except OcrBusyError:
+            raise
+        except RuntimeError as exc:
+            return {
+                "ok": True,
+                "mode": "local-video-ocr-unavailable",
+                "inferenceStatus": "not-run",
+                "source": "本地视觉服务 · 视频 OCR 未就绪",
+                "engine": "PaddleOCR 本地 CPU",
+                "observedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "processingMs": round((time.perf_counter() - started) * 1000, 2),
+                "input": {"kind": "uploaded-video", **metadata},
+                "video": {"maxDurationSec": VIDEO_MAX_SECONDS, "sampleFps": VIDEO_SAMPLE_FPS},
+                "capabilities": {"plateOcr": "not-run", "vehicleDetection": "not-run", "parkingDetection": "not-run", "payment": "not-run"},
+                "vehicles": [],
+                "parking": [],
+                "queueVehicles": None,
+                "arrivalRecognition": {"status": "unavailable", "plate": None, "confidence": None, "event": "未执行：视频解码或本地模型未就绪", "source": "local-video-ocr"},
+                "paymentReceipt": {"status": "not-run", "receiptId": None, "amount": None, "message": "未执行任何支付动作", "source": "local-video-ocr"},
+                "confidence": None,
+                "confidenceType": None,
+                "evidence": [
+                    "视频格式已通过校验，但本次没有完成视频抽帧 OCR",
+                    f"本地运行条件：{str(exc).split(':', 1)[0]}",
+                    "未返回车牌号，也未生成支付结果",
+                ],
+                "dataBoundary": "本次视频未完成视觉推理，不能把结果当作识别结论",
+            }
     if mode != "upload":
         raise ValueError("UNSUPPORTED_CV_MODE")
 

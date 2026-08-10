@@ -4845,7 +4845,8 @@
       .vision-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); gap: 16px; margin-top: 16px; }
       .vision-preview-card, .vision-detail-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
       .vision-preview-card h3, .vision-detail-card h3 { margin: 0 0 10px; font-size: 13px; }
-      .vision-preview { display: block; width: 100%; max-height: 430px; min-height: 180px; object-fit: contain; border-radius: 8px; background: #eef2ef; }
+       .vision-preview, .vision-preview-video { display: block; width: 100%; max-height: 430px; min-height: 180px; object-fit: contain; border-radius: 8px; background: #eef2ef; }
+       .vision-preview-video { height: auto; }
       .vision-preview-empty { display: grid; min-height: 260px; place-items: center; padding: 24px; border: 1px dashed #cbd6d1; border-radius: 8px; color: var(--quiet); font-size: 12px; text-align: center; }
       .vision-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
       .vision-metric { min-width: 0; padding: 10px; border-radius: 8px; background: var(--surface-soft); }
@@ -5185,13 +5186,13 @@
           <div>
             <div class="eyebrow">Station vision evidence</div>
             <h2>站内视觉链路（轻量 MVP）</h2>
-            <p>把“站内画面 → 车辆/车位状态 → 到站事件”串成可演示的业务链路。内置画面用于固定种子演示；上传图片支持本地 PaddleOCR 车牌识别（需配置本地模型），未配置或识别失败时不会返回虚构车牌。车辆检测、车位检测和真实扣款仍单独标注为未执行。</p>
+            <p>把“站内画面 → 车辆/车位状态 → 到站事件”串成可演示的业务链路。内置画面用于固定种子演示；照片或短视频支持本地 PaddleOCR 车牌识别，视频采用受限抽帧并要求连续命中后才判定稳定结果。车辆检测、车位检测、实时摄像头和真实扣款仍单独标注为未执行。</p>
           </div>
           <div class="vision-head-actions"><button class="close-button" id="closeVision" aria-label="关闭视觉演示"><i data-lucide="x"></i></button></div>
         </div>
         <div class="vision-toolbar">
           <button class="vision-action primary" id="visionSampleButton" type="button"><i data-lucide="sparkles"></i>分析内置合成画面</button>
-          <label for="visionFileInput"><span>上传清晰车牌近照</span><input id="visionFileInput" type="file" accept="image/png,image/jpeg,image/webp" /></label>
+          <label for="visionFileInput"><span id="visionUploadLabel">上传车牌照片或短视频</span><input id="visionFileInput" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,video/x-matroska" /></label>
           <button class="vision-action" id="visionUploadButton" type="button" disabled><i data-lucide="scan-search"></i>本地 OCR 识别</button>
           <span class="vision-status" id="visionStatus" data-state="idle" role="status" aria-live="polite">尚未运行</span>
         </div>
@@ -5200,6 +5201,7 @@
             <h3>标注画面</h3>
             <div class="vision-preview-empty" id="visionPreviewEmpty">点击“分析内置合成画面”查看完整演示。<br />结果会明确标注是真实推理、规则分析还是合成降级。</div>
             <img class="vision-preview" id="visionPreviewImage" alt="站内视觉分析标注画面" hidden />
+            <video class="vision-preview-video" id="visionPreviewVideo" controls muted autoplay loop playsinline preload="auto" hidden></video>
           </article>
           <article class="vision-detail-card">
             <h3>识别结果</h3>
@@ -5216,9 +5218,10 @@
               <div><dt>支付收据</dt><dd id="visionReceipt">—</dd></div>
               <div><dt>检测时间</dt><dd id="visionObservedAt">—</dd></div>
               <div><dt>处理耗时</dt><dd id="visionProcessingTime">—</dd></div>
+              <div><dt>视频采样</dt><dd id="visionVideoStats">—</dd></div>
             </dl>
             <ul class="vision-evidence" id="visionEvidence"><li>等待分析结果</li></ul>
-            <div class="vision-boundary" id="visionBoundary">当前视觉链路优先走本地部署：车牌近照可由 PaddleOCR 在本地执行识别；车辆检测、车位检测和真实扣款不因 OCR 结果而被假装完成。</div>
+            <div class="vision-boundary" id="visionBoundary">当前视觉链路优先走本地部署：车牌照片或短视频可由 PaddleOCR 在本地执行车牌 OCR；视频仅做受限抽帧，不代表已接入实时摄像头。车辆检测、车位检测和真实扣款不因 OCR 结果而被假装完成。</div>
             <pre class="vision-json" id="visionJson" hidden></pre>
           </article>
         </div>

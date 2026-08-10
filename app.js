@@ -6389,16 +6389,28 @@
     const inferenceStatus = visionInferenceStatus(result);
     const inferenceNotRun = inferenceStatus === "not-run";
     const preview = byId("visionPreviewImage");
+    const previewVideo = byId("visionPreviewVideo");
     const empty = byId("visionPreviewEmpty");
     const image = result?.annotatedImage || result?.previewImage;
-    if (preview && image) {
+    const videoSource = result?.previewVideo;
+    if (preview && image && !videoSource) {
       preview.src = image;
       preview.hidden = false;
-      if (empty) empty.hidden = true;
     } else {
       if (preview) { preview.hidden = true; preview.removeAttribute("src"); }
-      if (empty) empty.hidden = false;
     }
+    if (previewVideo && videoSource) {
+      previewVideo.src = videoSource;
+      previewVideo.hidden = false;
+      previewVideo.load();
+      void previewVideo.play().catch(() => {});
+    } else if (previewVideo) {
+      previewVideo.pause();
+      previewVideo.hidden = true;
+      previewVideo.removeAttribute("src");
+      previewVideo.load();
+    }
+    if (empty) empty.hidden = Boolean(image || videoSource);
 
     const vehicles = Array.isArray(result?.vehicles) ? result.vehicles : [];
     const parking = Array.isArray(result?.parking) ? result.parking : [];
@@ -6432,6 +6444,14 @@
     setText("visionObservedAt", visionText(result?.observedAt));
     const processingMsValue = result?.processingMs == null ? null : Number(result.processingMs);
     setText("visionProcessingTime", Number.isFinite(processingMsValue) ? `${processingMsValue} ms` : "—");
+    const videoMeta = result?.video && typeof result.video === "object" ? result.video : null;
+    const sampled = videoMeta?.framesSampled == null ? null : Number(videoMeta.framesSampled);
+    const decoded = videoMeta?.framesDecoded == null ? null : Number(videoMeta.framesDecoded);
+    const sampleFps = videoMeta?.sampleFps == null ? null : Number(videoMeta.sampleFps);
+    const durationSec = videoMeta?.durationSec == null ? null : Number(videoMeta.durationSec);
+    setText("visionVideoStats", Number.isFinite(sampled) && Number.isFinite(decoded)
+      ? `${sampled}/${decoded} 帧 · ${Number.isFinite(sampleFps) ? sampleFps : "—"} fps · ${Number.isFinite(durationSec) ? durationSec : "—"} 秒`
+      : "—");
     const evidence = byId("visionEvidence");
     if (evidence) evidence.innerHTML = (Array.isArray(result?.evidence) && result.evidence.length ? result.evidence : ["暂无可展示的计算依据"]).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
     setText("visionBoundary", visionText(result?.dataBoundary, "视觉结果边界待确认"));
@@ -6440,6 +6460,7 @@
       const safe = Object.assign({}, result || {});
       delete safe.annotatedImage;
       delete safe.previewImage;
+      delete safe.previewVideo;
       json.textContent = JSON.stringify(safe, null, 2);
       json.hidden = !result;
     }
@@ -6458,8 +6479,11 @@
 
   async function readVisionFile(file) {
     if (!file) return null;
-    if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) throw new Error("只支持 PNG、JPEG 或 WebP 图片");
-    if (file.size > 4 * 1024 * 1024) throw new Error("图片不能超过 4 MB");
+    const isImage = /^image\/(png|jpeg|webp)$/i.test(file.type);
+    const isVideo = /^video\/(mp4|webm|quicktime|x-matroska)$/i.test(file.type);
+    if (!isImage && !isVideo) throw new Error("只支持 PNG、JPEG、WebP 图片或 MP4、WebM、MOV 短视频");
+    const maxBytes = isVideo ? 24 * 1024 * 1024 : 4 * 1024 * 1024;
+    if (file.size > maxBytes) throw new Error(isVideo ? "视频不能超过 24 MB" : "图片不能超过 4 MB");
     return await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onerror = () => reject(new Error("读取图片失败"));
@@ -6478,16 +6502,23 @@
     try {
       const body = { mode, seed: "flowtwin-vision-01" };
       if (mode === "upload") {
-        if (!state.visionFile) throw new Error("请先选择一张图片");
-        body.imageData = await readVisionFile(state.visionFile);
+        if (!state.visionFile) throw new Error("请先选择一张图片或短视频");
+        const isVideo = /^video\//i.test(state.visionFile.type);
+        body.mode = isVideo ? "video" : "upload";
+        const dataUrl = await readVisionFile(state.visionFile);
+        if (isVideo) body.videoData = dataUrl;
+        else body.imageData = dataUrl;
         body.fileName = state.visionFile.name;
       }
-      const result = await postJson("/api/cv/analyze", body, mode === "upload" ? 65000 : 25000);
+      const isVideo = body.mode === "video";
+      const result = await postJson("/api/cv/analyze", body, isVideo ? 125000 : mode === "upload" ? 65000 : 25000);
       if (requestId !== state.visionRequestVersion) return;
       // Keep the preview in the browser's existing FileReader data URL. The
       // local CV service should not echo the uploaded plate image back in its
       // JSON response, which reduces memory duplication and data retention.
-      renderVisionResult(mode === "upload" ? { ...result, previewImage: body.imageData } : result);
+      renderVisionResult(body.mode === "video"
+        ? { ...result, previewVideo: body.videoData }
+        : mode === "upload" ? { ...result, previewImage: body.imageData } : result);
     } catch (error) {
       if (status) { status.dataset.state = "error"; status.textContent = error?.message || "视觉分析失败"; }
       showToast(error?.message || "视觉分析失败", 3200);
@@ -6956,7 +6987,15 @@
       const button = byId("visionUploadButton");
       if (button) button.disabled = !state.visionFile;
       const status = byId("visionStatus");
-      if (status && state.visionFile) { status.dataset.state = "idle"; status.textContent = `已选择 · ${state.visionFile.name}`; }
+      const label = byId("visionUploadLabel");
+      if (status && state.visionFile) {
+        const kind = /^video\//i.test(state.visionFile.type) ? "视频" : "图片";
+        status.dataset.state = "idle";
+        status.textContent = `已选择${kind} · ${state.visionFile.name}`;
+        if (label) label.textContent = kind === "视频" ? "已选短视频" : "已选车牌照片";
+      } else if (label) {
+        label.textContent = "上传车牌照片或短视频";
+      }
     });
     byId("validationEvidenceButton")?.addEventListener("click", openValidationEvidence);
     byId("closeValidationEvidence")?.addEventListener("click", closeValidationEvidence);
