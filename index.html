@@ -3962,6 +3962,13 @@
         transition: bottom 420ms cubic-bezier(0.22, 1, 0.36, 1), transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
       }
 
+      /* The composer belongs only to the driver workflow. Remove it from the
+         visual layer when another mode is active instead of leaving a stale
+         floating input above that page. */
+      .ai-composer-dock[hidden] {
+        display: none !important;
+      }
+
       .ai-composer-status {
         width: max-content;
         max-width: min(480px, calc(100vw - 68px));
@@ -5177,8 +5184,8 @@
         <div class="vision-head">
           <div>
             <div class="eyebrow">Station vision evidence</div>
-            <h2>站内到站识别与车位感知</h2>
-            <p>把“到站识别 → 车位/枪位状态 → 等待预测输入 → 模拟收据”串成可演示的视觉链路。当前优先展示本地合成画面；可选 CV 服务接入后再替换推理适配器，不影响路线规划主流程。</p>
+            <h2>站内视觉链路（轻量 MVP）</h2>
+            <p>把“站内画面 → 车辆/车位状态 → 等待预测输入 → 到站事件”串成可演示的业务链路。当前内置画面是固定种子合成演示；上传图片只做格式与元数据检查。真实摄像头流、真实车牌 OCR/车位检测模型权重和真实扣款尚未接入，页面会明确标出未执行状态。</p>
           </div>
           <div class="vision-head-actions"><button class="close-button" id="closeVision" aria-label="关闭视觉演示"><i data-lucide="x"></i></button></div>
         </div>
@@ -5211,7 +5218,7 @@
               <div><dt>处理耗时</dt><dd id="visionProcessingTime">—</dd></div>
             </dl>
             <ul class="vision-evidence" id="visionEvidence"><li>等待分析结果</li></ul>
-            <div class="vision-boundary" id="visionBoundary">视觉模块只用于本地演示，不接入真实摄像头、不保存原始车牌、不执行真实扣款。</div>
+            <div class="vision-boundary" id="visionBoundary">当前为轻量视觉 MVP：使用固定种子合成画面串联业务链路；未接入真实摄像头流、真实车牌 OCR/车位检测模型权重或真实扣款，上传图片也不作为真实识别结论。</div>
             <pre class="vision-json" id="visionJson" hidden></pre>
           </article>
         </div>

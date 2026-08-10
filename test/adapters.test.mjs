@@ -170,10 +170,75 @@ test("Feishu strategy input carries bounded forecast evidence without adding tab
   ].sort());
   const evidence = JSON.parse(fields["策略输入"]);
   assert.equal(evidence.source, "FlowTwin 演示仿真");
-  assert.match(evidence.analysisBoundary, /不得把仿真说成企业实时经营数据/);
+  assert.match(evidence.boundary, /非企业实时经营结论/);
   assert.equal(evidence.forecastEvidence[0].method, "port-discrete-event");
   assert.equal(evidence.forecastEvidence[0].arrivalWaitP90, 18);
-  assert.equal(evidence.forecastEvidence[0].portSnapshot.estimatedReleaseMinutes.length, 12);
   assert.equal(evidence.forecastEvidence[0].portSnapshot.totalPorts, 20);
-  assert.equal(evidence.evidenceTruncated, undefined);
+  assert.equal(evidence.forecastEvidence[0].portSnapshot.estimatedReleaseMinutes, undefined);
+  assert.ok(Buffer.byteLength(fields["策略输入"], "utf8") <= 1000);
+});
+
+test("Feishu AI input stays compact when route stations carry large raw metadata", async () => {
+  clearFeishuCaches();
+  const config = {
+    feishuBaseUrl: "https://open.feishu.cn",
+    feishuAppId: "app-compact",
+    feishuAppSecret: "fake-compact-secret",
+    feishuAppToken: "base-compact",
+    feishuSnapshotTableId: "tbl-compact-snapshot",
+    feishuStrategyTableId: "tbl-compact-strategy",
+    feishuAiStrategyField: "AI策略"
+  };
+  const calls = [];
+  const response = (payload) => ({ ok: true, status: 200, json: async () => payload });
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).includes("tenant_access_token")) return response({ code: 0, tenant_access_token: "tenant-compact", expire: 7200 });
+    if (String(url).includes("batch_create")) return response({ code: 0, data: { records: [{ record_id: "snapshot-compact" }] } });
+    if (options.method === "POST") return response({ code: 0, data: { record: { record_id: "strategy-compact" } } });
+    return response({ code: 0, data: { record: { fields: { AI策略: "已读取精简后的策略输入" } } } });
+  };
+  const stations = Array.from({ length: 40 }, (_, index) => ({
+    id: `station-${index}`,
+    name: `演示站 ${index}`,
+    type: "充电站",
+    occupancy: 0.7,
+    p50: 8,
+    p90: 18,
+    price: 1.4,
+    routeGeometry: "x".repeat(6000),
+    rawPoiPayload: { geometry: "y".repeat(6000), nested: Array(30).fill("raw") },
+    forecastInputSnapshot: {
+      totalPorts: 20,
+      idlePorts: 4,
+      chargingPorts: 14,
+      faultPorts: 2,
+      queueVehicles: 6,
+      estimatedReleaseMinutes: Array.from({ length: 30 }, (_, value) => value * 3)
+    }
+  }));
+  const started = await startFeishuSync({
+    config,
+    fetchImpl,
+    payload: {
+      runId: "run-compact-1",
+      source: "FlowTwin 演示仿真",
+      stations,
+      strategy: {
+        sourceStation: stations[0],
+        targetStation: stations[1],
+        stations,
+        targetUser: "准时敏感用户",
+        discountAmount: 4,
+        impact: { divertedVehicles: 3, roi: 1.1 }
+      }
+    }
+  });
+  assert.equal(started.used, true);
+  const strategyCall = calls.find((call) => call.url.includes("tbl-compact-strategy") && call.options.method === "POST");
+  assert.ok(strategyCall);
+  const strategyBody = JSON.parse(strategyCall.options.body);
+  assert.ok(Buffer.byteLength(strategyBody.fields["策略输入"], "utf8") <= 1000);
+  assert.equal(strategyBody.fields["策略输入"].includes("routeGeometry"), false);
+  assert.equal(strategyBody.fields["策略输入"].includes("estimatedReleaseMinutes"), false);
 });

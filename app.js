@@ -5299,6 +5299,115 @@
     renderFeishuSyncStatus(null);
   }
 
+  function compactFeishuStation(station = {}) {
+    if (!station || typeof station !== "object") return null;
+    const numberOrUndefined = (value) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : undefined;
+    };
+    const textOrUndefined = (value, max = 120) => {
+      const valueText = String(value ?? "").trim();
+      return valueText ? valueText.slice(0, max) : undefined;
+    };
+    const compact = {
+      id: textOrUndefined(station.id, 100),
+      name: textOrUndefined(station.name, 120) || "补能站",
+      city: textOrUndefined(station.city, 80),
+      region: textOrUndefined(station.region, 80),
+      type: textOrUndefined(station.type, 40),
+      source: textOrUndefined(station.source, 120),
+      dataAsOf: textOrUndefined(station.dataAsOf, 80),
+      capacity: numberOrUndefined(station.capacity),
+      occupancy: numberOrUndefined(station.occupancy),
+      arrivals15m: numberOrUndefined(station.arrivals15m ?? station.arrivalRate),
+      serviceRate: numberOrUndefined(station.serviceRate),
+      p50: numberOrUndefined(station.p50 ?? station.wait),
+      p90: numberOrUndefined(station.p90 ?? station.wait),
+      wait: numberOrUndefined(station.wait ?? station.p50),
+      price: numberOrUndefined(station.price),
+      discount: numberOrUndefined(station.discount),
+      diversionRate: numberOrUndefined(station.diversionRate),
+      roi: numberOrUndefined(station.roi),
+      forecastMethod: textOrUndefined(station.forecastMethod, 60),
+      forecastSource: textOrUndefined(station.forecastSource, 80),
+      forecastDataAsOf: textOrUndefined(station.forecastDataAsOf || station.forecastAsOf, 80),
+      forecastSimulation: station.forecastSimulation !== false,
+      forecastFreshnessSeconds: numberOrUndefined(station.forecastFreshnessSeconds),
+      forecastArrivalWaitP50: numberOrUndefined(station.forecastArrivalWaitP50 ?? station.p50),
+      forecastArrivalWaitP90: numberOrUndefined(station.forecastArrivalWaitP90 ?? station.p90)
+    };
+    const input = station.forecastInputSnapshot || station.inputSnapshot;
+    if (input && typeof input === "object" && !Array.isArray(input)) {
+      compact.forecastInputSnapshot = {
+        totalPorts: numberOrUndefined(input.totalPorts),
+        idlePorts: numberOrUndefined(input.idlePorts),
+        chargingPorts: numberOrUndefined(input.chargingPorts),
+        faultPorts: numberOrUndefined(input.faultPorts),
+        queueVehicles: numberOrUndefined(input.queueVehicles),
+        averageSessionMinutes: numberOrUndefined(input.averageSessionMinutes),
+        dataSource: textOrUndefined(input.dataSource, 100)
+      };
+    }
+    return compact;
+  }
+
+  function compactFeishuMetricSnapshot(value = {}) {
+    return {
+      averageWait: Number.isFinite(Number(value.averageWait)) ? Number(value.averageWait) : undefined,
+      p90Wait: Number.isFinite(Number(value.p90Wait)) ? Number(value.p90Wait) : undefined,
+      occupancyDispersion: Number.isFinite(Number(value.occupancyDispersion)) ? Number(value.occupancyDispersion) : undefined,
+      peakQueue: Number.isFinite(Number(value.peakQueue)) ? Number(value.peakQueue) : undefined
+    };
+  }
+
+  function compactFeishuImpact(value = {}) {
+    return {
+      divertedVehicles: Number.isFinite(Number(value.divertedVehicles)) ? Number(value.divertedVehicles) : undefined,
+      roi: Number.isFinite(Number(value.roi)) ? Number(value.roi) : undefined,
+      scenarioRoi: Number.isFinite(Number(value.scenarioRoi)) ? Number(value.scenarioRoi) : undefined,
+      retainedOrders: Number.isFinite(Number(value.retainedOrders)) ? Number(value.retainedOrders) : undefined,
+      incrementalOrders: Number.isFinite(Number(value.incrementalOrders)) ? Number(value.incrementalOrders) : undefined,
+      platformContribution: Number.isFinite(Number(value.platformContribution)) ? Number(value.platformContribution) : undefined,
+      merchantContribution: Number.isFinite(Number(value.merchantContribution)) ? Number(value.merchantContribution) : undefined
+    };
+  }
+
+  function compactFeishuStrategy(strategy = {}, stations = []) {
+    const textOrUndefined = (value, max = 120) => {
+      const valueText = String(value ?? "").trim();
+      return valueText ? valueText.slice(0, max) : undefined;
+    };
+    const numberOrUndefined = (value) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : undefined;
+    };
+    const recommendedBasis = strategy.recommendedBasis && typeof strategy.recommendedBasis === "object"
+      ? {
+          roi: numberOrUndefined(strategy.recommendedBasis.roi),
+          scenarioRoi: numberOrUndefined(strategy.recommendedBasis.scenarioRoi),
+          rule: textOrUndefined(strategy.recommendedBasis.rule, 160)
+        }
+      : undefined;
+    return {
+      before: compactFeishuMetricSnapshot(strategy.before),
+      after: compactFeishuMetricSnapshot(strategy.after),
+      impact: compactFeishuImpact(strategy.impact),
+      discountAmount: numberOrUndefined(strategy.discountAmount),
+      platformCoupon: numberOrUndefined(strategy.platformCoupon),
+      recommendedDiscount: numberOrUndefined(strategy.recommendedDiscount),
+      recommendedPlatformCoupon: numberOrUndefined(strategy.recommendedPlatformCoupon),
+      recommendedBasis,
+      targetUser: textOrUndefined(strategy.targetUser, 100),
+      targetSegment: textOrUndefined(strategy.targetSegment, 80),
+      recommendation: textOrUndefined(strategy.recommendation, 160),
+      capacityBound: strategy.capacityBound === true,
+      unservedPressure: numberOrUndefined(strategy.unservedPressure),
+      sourceStation: compactFeishuStation(strategy.sourceStation),
+      targetStation: compactFeishuStation(strategy.targetStation),
+      stations
+    };
+  }
+
   async function pollFeishuSync(syncId, pollVersion) {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 1800));
@@ -5338,6 +5447,12 @@
       targetUser: "当前运营场景",
       stations: state.stations
     };
+    // Do not send route geometry, POI metadata or long forecast arrays to
+    // Feishu. The Bitable adapter only needs the operational fields below;
+    // keeping this boundary compact also prevents the AI field from receiving
+    // a request that exceeds its context limit.
+    const feishuStations = state.stations.map(compactFeishuStation).filter(Boolean);
+    const feishuStrategy = compactFeishuStrategy(strategy, feishuStations);
     const runId = `operator-${stableHash(JSON.stringify({
       destination: state.destinationName,
       energyType: state.energyType,
@@ -5353,8 +5468,8 @@
     try {
       const result = await postJson("/api/feishu/sync", {
         runId,
-        stations: state.stations,
-        strategy,
+        stations: feishuStations,
+        strategy: feishuStrategy,
         source: "FlowTwin 演示仿真",
         dataAsOf: new Date().toISOString()
       }, 30000);
@@ -5560,6 +5675,17 @@
 
   function setMode(mode) {
     state.mode = mode;
+    const composerDock = byId("aiComposerDock");
+    const isDriverMode = mode === "driver";
+    if (composerDock) {
+      // Hide the driver-only input at the mode boundary. Moving it behind
+      // another panel is not enough because the floating dock remains visible.
+      if (!isDriverMode && composerDock.contains(document.activeElement)) {
+        document.activeElement.blur();
+      }
+      composerDock.hidden = !isDriverMode;
+      composerDock.setAttribute("aria-hidden", String(!isDriverMode));
+    }
     $$("[data-mode]").forEach((button) => {
       const active = button.dataset.mode === mode;
       button.classList.toggle("active", active);
