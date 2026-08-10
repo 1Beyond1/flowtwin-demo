@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from app import analyze, upload_metadata  # noqa: E402
+from app import _normalize_ocr_text, _plate_candidates, analyze, upload_metadata  # noqa: E402
 
 
 def data_url(mime: str, raw: bytes) -> str:
@@ -39,6 +39,23 @@ class CvAdapterTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["inferenceStatus"], "not-run")
         self.assertEqual(result["paymentReceipt"]["status"], "not-run")
+        self.assertIsNone(result["arrivalRecognition"]["plate"])
+        self.assertNotIn("FT2026", json_text(result))
+
+    def test_plate_text_is_normalized_and_format_checked(self):
+        self.assertEqual(_normalize_ocr_text("车牌号：京A·12345"), "京A12345")
+        valid, raw = _plate_candidates([{"text": "车牌号：京A·12345", "score": 0.91}])
+        self.assertEqual(valid[0]["plate"], "京A12345")
+        self.assertEqual(valid[0]["score"], 0.91)
+        self.assertEqual(raw[0]["text"], "京A12345")
+
+    def test_invalid_plate_text_is_not_promoted_to_a_result(self):
+        valid, _ = _plate_candidates([{"text": "京A1234", "score": 0.99}])
+        self.assertEqual(valid, [])
+
+
+def json_text(value):
+    return str(value)
 
 
 if __name__ == "__main__":

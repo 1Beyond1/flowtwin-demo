@@ -12,6 +12,8 @@ test("synthetic vision result is deterministic and exposes the business chain", 
   assert.equal(first.parking.length, 6);
   assert.equal(first.arrivalRecognition.status, "recognized");
   assert.equal(first.paymentReceipt.status, "simulated");
+  assert.equal(first.capabilities.plateOcr, "synthetic");
+  assert.equal(first.capabilities.payment, "simulated");
   assert.match(first.dataBoundary, /合成/);
   assert.match(first.annotatedImage, /^data:image\/svg\+xml/);
 });
@@ -24,6 +26,7 @@ test("upload fallback validates size and never claims a recognition result", () 
   assert.equal(result.inferenceStatus, "not-run");
   assert.equal(result.arrivalRecognition.status, "not-run");
   assert.equal(result.paymentReceipt.status, "not-run");
+  assert.equal(result.capabilities.plateOcr, "not-run");
   assert.match(result.dataBoundary, /未完成视觉推理/);
 
   const tooLarge = `data:image/png;base64,${"A".repeat(Math.ceil(VISION_MAX_IMAGE_BYTES * 4 / 3) + 10)}`;
@@ -56,5 +59,18 @@ test("vision upstream validation rejects a partial success payload", () => {
     dataBoundary: ""
   }), false);
   assert.equal(validateVisionResult({ ...valid, inferenceStatus: "not-run" }), true);
+  assert.equal(validateVisionResult({ ...valid, inferenceStatus: "error" }), true);
   assert.equal(validateVisionResult({ ...valid, inferenceStatus: "made-up" }), false);
+  assert.equal(validateVisionResult({
+    ...valid,
+    inferenceStatus: "executed",
+    mode: "local-ocr",
+    arrivalRecognition: { status: "recognized", plate: "京A12345" }
+  }), true);
+  assert.equal(validateVisionResult({
+    ...valid,
+    inferenceStatus: "executed",
+    mode: "local-ocr",
+    arrivalRecognition: { status: "unrecognized", plate: "京A12345" }
+  }), false);
 });

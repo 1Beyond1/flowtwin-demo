@@ -733,7 +733,26 @@ async function validateApi(request, response) {
 }
 
 async function cvHealthApi(response) {
-  return json(response, 200, visionHealthSummary(config));
+  const summary = visionHealthSummary(config);
+  if (!config.cvServiceUrl) return json(response, 200, summary);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  try {
+    const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/health`, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal
+    });
+    const payload = await upstream.json().catch(() => null);
+    return json(response, 200, {
+      ...summary,
+      localServiceOk: upstream.ok && payload?.ok === true,
+      localRuntime: payload?.runtime || null
+    });
+  } catch {
+    return json(response, 200, { ...summary, localServiceOk: false, localRuntime: null });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function cvAnalyzeApi(request, response) {
@@ -741,12 +760,14 @@ async function cvAnalyzeApi(request, response) {
   // the JSON envelope above that size so the browser's 4 MB image limit and
   // the optional Python adapter agree instead of failing at different layers.
   const body = await readJsonBody(request, 8 * 1024 * 1024);
-  // An optional local Python adapter may provide actual CPU inference. It is
-  // never required for route planning, and a timeout immediately returns to a
-  // clearly labelled local fallback.
-  if (config.cvServiceUrl) {
+  // The optional Python adapter is only used for an uploaded image. The
+  // built-in sample must stay the deterministic Node synthetic demo, while
+  // real uploaded-image OCR is allowed to use the local CPU model.
+  if (config.cvServiceUrl && body.mode === "upload") {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000);
+    // PaddleOCR may load local weights on the first request. Keep this bounded
+    // but longer than the warm inference path, without leaving a request hung.
+    const timeout = setTimeout(() => controller.abort(), 60000);
     try {
       const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
         method: "POST",
@@ -757,6 +778,9 @@ async function cvAnalyzeApi(request, response) {
       const result = await upstream.json().catch(() => null);
       if (upstream.ok && validateVisionResult(result)) {
         return json(response, 200, result);
+      }
+      if (upstream.status === 429 && result && typeof result === "object") {
+        return json(response, 429, result);
       }
     } catch {
       // The fallback below is intentional; do not turn optional CV into a

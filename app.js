@@ -6376,7 +6376,7 @@
 
   function visionInferenceStatus(result = {}) {
     const explicit = String(result.inferenceStatus || "").trim().toLowerCase();
-    if (["synthetic", "executed", "not-run"].includes(explicit)) return explicit;
+    if (["synthetic", "executed", "error", "not-run"].includes(explicit)) return explicit;
     const mode = String(result.mode || "").trim().toLowerCase();
     if (mode === "synthetic") return "synthetic";
     if (mode.includes("fallback") || mode.includes("inspection") || mode === "service-synthetic") return "not-run";
@@ -6402,20 +6402,36 @@
 
     const vehicles = Array.isArray(result?.vehicles) ? result.vehicles : [];
     const parking = Array.isArray(result?.parking) ? result.parking : [];
-    setText("visionVehicleCount", inferenceNotRun ? "未执行" : `${vehicles.length} 辆`);
-    setText("visionIdleSlots", inferenceNotRun ? "未执行" : `${parking.filter((slot) => slot.status === "idle").length} 个`);
-    setText("visionQueueCount", inferenceNotRun || result?.queueVehicles == null ? "未执行" : `${result.queueVehicles} 辆`);
-    setText("visionArrivalState", inferenceNotRun
-      ? "未执行"
-      : result?.arrivalRecognition?.status === "recognized"
-        ? inferenceStatus === "synthetic" ? "已识别（合成演示）" : "已识别"
-        : "未识别");
-    setText("visionConfidence", inferenceNotRun || !Number.isFinite(Number(result?.confidence)) ? "—" : `${Math.round(Number(result.confidence) * 100)}%`);
+    const capabilities = result?.capabilities && typeof result.capabilities === "object" ? result.capabilities : {};
+    const capability = (name, fallback = "not-run") => String(capabilities[name] || fallback).toLowerCase();
+    const capabilityLabel = (name, value) => {
+      const status = capability(name, value);
+      if (status === "not-run" || status === "unavailable") return "未执行";
+      if (status === "error") return "失败";
+      if (status === "simulated") return "模拟";
+      if (status === "synthetic") return "合成演示";
+      return null;
+    };
+    setText("visionVehicleCount", capabilityLabel("vehicleDetection") || `${vehicles.length} 辆`);
+    setText("visionIdleSlots", capabilityLabel("parkingDetection") || `${parking.filter((slot) => slot.status === "idle").length} 个`);
+    setText("visionQueueCount", capabilityLabel("parkingDetection", result?.queueVehicles == null ? "not-run" : "executed") || `${result.queueVehicles} 辆`);
+    const arrivalStatus = String(result?.arrivalRecognition?.status || "not-run").toLowerCase();
+    setText("visionArrivalState", inferenceStatus === "error" || arrivalStatus === "error"
+      ? "推理失败"
+      : arrivalStatus === "unavailable"
+        ? "模型未就绪"
+        : arrivalStatus === "recognized"
+          ? inferenceStatus === "synthetic" ? "已识别（合成演示）" : "已识别"
+          : arrivalStatus === "unrecognized" ? "未识别" : "未执行");
+    setText("visionConfidenceLabel", inferenceStatus === "synthetic" ? "合成演示分数" : "OCR模型分数");
+    const confidenceValue = result?.confidence == null ? null : Number(result.confidence);
+    setText("visionConfidence", inferenceNotRun || !Number.isFinite(confidenceValue) ? "—" : `${(confidenceValue * 100).toFixed(1)}%`);
     setText("visionSource", visionText(result?.source));
     setText("visionPlate", visionText(result?.arrivalRecognition?.plate, "未识别"));
     setText("visionReceipt", visionText(result?.paymentReceipt?.message, "未生成"));
     setText("visionObservedAt", visionText(result?.observedAt));
-    setText("visionProcessingTime", Number.isFinite(Number(result?.processingMs)) ? `${result.processingMs} ms` : "—");
+    const processingMsValue = result?.processingMs == null ? null : Number(result.processingMs);
+    setText("visionProcessingTime", Number.isFinite(processingMsValue) ? `${processingMsValue} ms` : "—");
     const evidence = byId("visionEvidence");
     if (evidence) evidence.innerHTML = (Array.isArray(result?.evidence) && result.evidence.length ? result.evidence : ["暂无可展示的计算依据"]).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
     setText("visionBoundary", visionText(result?.dataBoundary, "视觉结果边界待确认"));
@@ -6429,8 +6445,10 @@
     }
     const status = byId("visionStatus");
     if (status) {
-      status.dataset.state = inferenceNotRun ? "degraded" : "ready";
-      status.textContent = inferenceNotRun
+      status.dataset.state = inferenceStatus === "error" || inferenceNotRun ? "degraded" : "ready";
+      status.textContent = inferenceStatus === "error"
+        ? "视觉推理失败 · 未生成虚构结果"
+        : inferenceNotRun
         ? "已检查 · 未执行视觉推理"
         : inferenceStatus === "synthetic"
           ? "合成演示完成 · 结果可追溯"
@@ -6464,9 +6482,12 @@
         body.imageData = await readVisionFile(state.visionFile);
         body.fileName = state.visionFile.name;
       }
-      const result = await postJson("/api/cv/analyze", body, 25000);
+      const result = await postJson("/api/cv/analyze", body, mode === "upload" ? 65000 : 25000);
       if (requestId !== state.visionRequestVersion) return;
-      renderVisionResult(result);
+      // Keep the preview in the browser's existing FileReader data URL. The
+      // local CV service should not echo the uploaded plate image back in its
+      // JSON response, which reduces memory duplication and data retention.
+      renderVisionResult(mode === "upload" ? { ...result, previewImage: body.imageData } : result);
     } catch (error) {
       if (status) { status.dataset.state = "error"; status.textContent = error?.message || "视觉分析失败"; }
       showToast(error?.message || "视觉分析失败", 3200);

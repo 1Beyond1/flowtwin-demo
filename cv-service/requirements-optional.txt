@@ -1,7 +1,11 @@
 # Optional only; the Node demo and synthetic CV mode do not require these.
+# PaddleOCR 3.x is the preferred local CPU engine. The adapter also keeps a
+# compatibility path for a prepared PaddleOCR 2.x enterprise environment.
+numpy>=1.26,<3
 opencv-python-headless>=4.10,<5
 pillow>=10,<12
-# Install PaddlePaddle/PaddleOCR only if the local CPU environment is prepared.
-# No model weights are bundled or downloaded by the project.
-paddlepaddle>=3.0,<4
-paddleocr>=2.9,<3
+# PaddlePaddle 3.3.x currently has a known CPU PIR/oneDNN conversion crash.
+# Pin the tested CPU-compatible pair instead of allowing an unsafe resolver
+# upgrade during deployment.
+paddlepaddle==3.2.0
+paddleocr==3.3.3

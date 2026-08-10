@@ -5185,14 +5185,14 @@
           <div>
             <div class="eyebrow">Station vision evidence</div>
             <h2>站内视觉链路（轻量 MVP）</h2>
-            <p>把“站内画面 → 车辆/车位状态 → 等待预测输入 → 到站事件”串成可演示的业务链路。当前内置画面是固定种子合成演示；上传图片只做格式与元数据检查。真实摄像头流、真实车牌 OCR/车位检测模型权重和真实扣款尚未接入，页面会明确标出未执行状态。</p>
+            <p>把“站内画面 → 车辆/车位状态 → 到站事件”串成可演示的业务链路。内置画面用于固定种子演示；上传图片支持本地 PaddleOCR 车牌识别（需配置本地模型），未配置或识别失败时不会返回虚构车牌。车辆检测、车位检测和真实扣款仍单独标注为未执行。</p>
           </div>
           <div class="vision-head-actions"><button class="close-button" id="closeVision" aria-label="关闭视觉演示"><i data-lucide="x"></i></button></div>
         </div>
         <div class="vision-toolbar">
           <button class="vision-action primary" id="visionSampleButton" type="button"><i data-lucide="sparkles"></i>分析内置合成画面</button>
-          <label for="visionFileInput"><span>可选：上传一张站内图片</span><input id="visionFileInput" type="file" accept="image/png,image/jpeg,image/webp" /></label>
-          <button class="vision-action" id="visionUploadButton" type="button" disabled><i data-lucide="scan-search"></i>分析上传图片</button>
+          <label for="visionFileInput"><span>上传清晰车牌近照</span><input id="visionFileInput" type="file" accept="image/png,image/jpeg,image/webp" /></label>
+          <button class="vision-action" id="visionUploadButton" type="button" disabled><i data-lucide="scan-search"></i>本地 OCR 识别</button>
           <span class="vision-status" id="visionStatus" data-state="idle" role="status" aria-live="polite">尚未运行</span>
         </div>
         <div class="vision-grid">
@@ -5208,7 +5208,7 @@
               <div class="vision-metric"><span>空闲车位</span><strong id="visionIdleSlots">—</strong></div>
               <div class="vision-metric"><span>排队车辆</span><strong id="visionQueueCount">—</strong></div>
               <div class="vision-metric"><span>到站识别</span><strong id="visionArrivalState">—</strong></div>
-              <div class="vision-metric"><span>识别置信度</span><strong id="visionConfidence">—</strong></div>
+              <div class="vision-metric"><span id="visionConfidenceLabel">模型分数</span><strong id="visionConfidence">—</strong></div>
               <div class="vision-metric"><span>处理来源</span><strong id="visionSource">—</strong></div>
             </div>
             <dl class="vision-detail-list">
@@ -5218,7 +5218,7 @@
               <div><dt>处理耗时</dt><dd id="visionProcessingTime">—</dd></div>
             </dl>
             <ul class="vision-evidence" id="visionEvidence"><li>等待分析结果</li></ul>
-            <div class="vision-boundary" id="visionBoundary">当前为轻量视觉 MVP：使用固定种子合成画面串联业务链路；未接入真实摄像头流、真实车牌 OCR/车位检测模型权重或真实扣款，上传图片也不作为真实识别结论。</div>
+            <div class="vision-boundary" id="visionBoundary">当前视觉链路优先走本地部署：车牌近照可由 PaddleOCR 在本地执行识别；车辆检测、车位检测和真实扣款不因 OCR 结果而被假装完成。</div>
             <pre class="vision-json" id="visionJson" hidden></pre>
           </article>
         </div>
