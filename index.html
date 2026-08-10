@@ -3293,6 +3293,110 @@
         width: 15px;
         height: 15px;
       }
+
+      .mode-choice-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1600;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: rgba(30, 38, 42, 0.34);
+        backdrop-filter: blur(5px);
+      }
+
+      .mode-choice-backdrop[hidden] { display: none; }
+      body.mode-choice-open { overflow: hidden; }
+
+      .mode-choice {
+        width: min(620px, calc(100vw - 32px));
+        padding: 28px;
+        border: 1px solid rgba(215, 221, 218, 0.98);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.99);
+        box-shadow: 0 24px 80px rgba(34, 44, 48, 0.24);
+        outline: 0;
+        animation: mode-choice-in 220ms ease-out;
+      }
+
+      @keyframes mode-choice-in {
+        from { opacity: 0; transform: translateY(10px) scale(.985); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
+
+      .mode-choice-kicker {
+        color: var(--blue);
+        font: 650 10px/1.2 var(--mono);
+        letter-spacing: .08em;
+        text-transform: uppercase;
+      }
+
+      .mode-choice h2 { margin-top: 9px; font-size: 24px; font-weight: 750; }
+      .mode-choice-intro { max-width: 520px; margin-top: 9px; color: var(--muted); font-size: 12px; line-height: 1.65; }
+
+      .mode-choice-options {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 22px;
+      }
+
+      .mode-choice-option {
+        display: grid;
+        min-width: 0;
+        min-height: 174px;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface-soft);
+        color: var(--text);
+        text-align: left;
+        cursor: pointer;
+        font: inherit;
+        transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, transform .16s ease;
+      }
+
+      .mode-choice-option:hover,
+      .mode-choice-option:focus-visible {
+        border-color: #aebff0;
+        background: #f8faff;
+        box-shadow: 0 8px 22px rgba(63, 96, 175, .12);
+        outline: 0;
+        transform: translateY(-2px);
+      }
+
+      .mode-choice-option:first-child { border-color: #c3d0f2; background: #f8faff; }
+      .mode-choice-option-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 9px;
+        background: #e8efff;
+        color: var(--blue);
+      }
+
+      .mode-choice-option-icon svg { width: 17px; height: 17px; }
+      .mode-choice-option-head { display: flex; align-items: center; gap: 7px; margin-top: 15px; }
+      .mode-choice-option-head strong { font-size: 14px; font-weight: 750; }
+      .mode-choice-option-head em { padding: 3px 6px; border-radius: 999px; background: #e8f4f0; color: #16725f; font-size: 9px; font-style: normal; font-weight: 700; }
+      .mode-choice-option small { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+      .mode-choice-option-action { display: flex; align-items: center; gap: 5px; margin-top: auto; padding-top: 15px; color: var(--blue); font-size: 10px; font-weight: 700; }
+      .mode-choice-option-action svg { width: 13px; height: 13px; }
+      .mode-choice-foot { margin-top: 18px; color: var(--quiet); font-size: 10px; line-height: 1.5; }
+
+      @media (max-width: 620px) {
+        .mode-choice { padding: 22px; }
+        .mode-choice-options { grid-template-columns: 1fr; }
+        .mode-choice-option { min-height: 132px; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .mode-choice { animation: none; }
+        .mode-choice-option { transition: none; }
+      }
+
       .amap-marker-content {
         white-space: nowrap;
       }
@@ -5286,10 +5390,10 @@
         </div>
 
         <section class="settings-section" aria-labelledby="displayModeTitle">
-          <div class="settings-section-head"><h3 id="displayModeTitle">显示模式</h3><span>随时切换，刷新后保留</span></div>
+          <div class="settings-section-head"><h3 id="displayModeTitle">显示模式</h3><span>本次访问可随时切换</span></div>
           <div class="display-mode-switch" role="radiogroup" aria-label="显示模式">
             <button type="button" class="display-mode-option active" data-display-mode-option="reviewer" role="radio" aria-checked="true">
-              <strong>评审模式</strong><small>保留来源、预测过程、运营与验证</small>
+              <strong>评委模式</strong><small>保留来源、预测过程、运营与验证</small>
             </button>
             <button type="button" class="display-mode-option" data-display-mode-option="user" role="radio" aria-checked="false">
               <strong>用户模式</strong><small>只看出行、路线、补能、等待、价格与服务建议</small>
@@ -5325,6 +5429,29 @@
           <p class="settings-boundary-note">本页不展示密钥或内部配置，也不会在打开设置时触发 AI、飞书同步或 Webhook。</p>
         </section>
       </aside>
+    </div>
+
+    <div class="mode-choice-backdrop" id="modeChoiceBackdrop" hidden>
+      <section class="mode-choice" id="modeChoicePanel" role="dialog" aria-modal="true" aria-labelledby="modeChoiceTitle" aria-describedby="modeChoiceDescription" tabindex="-1">
+        <div class="mode-choice-kicker">FlowTwin · 展示入口</div>
+        <h2 id="modeChoiceTitle">选择你的体验方式</h2>
+        <p class="mode-choice-intro" id="modeChoiceDescription">同一套出行规划能力，提供两种信息密度。评委模式默认展示，方便查看路线依据、数据边界和计算过程；用户模式则收起实现细节，直接看出行结果。</p>
+        <div class="mode-choice-options" role="group" aria-label="选择显示模式">
+          <button class="mode-choice-option" type="button" data-display-mode-choice="reviewer">
+            <span class="mode-choice-option-icon"><i data-lucide="scan-search"></i></span>
+            <span class="mode-choice-option-head"><strong>评委模式</strong><em>默认</em></span>
+            <small>展示路线规划依据、等待预测、运营仿真、验证结果和数据边界，适合评委查看与项目演示。</small>
+            <span class="mode-choice-option-action">进入评委模式 <i data-lucide="arrow-right"></i></span>
+          </button>
+          <button class="mode-choice-option" type="button" data-display-mode-choice="user">
+            <span class="mode-choice-option-icon"><i data-lucide="route"></i></span>
+            <span class="mode-choice-option-head"><strong>用户模式</strong></span>
+            <small>隐藏复杂的计算和运营信息，突出目的地、路线、补能、等待和服务建议。</small>
+            <span class="mode-choice-option-action">进入用户模式 <i data-lucide="arrow-right"></i></span>
+          </button>
+        </div>
+        <div class="mode-choice-foot">进入后仍可通过右上角“设置”随时切换；本次选择不会被记住，下次访问会重新询问。</div>
+      </section>
     </div>
 
     <div class="demo-notice-backdrop hidden" id="demoNoticeBackdrop">

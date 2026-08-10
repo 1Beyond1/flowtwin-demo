@@ -217,7 +217,6 @@
   const VEHICLE_RANGE_GUIDANCE = { electricFullRangeKm: 600, fuelFullRangeKm: 733, hybridCombinedFullRangeKm: 1200 };
 
   const ENERGY_TYPES = ["electric", "fuel", "hybrid"];
-  const DISPLAY_MODE_STORAGE_KEY = "FLOWTWIN_DISPLAY_MODE";
   const VOICE_AUTO_PLAN_STORAGE_KEY = "FLOWTWIN_VOICE_AUTO_PLAN";
 
   const $ = (selector) => document.querySelector(selector);
@@ -226,14 +225,6 @@
 
   function normalizeDisplayMode(value) {
     return value === "user" ? "user" : "reviewer";
-  }
-
-  function readDisplayMode() {
-    try {
-      return normalizeDisplayMode(window.localStorage.getItem(DISPLAY_MODE_STORAGE_KEY));
-    } catch (_) {
-      return "reviewer";
-    }
   }
 
   function readVoiceAutoPlan() {
@@ -287,9 +278,6 @@
   function setDisplayMode(mode, options = {}) {
     const next = normalizeDisplayMode(mode);
     state.displayMode = next;
-    if (options.persist !== false) {
-      try { window.localStorage.setItem(DISPLAY_MODE_STORAGE_KEY, next); } catch (_) { /* ignore storage failures */ }
-    }
     if (document.body) document.body.dataset.displayMode = next;
     byId("app")?.setAttribute("data-display-mode", next);
     $$('[data-display-mode-option]').forEach((button) => {
@@ -329,7 +317,78 @@
   }
 
   let settingsPreviousFocus = null;
+  let modeChoicePreviousFocus = null;
   let versionInfoLoading = null;
+
+  function modeChoiceFocusableElements() {
+    const panel = byId("modeChoicePanel");
+    if (!panel) return [];
+    return Array.from(panel.querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"))
+      .filter((element) => !element.disabled && !element.hidden && element.offsetParent !== null);
+  }
+
+  function closeModeChoice(mode = "reviewer") {
+    const backdrop = byId("modeChoiceBackdrop");
+    if (!backdrop || backdrop.hidden) return;
+    setDisplayMode(mode);
+    backdrop.hidden = true;
+    document.body.classList.remove("mode-choice-open");
+    const previous = modeChoicePreviousFocus;
+    modeChoicePreviousFocus = null;
+    if (previous && typeof previous.focus === "function" && document.contains(previous)) previous.focus();
+  }
+
+  function openModeChoice() {
+    const backdrop = byId("modeChoiceBackdrop");
+    const panel = byId("modeChoicePanel");
+    if (!backdrop || !panel) return;
+    // Every page visit starts from the reviewer view. The choice is a session
+    // decision only; it is deliberately not persisted between visits.
+    setDisplayMode("reviewer", { persist: false });
+    modeChoicePreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    backdrop.hidden = false;
+    document.body.classList.add("mode-choice-open");
+    window.setTimeout(() => {
+      const first = modeChoiceFocusableElements()[0];
+      (first || panel).focus();
+    }, 0);
+    refreshIcons();
+  }
+
+  function handleModeChoiceKeydown(event) {
+    const backdrop = byId("modeChoiceBackdrop");
+    if (!backdrop || backdrop.hidden) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeModeChoice("reviewer");
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = modeChoiceFocusableElements();
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function initModeChoice() {
+    const backdrop = byId("modeChoiceBackdrop");
+    if (!backdrop) return;
+    $$('[data-display-mode-choice]').forEach((button) => {
+      button.addEventListener("click", () => closeModeChoice(button.dataset.displayModeChoice));
+    });
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) closeModeChoice("reviewer");
+    });
+    document.addEventListener("keydown", handleModeChoiceKeydown);
+    openModeChoice();
+  }
 
   function settingsFocusableElements() {
     const panel = byId("settingsPanel");
@@ -6958,13 +7017,14 @@
     refreshIcons();
     initDemoNotice();
     initSettings();
-    setDisplayMode(readDisplayMode(), { persist: false });
+    setDisplayMode("reviewer", { persist: false });
     initFallback();
     renderParseAnalysis(null);
     setPlanningVisibility(false);
     void loadAiHealthStatus();
     fitIntentInput();
     if (window.innerWidth <= 760) byId("insightPanel").classList.add("hidden");
+    initModeChoice();
     $$("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
     $$(".route-option").forEach((button) => button.addEventListener("click", () => selectRoute(button.dataset.route)));
     byId("resetView").addEventListener("click", () => {
