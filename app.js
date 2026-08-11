@@ -23,6 +23,17 @@
   const DEFAULT_LONG_TRIP_MAX_STOPS = 6;
   const ADAPTIVE_LONG_TRIP_MAX_STOPS = 12;
   const DEFAULT_VISION_SAMPLE_URL = "/assets/vision/default-camera-scene.png";
+  // 地图/演示输入没有支付与驶离事件时间。单独保留一个透明的缓冲项，
+  // 避免把这段时间偷偷塞进“排队”等字段；后续企业适配器可以按站点覆盖。
+  const DEFAULT_PAYMENT_EXIT_MINUTES = Object.freeze({ fuel: 3, electric: 5 });
+
+  function paymentExitMinutesFor(energyType, station = {}) {
+    const explicit = Number(station?.paymentExitMinutes ?? station?.paymentExitBufferMinutes ?? station?.paymentAndExitMinutes);
+    if (Number.isFinite(explicit)) return Number(Math.max(1, Math.min(15, explicit)).toFixed(1));
+    return energyType === "fuel" || energyType === "hybridFuel"
+      ? DEFAULT_PAYMENT_EXIT_MINUTES.fuel
+      : DEFAULT_PAYMENT_EXIT_MINUTES.electric;
+  }
 
   const FALLBACK = {
     origin: [116.491, 39.951],
@@ -254,12 +265,12 @@
     const text = String(value ?? "");
     if (!isUserDisplayMode()) return text;
     return text
-      .replace(/总等待\s*P90/g, "预计等待")
-      .replace(/P90\s*等待风险/g, "拥堵风险")
-      .replace(/P90\s*等待/g, "预计等待")
-      .replace(/P50\s*典型等待/g, "典型等待")
+      .replace(/总等待\s*P90/g, "预计排队")
+      .replace(/P90\s*等待风险/g, "排队风险")
+      .replace(/P90\s*等待/g, "预计排队")
+      .replace(/P50\s*典型等待/g, "典型排队")
       .replace(/\bP90\b/g, "拥堵风险")
-      .replace(/\bP50\b/g, "典型等待");
+      .replace(/\bP50\b/g, "典型排队");
   }
 
   function syncStaticDisplayCopy() {
@@ -271,7 +282,7 @@
     const chart = byId("forecastChart");
     if (chart) {
       chart.setAttribute("aria-label", isUserDisplayMode()
-        ? "未来三十分钟预计等待与拥堵风险预测折线图"
+        ? "未来三十分钟预计排队与拥堵风险预测折线图"
         : "未来三十分钟 P50 与 P90 排队时间预测折线图");
     }
   }
@@ -1763,14 +1774,14 @@
       ["输入状态", `总枪位 ${snapshot.totalPorts ?? "—"} · 空闲 ${snapshot.idlePorts ?? "—"} · 充电中 ${snapshot.chargingPorts ?? "—"} · 排队 ${snapshot.queueVehicles ?? "—"}`],
       ["服务参数", `平均服务 ${snapshot.averageSessionMinutes ?? "—"} 分钟 · 预计释放 ${Array.isArray(snapshot.estimatedReleaseMinutes) ? snapshot.estimatedReleaseMinutes.slice(0, 4).join(" / ") : "—"} 分钟`],
       ["情景输入", `到站偏移 ${scenario.arrivalOffsetMinutes ?? scenario.etaMinutes ?? 0} 分钟 · 天气因子 ${scenario.weatherFactor ?? 1} · 需求因子 ${scenario.demandFactor ?? 1}`],
-      ["当前输出", `P50 ${Number(current.p50 ?? current.wait ?? 0).toFixed(1)} 分钟 · P90 ${Number(current.p90 ?? current.wait ?? 0).toFixed(1)} 分钟`],
+      ["当前输出", `排队 P50 ${Number(current.p50 ?? current.wait ?? 0).toFixed(1)} 分钟 · 排队 P90 ${Number(current.p90 ?? current.wait ?? 0).toFixed(1)} 分钟`],
       ["置信度依据", Number.isFinite(Number(entry?.confidenceScore))
         ? `${entry.confidenceLabel || `${Math.round(Number(entry.confidenceScore))}/100`} · ${(entry.confidenceReasons || []).slice(0, 3).join("；")}`
         : "当前版本未计算动态置信度"],
       ["数据时间", entry?.asOf || snapshot.snapshotTime || "本次演示计算"],
       ["数据来源", entry?.dataSource || "FlowTwin 演示仿真"]
     ];
-    panel.innerHTML = `${lines.map(([label, value]) => `<div><strong>${escapeHtml(label)}：</strong>${escapeHtml(value)}</div>`).join("")}<div><strong>计算口径：</strong>先按到站时刻选择预测点，再用端口释放事件估计队列等待，并从等待分布计算 P50/P90；这是演示仿真，不是能链企业实时数据。</div>${entry?.explanation ? `<div><strong>解释：</strong>${escapeHtml(entry.explanation)}</div>` : ""}`;
+    panel.innerHTML = `${lines.map(([label, value]) => `<div><strong>${escapeHtml(label)}：</strong>${escapeHtml(value)}</div>`).join("")}<div><strong>计算口径：</strong>先按到站时刻选择预测点，再用端口释放事件估计排队，并从排队分布计算 P50/P90；路线 ETA 另行叠加补能服务时长和支付驶离缓冲。这是演示仿真，不是能链企业实时数据。</div>${entry?.explanation ? `<div><strong>解释：</strong>${escapeHtml(entry.explanation)}</div>` : ""}`;
     panel.hidden = true;
     toggle.setAttribute("aria-expanded", "false");
   }
@@ -1868,7 +1879,7 @@
     ].join("|");
   }
 
-  // 企业端口/枪位数据暂未开放。为了让评委能看到“站点等待时间”不是一条
+  // 企业端口/枪位数据暂未开放。为了让评委能看到“站点排队时间”不是一条
   // 写死的数字，这里从已有演示占用率、容量和等待输入推导一份确定性的端口
   // 快照，交给后端的 port-discrete-event 仿真。它必须明确标注为演示数据，
   // 不能伪装成能链实时站点状态；后续拿到脱敏数据时，只替换这层输入。
@@ -3227,7 +3238,7 @@
       "id", "name", "type", "location", "address", "source", "sourceLabel", "stationSource",
       "progressKm", "routeProgress", "detourKm", "detour", "price", "wait", "p50", "p90",
       "occupancy", "capacity", "arrivalRate", "serviceRate", "trend",
-      "estimatedChargePowerKw", "estimatedRefuelRateLpm", "arrivalOffsetMinutes", "arrivalMinute",
+      "estimatedChargePowerKw", "estimatedRefuelRateLpm", "paymentExitMinutes", "arrivalOffsetMinutes", "arrivalMinute",
       "arrivalAtMinutes", "provisionalCorridor", "serviceAreaCandidate"
     ];
     const compact = {};
@@ -3293,6 +3304,7 @@
     let waitVariance = 0;
     let energyCost = 0;
     let elapsedMinutes = 0;
+    let paymentExitMinutesTotal = 0;
     const stops = [];
     for (let index = 0; index < waypoints.length; index += 1) {
       const waypoint = waypoints[index];
@@ -3328,16 +3340,24 @@
       const arrivalSoc = Math.max(0, Math.min(100, energy / profile.capacity * 100));
       energy += amount * profile.transferEfficiency;
       const stationChargeMinutes = longTripChargeMinutes(amount, station);
+      const stationPaymentExitMinutes = paymentExitMinutesFor(isFuelActive() ? "fuel" : "electric", station);
       totalAmount += amount;
       chargeMinutes += stationChargeMinutes;
-      const rawP50 = Math.max(0, Number(station.p50 || station.wait || 0));
-      const rawP90 = Math.max(0, Number(station.p90 || station.wait || 0));
+      paymentExitMinutesTotal += stationPaymentExitMinutes;
+      // 0 is a valid no-queue observation; using `p50 || wait` would silently
+      // replace it with the fallback wait. Also keep P90 monotonic when an
+      // upstream/demo row is malformed.
+      const rawP50Value = Number(station.p50);
+      const rawP90Value = Number(station.p90);
+      const rawWaitValue = Number(station.wait);
+      const rawP50 = Math.max(0, Number.isFinite(rawP50Value) ? rawP50Value : Number.isFinite(rawWaitValue) ? rawWaitValue : 0);
+      const rawP90 = Math.max(0, Number.isFinite(rawP90Value) ? rawP90Value : Number.isFinite(rawWaitValue) ? rawWaitValue : 0);
       const plannedP50 = rawP50;
-      const plannedP90 = rawP90;
+      const plannedP90 = Math.max(plannedP50, rawP90);
       p50Wait += plannedP50;
       // 分位数不可加。各站 P90 直接相加，等于假定这一路每个补能点都同时踩中
       // 各自最差的那 10%——四站独立发生的概率是万分之一，而卡片上印的
-      // "总等待 P90" 正是这个数。按独立性卷积：由每站 p50/p90 反解标准差，
+      // "总排队 P90" 正是这个数。按独立性卷积：由每站 p50/p90 反解标准差，
       // 方差相加后再还原成 P90；只停一次时退化为该站原始 P90。
       const sigma = Math.max(0, (plannedP90 - plannedP50) / Z90);
       waitVariance += sigma * sigma;
@@ -3349,6 +3369,9 @@
         targetSoc: Number((energy / profile.capacity * 100).toFixed(1)),
         energyAmount: Number(amount.toFixed(1)),
         chargeMinutes: stationChargeMinutes,
+        paymentExitMinutes: stationPaymentExitMinutes,
+        stopMinutesP50: Number((plannedP50 + stationChargeMinutes + stationPaymentExitMinutes).toFixed(1)),
+        stopMinutesP90: Number((plannedP90 + stationChargeMinutes + stationPaymentExitMinutes).toFixed(1)),
         arrivalMinute: Math.round(state.departureMinutes + elapsedMinutes),
         canReachStation,
         targetMetAtStop,
@@ -3356,7 +3379,7 @@
         plannedP50: Number(plannedP50.toFixed(1)),
         plannedP90: Number(plannedP90.toFixed(1))
       }));
-      elapsedMinutes += plannedP50 + stationChargeMinutes;
+      elapsedMinutes += plannedP50 + stationChargeMinutes + stationPaymentExitMinutes;
       if (!canReachStation || !targetMetAtStop) break;
     }
     const p90Wait = p50Wait + Z90 * Math.sqrt(waitVariance);
@@ -3375,8 +3398,10 @@
       ? Math.min(serviceMinutes, Math.max(0, (stops.find((stop) => stop.id === servicePlan.inlineStationId)?.chargeMinutes || 0) + (stops.find((stop) => stop.id === servicePlan.inlineStationId)?.p50 || 0)))
       : 0;
     const serviceExtraMinutes = Math.max(0, serviceMinutes - overlapMinutes);
-    const total = Number(route.duration || 0) + wait + chargeMinutes + serviceExtraMinutes;
-    const p90Total = Number(route.duration || 0) + Math.round(p90Wait) + chargeMinutes + serviceExtraMinutes;
+    const totalStopMinutesP50 = Math.round(p50Wait + chargeMinutes + paymentExitMinutesTotal);
+    const totalStopMinutesP90 = Math.round(p90Wait + chargeMinutes + paymentExitMinutesTotal);
+    const total = Number(route.duration || 0) + totalStopMinutesP50 + serviceExtraMinutes;
+    const p90Total = Number(route.duration || 0) + totalStopMinutesP90 + serviceExtraMinutes;
     const arrival = state.departureMinutes + total;
     const lateMinutes = hasArrivalDeadline() ? Math.max(0, Math.ceil(arrival - state.deadlineMinutes)) : 0;
     const onTime = Math.max(50, Math.min(99, 98 - lateMinutes * 3 - Math.round(p90Wait) * 0.18 - stops.length * 1.5));
@@ -3395,7 +3420,13 @@
       wait,
       p50Wait: Math.round(p50Wait),
       p90Wait: Math.round(p90Wait),
+      queueWaitMinutes: wait,
       chargeMinutes,
+      chargingMinutes: chargeMinutes,
+      serviceMinutes: Math.round(chargeMinutes),
+      paymentExitMinutes: Math.round(paymentExitMinutesTotal),
+      totalStopMinutesP50,
+      totalStopMinutesP90,
       total,
       p90Total,
       arrival,
@@ -3887,11 +3918,18 @@
       const route = Object.assign({}, record || base, { station: station || null });
       const energyPlan = calculateEnergyPlan(route, candidateKey, isFuel);
       const hasStop = energyPlan.requiresStop && energyPlan.canReachStation;
-      const wait = hasStop ? Math.max(3, Number(station?.wait) || 5) : 0;
-      const total = route.duration + wait + (hasStop ? energyPlan.chargeMinutes : 0);
+      const wait = hasStop ? Math.max(0, Number.isFinite(Number(station?.wait)) ? Number(station.wait) : 5) : 0;
+      const p50Wait = hasStop ? Math.max(0, Number.isFinite(Number(station?.p50)) ? Number(station.p50) : wait) : 0;
+      const p90Wait = hasStop ? Math.max(p50Wait, Number.isFinite(Number(station?.p90)) ? Number(station.p90) : p50Wait) : 0;
+      const chargingMinutes = hasStop ? energyPlan.chargeMinutes : 0;
+      const paymentExitMinutes = hasStop ? paymentExitMinutesFor(isFuel ? "fuel" : "electric", station) : 0;
+      const totalStopMinutesP50 = Math.round(p50Wait + chargingMinutes + paymentExitMinutes);
+      const totalStopMinutesP90 = Math.round(p90Wait + chargingMinutes + paymentExitMinutes);
+      const total = route.duration + totalStopMinutesP50;
+      const p90Total = route.duration + totalStopMinutesP90;
       const arrival = state.departureMinutes + total;
       const lateMinutes = hasArrivalDeadline() ? Math.max(0, Math.ceil(arrival - state.deadlineMinutes)) : 0;
-      const onTime = Math.max(55, Math.min(99, 98 - lateMinutes * 3 - (Number(station?.p90) || 10) * 0.2));
+      const onTime = Math.max(55, Math.min(99, 98 - lateMinutes * 3 - p90Wait * 0.2));
       // 本次行程的现金支出：补能支出 + 通行/道路成本。与多站长途路径同口径。
       // 旧实现按目标写死 1.65/1.55/1.4 与 1.08/1.0/0.82 的“成本系数”，实际是在
       // 替 simulateStation 里被当成电价的油价打补丁；油价修正后必须去掉，
@@ -3913,7 +3951,17 @@
         routeIdentity: routeIdentity(route, station ? [station] : []),
         station: station || null,
         wait,
+        queueWaitMinutes: Math.round(wait),
+        p50Wait: Math.round(p50Wait),
+        p90Wait: Math.round(p90Wait),
+        chargeMinutes: chargingMinutes,
+        chargingMinutes,
+        serviceMinutes: Math.round(chargingMinutes),
+        paymentExitMinutes: Math.round(paymentExitMinutes),
+        totalStopMinutesP50,
+        totalStopMinutesP90,
         total,
+        p90Total,
         arrival,
         lateMinutes,
         feasible: lateMinutes === 0 && energyPlan.targetMet && energyPlan.detourWithinLimit && (energyPlan.canDirect || energyPlan.canReachStation) && !route.planningFailure,
@@ -3943,7 +3991,7 @@
     ];
     const feasibleFirst = (a, b) => Number(b.feasible) - Number(a.feasible);
     const sortFast = (a, b) => feasibleFirst(a, b) || a.arrival - b.arrival || a.cost - b.cost;
-    const sortStable = (a, b) => feasibleFirst(a, b) || (a.station?.p90 || 0) - (b.station?.p90 || 0) || b.onTime - a.onTime || a.arrival - b.arrival;
+    const sortStable = (a, b) => feasibleFirst(a, b) || (a.p90Total || a.arrival) - (b.p90Total || b.arrival) || b.onTime - a.onTime || a.arrival - b.arrival;
     const sortCheap = (a, b) => feasibleFirst(a, b) || a.cost - b.cost || a.arrival - b.arrival;
     const actualFastest = raw.slice().sort(sortFast)[0];
     const actualStable = raw.slice().sort(sortStable)[0];
@@ -4008,8 +4056,8 @@
         : record.serviceOnly
           ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>服务 <b>${serviceName || "已加入"}</b></span><span>到达 <b>${record.arrivalSoc}%</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
         : record.multiStop
-            ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>补能 <b>${record.stopCount} 次</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>P90 <b>${record.p90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
-            : `<span>用时 <b>${formatDuration(record.total)}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>P50 <b>${record.station?.p50 ?? "—"}分</b></span><span>P90 <b>${record.station?.p90 ?? "—"}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`);
+            ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>补能 <b>${record.stopCount} 次</b></span><span>停靠 <b>${formatDuration(record.totalStopMinutesP50 || 0)}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>排队 P90 <b>${record.p90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
+            : `<span>用时 <b>${formatDuration(record.total)}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>停靠 <b>${formatDuration(record.totalStopMinutesP50 || 0)}</b></span><span>排队 P50 <b>${record.p50Wait ?? record.station?.p50 ?? "—"}分</b></span><span>排队 P90 <b>${record.p90Wait ?? record.station?.p90 ?? "—"}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`);
     }
     if (tag) {
       const objectiveBadgeText = record.feasible && Array.isArray(record.objectiveBadges) && record.objectiveBadges.length > 1
@@ -4073,11 +4121,11 @@
           return;
         }
         const summaries = {
-          fastest: `高德时间优先道路 + 典型等待与补能时长最短；总等待 P50 ${record.p50Wait} 分钟。`,
-          reliable: `按到站时刻的预测 P90 比较尾部等待风险；当前方案 P90 等待 ${record.p90Wait} 分钟。`,
+          fastest: `高德时间优先道路 + 典型排队与补能服务更短；补能停靠总耗时 P50 ${record.totalStopMinutesP50} 分钟（排队 ${record.p50Wait} + 服务 ${record.serviceMinutes} + 支付驶离缓冲 ${record.paymentExitMinutes}）。`,
+          reliable: `按到站时刻的预测 P90 比较尾部风险；当前补能停靠总耗时 P90 ${record.totalStopMinutesP90} 分钟（排队 P90 ${record.p90Wait} + 服务 ${record.serviceMinutes} + 支付驶离缓冲 ${record.paymentExitMinutes}）。`,
           cheapest: `费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}；优先在模拟单价较低的站点补能。`
         };
-        const baseReason = summaries[record.key] || `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：总等待 P90 ${record.p90Wait} 分钟。`;
+         const baseReason = summaries[record.key] || `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：补能停靠总耗时 P90 ${record.totalStopMinutesP90} 分钟。`;
         reason.textContent = displayCopy(withNote(serviceName ? `${baseReason} 已含服务停靠 ${serviceName}。` : baseReason));
         return;
       }
@@ -4542,7 +4590,7 @@
     timeline.hidden = false;
     const hasProvisional = record.stops.some((stop) => stop.provisionalCorridor);
     const verificationNote = hasProvisional ? "高德主路线已核验 · 兜底候选需确认" : "逐段路线已核验";
-    timeline.innerHTML = `<div class="stop-timeline-head"><strong>分段补能账本</strong><span>${verificationNote}</span></div>${record.stops.map((stop) => `<div class="stop-timeline-item"><b>${stop.sequence}</b><div><strong title="${escapeHtml(stop.name)}">${escapeHtml(stop.name)}</strong><small>到站 ${stop.arrivalSoc}% → 补至 ${stop.targetSoc}% · ${stop.legDistanceKm} km${stop.provisionalCorridor ? " · 设备待确认" : ""}</small></div><span>+${stop.energyAmount}${record.energyUnit}</span></div>`).join("")}`;
+     timeline.innerHTML = `<div class="stop-timeline-head"><strong>分段补能账本</strong><span>${verificationNote}</span></div>${record.stops.map((stop) => `<div class="stop-timeline-item"><b>${stop.sequence}</b><div><strong title="${escapeHtml(stop.name)}">${escapeHtml(stop.name)}</strong><small>到站 ${stop.arrivalSoc}% → 补至 ${stop.targetSoc}% · ${stop.legDistanceKm} km · 停靠 P50 ${stop.stopMinutesP50 ?? "—"} 分（排队 ${stop.plannedP50 ?? stop.p50 ?? "—"} + 服务 ${stop.chargeMinutes ?? "—"} + 支付驶离缓冲 ${stop.paymentExitMinutes ?? "—"}）${stop.provisionalCorridor ? " · 设备待确认" : ""}</small></div><span>+${stop.energyAmount}${record.energyUnit}</span></div>`).join("")}`;
   }
 
   function syncInsightDisplayCopy() {
@@ -4584,7 +4632,7 @@
       if (evidence[0]) evidence[0].textContent = hasProvisional
         ? `高德主路线已核验；按沿线候选分配 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`
         : `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`;
-      if (evidence[1]) evidence[1].textContent = `建议累计${isFuelActive() ? "加油" : "补能"} ${record.energyAmount} ${record.energyUnit}，总等待 P50 ${record.p50Wait} 分 / P90 ${record.p90Wait} 分。`;
+      if (evidence[1]) evidence[1].textContent = `建议累计${isFuelActive() ? "加油" : "补能"} ${record.energyAmount} ${record.energyUnit}；补能停靠总耗时 P50 ${record.totalStopMinutesP50} 分 / P90 ${record.totalStopMinutesP90} 分（排队 P50 ${record.p50Wait} + 服务 ${record.serviceMinutes} + 支付驶离缓冲 ${record.paymentExitMinutes}）。`;
       if (evidence[2]) evidence[2].textContent = `总绕行 ${Number(record.detour || 0).toFixed(1)} km · ${formatClock(record.arrival)} 抵达 · ${arrivalReserveDescription(record)}。`;
       renderServiceRecommendations(record);
       updateServiceNudge(record);
@@ -4596,8 +4644,8 @@
       : `当前单次补能无法满足${arrivalReserveDescription(record)}，建议增加补能站`;
     if (evidence[2]) {
       const difference = Math.round(record.arrival - reliable.arrival);
-      if (record.isActualStable && record.isActualFastest) evidence[2].textContent = "该方案同时拥有最早 ETA 与最低 P90 等待风险";
-      else if (record.isActualStable) evidence[2].textContent = `该方案 P90 ${record.station.p90} 分钟，在可行方案中尾部等待风险最低`;
+      if (record.isActualStable && record.isActualFastest) evidence[2].textContent = "该方案同时拥有最早 ETA 与最低 P90 排队风险";
+      else if (record.isActualStable) evidence[2].textContent = `该方案 P90 排队 ${record.station.p90} 分钟，在可行方案中尾部排队风险最低`;
       else if (record.isActualFastest) evidence[2].textContent = `相较低风险方案，预计提前 ${Math.max(0, Math.abs(difference))} 分钟`;
       else if (record.isActualCheapest) evidence[2].textContent = `该方案总成本最低，仍满足当前到达约束`;
       else evidence[2].textContent = `这是成本与风险的可解释备选方案，预计 ${formatClock(record.arrival)} 抵达`;
@@ -6097,9 +6145,9 @@
     setText("operatorSourceName", source?.name || "高峰站点");
     setText("operatorTargetName", target?.name || "暂无平台可执行承接站");
     const stationMetrics = (before, afterEntry) => afterEntry
-      ? `负载 ${(before.occupancy * 100).toFixed(0)}% → ${(afterEntry.occupancy * 100).toFixed(0)}% · 平均等待 ${Math.round(before.wait)} → ${Math.round(afterEntry.wait)} 分钟`
+      ? `负载 ${(before.occupancy * 100).toFixed(0)}% → ${(afterEntry.occupancy * 100).toFixed(0)}% · 平均排队 ${Math.round(before.wait)} → ${Math.round(afterEntry.wait)} 分钟`
       : before
-        ? `负载 ${(before.occupancy * 100).toFixed(0)}% · 预计等待 ${before.p90} 分钟`
+        ? `负载 ${(before.occupancy * 100).toFixed(0)}% · 预计排队 ${before.p90} 分钟`
         : "暂无站点数据";
     setText("operatorSourceMetrics", stationMetrics(source, sourceAfter));
     setText("operatorTargetMetrics", target ? stationMetrics(target, targetAfter) : "全网 POI 可见 · 未纳入运营执行");
@@ -6399,7 +6447,7 @@
     const body = byId("validationTableBody");
     if (body) body.innerHTML = order.map((key) => {
       const row = strategies[key] || {};
-      return `<tr class="${key === "flowtwin" ? "highlight" : ""}"><td>${labels[key]}</td><td>${Number(row.averageWait || 0).toFixed(1)} 分钟</td><td>${Number(row.p90Wait || 0).toFixed(1)} 分钟</td><td>${Number(row.onTimeRate || 0).toFixed(1)}%</td><td>${Number(row.loadDispersion || 0).toFixed(2)}</td><td>${key === "flowtwin" ? `${Number(row.roi || 0).toFixed(2)}x` : "—"}</td></tr>`;
+      return `<tr class="${key === "flowtwin" ? "highlight" : ""}"><td>${labels[key]}</td><td>${Number(row.averageWait || 0).toFixed(1)} 分钟</td><td>${Number(row.p90Wait || 0).toFixed(1)} 分钟</td><td>${Number(row.averageStopMinutes || 0).toFixed(1)} 分钟</td><td>${Number(row.p90StopMinutes || 0).toFixed(1)} 分钟</td><td>${Number(row.onTimeRate || 0).toFixed(1)}%</td><td>${Number(row.loadDispersion || 0).toFixed(2)}</td><td>${key === "flowtwin" ? `${Number(row.roi || 0).toFixed(2)}x` : "—"}</td></tr>`;
     }).join("");
     const baseline = strategies.realtime || {};
     const flowtwin = strategies.flowtwin || {};
@@ -6893,8 +6941,8 @@
       setMapStatus("高德地图已连接 · 真实路线与 POI 已更新", "ready");
       setText("mapAttribution", "高德地图 · 真实路线与 POI / 演示预测状态");
       setText("stationDataNote", activeProvisionalCorridorActive()
-        ? "等待、实时负载和价格为演示模拟数据；高德 POI 以外的路线补能兜底候选仅用于规划演示，需在出发前确认现场设备。"
-        : "等待、实时负载和价格为演示模拟数据；站点名称、坐标和地址来自高德真实 POI。服务区候选的补能设施需现场确认。");
+        ? "排队、补能服务时长、实时负载和价格为演示模拟数据；高德 POI 以外的路线补能兜底候选仅用于规划演示，需在出发前确认现场设备。"
+        : "排队、补能服务时长、实时负载和价格为演示模拟数据；站点名称、坐标和地址来自高德真实 POI。服务区候选的补能设施需现场确认。");
       renderRouteCards();
     } else {
       if (!state.live) {
@@ -6955,8 +7003,8 @@
       setMapStatus("高德地图已连接 · 真实路线与 POI 已更新", "ready");
       setText("mapAttribution", "高德地图 · 真实路线与 POI / 演示预测状态");
       setText("stationDataNote", activeProvisionalCorridorActive()
-        ? "等待、实时负载和价格为演示模拟数据；高德 POI 以外的路线补能兜底候选仅用于规划演示，需在出发前确认现场设备。"
-        : "等待、实时负载和价格为演示模拟数据；站点名称、坐标和地址来自高德真实 POI。服务区候选的补能设施需现场确认。");
+        ? "排队、补能服务时长、实时负载和价格为演示模拟数据；高德 POI 以外的路线补能兜底候选仅用于规划演示，需在出发前确认现场设备。"
+        : "排队、补能服务时长、实时负载和价格为演示模拟数据；站点名称、坐标和地址来自高德真实 POI。服务区候选的补能设施需现场确认。");
     } else {
       prepareFallbackPlan();
       state.hasPlannedRoute = true;
@@ -7267,7 +7315,7 @@
       arrivalAtStationSoc: record.arrivalAtStationSoc,
       arrivalSoc: record.arrivalSoc,
       energyReason: record.energyReason || null,
-      // 等待账本。"总等待 P90" 是卡片上的头条数字，却一直没法核对。分位数不可加，
+      // 排队账本。"总排队 P90" 是卡片上的头条数字，却一直没法核对。分位数不可加，
       // 各站 P90 直接相加会系统性高估、并且停得越多罚得越重；这里把每站的
       // plannedP50/plannedP90 和汇总值一起摊出来，naiveP90Sum 就是旧口径，
       // 两者拉开差距才说明卷积真的生效了（单停时应当相等）。

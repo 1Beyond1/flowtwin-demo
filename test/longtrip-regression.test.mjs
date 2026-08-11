@@ -1,6 +1,30 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLongTripPlans } from "../lib/longtrip.mjs";
+import { buildLongTripPlans, paymentExitMinutes } from "../lib/longtrip.mjs";
+
+test("route timing exposes queue, service, and payment/exit separately", () => {
+  const result = buildLongTripPlans({
+    distanceKm: 300,
+    durationMinutes: 210,
+    energyType: "electric",
+    soc: 40,
+    minArrivalSoc: 20,
+    maxStops: 1,
+    maxDetourKm: 8,
+    stations: [{ id: "only", progressKm: 150, detourKm: 1, p50: 9, p90: 31, price: 1.5, estimatedChargePowerKw: 120 }]
+  });
+  const plan = result.plansByObjective.fastest;
+  const stop = plan.stops[0];
+  assert.equal(paymentExitMinutes("electric"), 5);
+  assert.equal(paymentExitMinutes("fuel"), 3);
+  assert.equal(plan.confidenceScore, null, "legacy station fields must not be presented as a high-confidence forecast");
+  assert.equal(plan.confidenceLevel, null);
+  assert.equal(stop.stopMinutesP50, stop.p50 + stop.chargeMinutes + stop.paymentExitMinutes);
+  assert.equal(plan.totalStopMinutesP50, plan.p50WaitMinutes + plan.serviceMinutes + plan.paymentExitMinutes);
+  assert.equal(plan.totalMinutesP50, 210 + plan.totalStopMinutesP50);
+  assert.equal(plan.totalStopMinutesP90, plan.p90WaitMinutes + plan.serviceMinutes + plan.paymentExitMinutes);
+  assert.equal(plan.totalMinutesP90, 210 + plan.totalStopMinutesP90);
+});
 
 test("1200 km EV trip at 22% SOC produces an energy-safe multi-stop sequence", () => {
   const capacityKwh = 108;

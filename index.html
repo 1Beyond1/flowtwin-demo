@@ -5111,7 +5111,7 @@
         </div>
         <span class="state-badge" id="stationState"><i data-lucide="check-circle-2"></i>预测可用</span>
         <div class="station-stat">
-          <div class="stat-block"><div class="stat-label" id="waitLabel" data-reviewer-copy="预计 P90 等待" data-user-copy="预计等待">预计 P90 等待</div><div class="stat-value" id="waitValue">8 <small>分钟</small></div></div>
+          <div class="stat-block"><div class="stat-label" id="waitLabel" data-reviewer-copy="预计 P90 排队" data-user-copy="预计排队">预计 P90 排队</div><div class="stat-value" id="waitValue">8 <small>分钟</small></div></div>
           <div class="stat-block"><div class="stat-label" id="energyAdviceLabel">建议补能</div><div class="stat-value" id="energyAdviceValue">— <small>kWh</small></div></div>
           <div class="stat-block"><div class="stat-label">预计价格</div><div class="stat-value" id="stationPriceValue">— <small>待确认</small></div></div>
         </div>
@@ -5143,15 +5143,15 @@
               <circle class="forecast-point" cx="264" cy="35" r="3"></circle>
             </g>
           </svg>
-          <div class="forecast-legend" id="forecastLegend"><span><i></i><span data-reviewer-copy="P50 典型等待" data-user-copy="典型等待">P50 典型等待</span></span><span><i></i><span data-reviewer-copy="P90 尾部风险" data-user-copy="拥堵风险">P90 尾部风险</span></span></div>
-          <div class="forecast-source" id="forecastMeta" data-reviewer-only><i data-lucide="database"></i><span>真实站点与路线 · 当前负载、价格及预测为本次仿真；入围后替换为能链脱敏数据。</span></div>
+          <div class="forecast-legend" id="forecastLegend"><span><i></i><span data-reviewer-copy="P50 典型排队" data-user-copy="典型排队">P50 典型排队</span></span><span><i></i><span data-reviewer-copy="P90 排队风险" data-user-copy="拥堵风险">P90 排队风险</span></span></div>
+          <div class="forecast-source" id="forecastMeta" data-reviewer-only><i data-lucide="database"></i><span>真实站点与路线 · 排队、服务时长、价格及预测为本次仿真；入围后替换为能链脱敏数据。</span></div>
           <button class="forecast-evidence-toggle" id="forecastEvidenceToggle" type="button" aria-expanded="false" aria-controls="forecastEvidencePanel"><span>查看计算依据</span><i data-lucide="chevron-down"></i></button>
           <div class="forecast-evidence-panel" id="forecastEvidencePanel" hidden></div>
         </div>
         <div class="evidence-list">
           <div class="evidence-row"><i data-lucide="check"></i><span>绕行较小，预计 19:08 抵达机场</span></div>
           <div class="evidence-row"><i data-lucide="check"></i><span>预计离站电量 54%，覆盖剩余行程</span></div>
-          <div class="evidence-row"><i data-lucide="trending-down"></i><span>相较最快方案，等待尾部风险更低</span></div>
+          <div class="evidence-row"><i data-lucide="trending-down"></i><span>相较最快方案，排队尾部风险更低</span></div>
         </div>
         <div class="stop-timeline" id="stopTimeline" hidden data-reviewer-only></div>
         <div class="arrival-loop" id="serviceFlow" aria-label="非油服务智能推荐">
@@ -5159,7 +5159,7 @@
           <div class="service-recommendations" id="serviceRecommendations"></div>
           <div class="arrival-foot"><span id="serviceStatus">选择一个服务，可加入到站计划</span><button class="arrival-feedback-button" id="serviceFeedbackButton">模拟预约服务</button></div>
         </div>
-        <div class="demo-note" id="stationDataNote" data-reviewer-only>等待、实时负载和价格为演示模拟数据；站点名称与位置来自地图 POI。</div>
+        <div class="demo-note" id="stationDataNote" data-reviewer-only>排队、补能服务时长、实时负载和价格为演示模拟数据；站点名称与位置来自地图 POI。</div>
       </section>
       <button class="panel-reveal reveal-right" id="expandInsight" aria-label="展开站点详情" hidden><span>站点详情</span><i data-lucide="panel-right-open"></i></button>
 
@@ -5177,7 +5177,7 @@
           <article class="analysis-step-card active" id="operatorSimulationStep">
             <div class="analysis-step-top"><span class="analysis-step-number">01</span><span class="analysis-step-state" id="operatorSimulationState">待开始</span></div>
             <strong>策略沙盘计算</strong>
-            <p>用拥堵、容量、等待与平台成本约束计算仿真预计可引导方案，不由大模型替代。</p>
+            <p>用拥堵、容量、排队与平台成本约束计算仿真预计可引导方案，不由大模型替代。</p>
           </article>
           <div class="analysis-flow-connector" aria-hidden="true"><i data-lucide="arrow-right"></i></div>
           <article class="analysis-step-card" id="operatorFeishuStep">
@@ -5194,7 +5194,7 @@
         <section class="station-flow" aria-label="跨站引导沙盘路径">
           <div class="station-flow-head"><strong>本次跨站引导沙盘</strong><span id="operatorLogicHint">根据拥堵、空余容量、绕行与人群敏感度计算</span></div>
           <div class="station-flow-cards">
-            <article class="flow-station-card source"><span>拥堵源站 · 全网观察</span><strong id="operatorSourceName">正在识别高峰站点</strong><p id="operatorSourceMetrics">负载 — · 预计等待 —</p></article>
+            <article class="flow-station-card source"><span>拥堵源站 · 全网观察</span><strong id="operatorSourceName">正在识别高峰站点</strong><p id="operatorSourceMetrics">负载 — · 预计排队 —</p></article>
             <div class="flow-arrow"><i data-lucide="arrow-right"></i><small id="operatorFlowLabel">仿真引导方案</small></div>
             <article class="flow-station-card target"><span>平台承接站 · 可执行</span><strong id="operatorTargetName">正在筛选可承接站</strong><p id="operatorTargetMetrics">全网 POI 可见 · 等待边界校验</p></article>
           </div>
@@ -5263,7 +5263,7 @@
           <div>
             <div class="eyebrow">Evidence view</div>
             <h2>FlowTwin 是否真的改善了补能决策</h2>
-            <p>使用固定种子的合成样本，对比常规策略与 FlowTwin 的等待、准时和站点供需指标。数值用于演示算法口径，不代表能链实时经营数据。</p>
+            <p>使用固定种子的合成样本，对比常规策略与 FlowTwin 的排队、完整停靠、准时和站点供需指标。数值用于演示算法口径，不代表能链实时经营数据。</p>
           </div>
           <div class="validation-head-actions"><button class="validation-evidence-button" id="validationEvidenceButton" type="button" disabled><i data-lucide="book-open-check"></i>查看计算依据</button><button class="close-button" id="closeValidation" aria-label="关闭验证视图"><i data-lucide="x"></i></button></div>
         </div>
@@ -5272,19 +5272,19 @@
           <div class="simulation-progress" aria-label="仿真进度"><span id="validationProgress" style="width:0%"></span></div>
         </div>
         <div class="validation-summary">
-          <div class="validation-kpi"><div class="stat-label">平均等待变化 <small>相较仅实时状态</small></div><strong id="validationAverage">—</strong></div>
-          <div class="validation-kpi"><div class="stat-label">P90 等待变化 <small>相较仅实时状态</small></div><strong id="validationP90">—</strong></div>
+          <div class="validation-kpi"><div class="stat-label">平均排队变化 <small>相较仅实时状态</small></div><strong id="validationAverage">—</strong></div>
+          <div class="validation-kpi"><div class="stat-label">P90 排队变化 <small>相较仅实时状态</small></div><strong id="validationP90">—</strong></div>
           <div class="validation-kpi"><div class="stat-label">准时率变化 <small>相较仅实时状态</small></div><strong id="validationOnTime">—</strong></div>
         </div>
         <div class="validation-table-wrap">
           <table class="validation-table">
-            <thead><tr><th>策略</th><th>平均等待</th><th>P90 等待</th><th>准时率</th><th>利用率离散度</th><th>场景 ROI</th></tr></thead>
+            <thead><tr><th>策略</th><th>平均排队</th><th>P90 排队</th><th>平均停靠</th><th>P90 停靠</th><th>准时率</th><th>利用率离散度</th><th>场景 ROI</th></tr></thead>
             <tbody id="validationTableBody">
-              <tr id="validationEmptyRow"><td colspan="6">尚未运行仿真；点击“验证”后将以当前站点输入计算。</td></tr>
+              <tr id="validationEmptyRow"><td colspan="8">尚未运行仿真；点击“验证”后将以当前站点输入计算。</td></tr>
             </tbody>
           </table>
         </div>
-        <div class="validation-foot"><p id="validationFootText">尚未运行。结果将在固定种子下由当前站点输入生成。</p><span class="source-badge" id="validationSourceBadge">可复现实验 / 非企业真实经营结论</span></div>
+        <div class="validation-foot"><p id="validationFootText">尚未运行。结果将在固定种子下由当前站点输入生成；准时率包含排队、补能服务和支付驶离缓冲，表格同时展示完整停靠耗时。</p><span class="source-badge" id="validationSourceBadge">可复现实验 / 非企业真实经营结论</span></div>
       </section>
 
       <section class="vision-panel" id="visionPanel" aria-label="站内视觉演示" data-reviewer-only>
@@ -5339,7 +5339,7 @@
           <div class="evidence-dialog-head"><div><div class="eyebrow">Reproducible methodology</div><h3 id="validationEvidenceTitle">本次验证的计算依据</h3><p>展示本次仿真的输入、固定随机种子、策略规则与指标公式；同一输入和种子可复现同一结果。</p></div><div class="validation-head-actions"><button class="validation-evidence-button" id="validationRerunButton" type="button"><i data-lucide="rotate-cw"></i>重新运行</button><button class="close-button" id="closeValidationEvidence" aria-label="关闭计算依据"><i data-lucide="x"></i></button></div></div>
           <div class="evidence-summary" id="validationEvidenceSummary"></div>
           <div class="evidence-grid">
-            <article class="evidence-block wide"><h4>参与计算的站点输入</h4><table class="evidence-input-table"><thead><tr><th>站点</th><th>基础等待</th><th>价格</th><th>容量</th><th>负载</th></tr></thead><tbody id="validationEvidenceStationRows"></tbody></table></article>
+          <article class="evidence-block wide"><h4>参与计算的站点输入</h4><table class="evidence-input-table"><thead><tr><th>站点</th><th>基础排队</th><th>价格</th><th>容量</th><th>负载</th></tr></thead><tbody id="validationEvidenceStationRows"></tbody></table></article>
             <article class="evidence-block"><h4>场景生成</h4><ul id="validationEvidenceScenario"></ul></article>
             <article class="evidence-block"><h4>策略选站规则</h4><ul id="validationEvidenceStrategies"></ul></article>
             <article class="evidence-block wide"><h4>指标与核心公式</h4><ul id="validationEvidenceFormulas"></ul></article>
@@ -5358,21 +5358,21 @@
           <button class="route-option" data-route="fastest">
             <div class="option-top"><span class="option-name"><i data-lucide="zap"></i><span class="option-name-text">最快到达</span></span><span class="option-tag">少 8 分钟</span></div>
             <div class="option-main"><strong>18:54</strong><span>预计到达</span></div>
-            <div class="option-metrics"><span>用时 <b>1小时14分</b></span><span>等待 <b>13分</b></span><span>电量 <b>48%</b></span></div>
+            <div class="option-metrics"><span>用时 <b>1小时14分</b></span><span>停靠 <b>31分</b></span><span>排队 <b>13分</b></span><span>电量 <b>48%</b></span></div>
             <div class="option-station">补能 · 站点计算中</div>
             <div class="option-reason">最快，但高峰站点排队尾部风险较高</div>
           </button>
           <button class="route-option selected" data-route="reliable">
             <div class="option-top"><span class="option-name"><i data-lucide="shield-check"></i><span class="option-name-text">最稳妥</span></span><span class="option-tag good">推荐</span></div>
             <div class="option-main"><strong>19:08</strong><span>预计到达</span></div>
-            <div class="option-metrics"><span>用时 <b>1小时28分</b></span><span>等待 <b>8分</b></span><span>准时 <b>96%</b></span></div>
+            <div class="option-metrics"><span>用时 <b>待计算</b></span><span>停靠 <b>待计算</b></span><span>排队 <b>待计算</b></span><span>准时 <b>待计算</b></span></div>
             <div class="option-station">补能 · 站点计算中</div>
-            <div class="option-reason">P90 等待更低 · 绕行较小 · 满足 19:30 到达</div>
+            <div class="option-reason">P90 排队更低 · 绕行较小 · 满足 19:30 到达</div>
           </button>
           <button class="route-option" data-route="cheapest">
             <div class="option-top"><span class="option-name"><i data-lucide="wallet-cards"></i><span class="option-name-text">最低成本</span></span><span class="option-tag">省 ¥9</span></div>
             <div class="option-main"><strong>19:22</strong><span>预计到达</span></div>
-            <div class="option-metrics"><span>用时 <b>1小时42分</b></span><span>等待 <b>11分</b></span><span>成本 <b>¥42</b></span></div>
+            <div class="option-metrics"><span>用时 <b>1小时42分</b></span><span>停靠 <b>29分</b></span><span>排队 <b>11分</b></span><span>成本 <b>¥42</b></span></div>
             <div class="option-station">补能 · 站点计算中</div>
             <div class="option-reason">价格更低，但接近到达时限，不建议作为首选</div>
           </button>
@@ -5428,7 +5428,7 @@
 
         <section class="settings-section settings-boundary" aria-labelledby="boundaryTitle">
           <div class="settings-section-head"><h3 id="boundaryTitle">数据边界</h3></div>
-          <p>路线与地图可来自真实地图服务；站点等待、价格、负载和运营结果是本次仿真。安全余量、可达性、预计等待与价格仍会影响路线选择。</p>
+          <p>路线与地图可来自真实地图服务；站点排队、补能服务时长、价格、负载和运营结果是本次仿真。安全余量、可达性、预计停靠耗时与价格仍会影响路线选择。</p>
           <p class="settings-boundary-note">本页不展示密钥或内部配置，也不会在打开设置时触发 AI、飞书同步或 Webhook。</p>
         </section>
       </aside>
@@ -5461,7 +5461,7 @@
       <section class="demo-notice" role="dialog" aria-modal="true" aria-labelledby="demoNoticeTitle" aria-describedby="demoNoticeDescription">
         <span class="demo-notice-mark"><i data-lucide="map"></i></span>
         <h2 id="demoNoticeTitle">全国长途规划已开启</h2>
-        <p id="demoNoticeDescription">可输入全国可驾车目的地。地图路线和沿线站点会根据高德数据动态查询；站点价格、占用率和等待时间目前使用演示仿真数据。</p>
+        <p id="demoNoticeDescription">可输入全国可驾车目的地。地图路线和沿线站点会根据高德数据动态查询；站点价格、占用率、排队和补能服务时长目前使用演示仿真数据。</p>
         <div class="demo-notice-boundary"><i data-lucide="info"></i><span>建议体验：输入城市、机场、火车站或具体地址，系统将检索路线与沿线补能站。</span></div>
         <div class="demo-notice-action"><button id="demoNoticeConfirm" type="button"><span>知道了，开始体验</span><i data-lucide="arrow-right"></i></button></div>
       </section>
