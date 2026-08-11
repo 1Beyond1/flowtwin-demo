@@ -22,11 +22,13 @@ import { createVersionChecker, loadVersionInfo, resolveVersionRoute } from "./li
 import { AMAP_CACHE_TTLS, createAmapFileCache } from "./lib/amap-cache.mjs";
 import { createRateLimiter, readRateLimitConfig } from "./lib/rate-limit.mjs";
 import { localVisionFallback, validateVisionResult, visionHealthSummary } from "./lib/cv.mjs";
+import { enterprisePriorHealth, enrichStationsWithEnterprisePrior, loadEnterpriseDemandPrior } from "./lib/enterprise-prior.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 let config = null;
 let versionInfo = null;
 let versionChecker = null;
+let enterprisePrior = null;
 const executionCache = new Map();
 const EXECUTION_CACHE_TTL_MS = 15 * 60 * 1000;
 const EXECUTION_CACHE_MAX = 1_000;
@@ -624,7 +626,8 @@ async function forecastApi(request, response) {
   const body = await readJsonBody(request, 128000);
   if (body.stations !== undefined && !Array.isArray(body.stations)) return json(response, 400, { error: "STATIONS_MUST_BE_ARRAY" });
   const scenario = buildForecastApiScenario(body.scenario);
-  const result = forecastStations(body.stations || [], scenario);
+  const stations = enrichStationsWithEnterprisePrior(enterprisePrior, body.stations || [], scenario);
+  const result = forecastStations(stations, scenario);
   // Keep the model's existing response shape while making the accepted
   // departure/arrival scenario auditable to API callers. Only normalized
   // scenario fields are reflected; request data cannot replace server config.
@@ -707,7 +710,12 @@ async function weatherApi(requestUrl, response) {
 async function longTripApi(request, response) {
   const body = await readJsonBody(request, 128000);
   if (!Array.isArray(body.stations)) return json(response, 400, { error: "STATIONS_REQUIRED" });
-  const input = buildLongTripApiInput(body);
+  const scenario = buildForecastApiScenario(body);
+  const enrichedBody = {
+    ...body,
+    stations: enrichStationsWithEnterprisePrior(enterprisePrior, body.stations, scenario)
+  };
+  const input = buildLongTripApiInput(enrichedBody);
   if (!Number.isFinite(input.distanceKm)) {
     return json(response, 400, { error: "INVALID_DISTANCE" });
   }
@@ -843,7 +851,8 @@ async function staticFile(pathname, response) {
   const requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
   const protectedNames = new Set([".env", ".env.example", "config.local.js", "server.mjs", "package.json", "package-lock.json"]);
   if (protectedNames.has(requested) || requested.startsWith(".git") || requested.includes("..")
-    || requested === "runtime" || requested.startsWith("runtime/")) {
+    || requested === "runtime" || requested.startsWith("runtime/")
+    || requested === "data" || requested.startsWith("data/")) {
     response.writeHead(404).end();
     return;
   }
@@ -888,7 +897,8 @@ async function requestHandler(request, response) {
         amapConfigured: hasAmapServiceKey(config),
         ai: buildAiHealthSummary(config),
         feishu: feishuConfigSummary(config),
-        cv: visionHealthSummary(config)
+        cv: visionHealthSummary(config),
+        enterprisePrior: enterprisePriorHealth(enterprisePrior)
       },
       amapCache: config.amapCache?.getStats?.() || null
     });
@@ -925,6 +935,7 @@ async function requestHandler(request, response) {
 
 async function startServer() {
   config = await loadConfig({ root });
+  enterprisePrior = await loadEnterpriseDemandPrior({ root, filePath: join(root, "runtime", "enterprise-demand-prior.json") });
   // Disk cache is ignored by Git and blocked from static serving. It lowers
   // repeated-demo quota use without replacing live route verification.
   config.amapCache = createAmapFileCache({ root });

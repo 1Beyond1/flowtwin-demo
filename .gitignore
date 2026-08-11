@@ -20,6 +20,8 @@ cv-service/__pycache__/
 server-*.log
 .playwright-cli/
 runtime/cache/
+runtime/enterprise-demand-prior.json
+data/
 node_modules/
 dist/
 output/

@@ -1,0 +1,43 @@
+{
+  "artifactVersion": 1,
+  "modelVersion": "fixture-enterprise-prior",
+  "modelType": "seasonal baseline + HistGradientBoosting residual",
+  "source": "脱敏测试样例",
+  "sourceBoundary": "城市×油电类型×小时离线需求先验；仅用于测试",
+  "trainingBaseDate": "2026-04-30",
+  "trainingBucketCount": 2256,
+  "holdoutWape": 0.17848,
+  "rollingValidationMeanWape": 0.131447,
+  "stationCount": 2,
+  "cityCount": 1,
+  "hourCount": 24,
+  "cities": [
+    {
+      "city": "测试市",
+      "centroid": [116.4, 39.9],
+      "types": {
+        "electric": {
+          "stationCount": 1,
+          "meanCapacity": 18,
+          "meanServiceMinutes": 78.9,
+          "holdoutSamples": 408,
+          "holdoutWape": 0.17848,
+          "meanPredictedOrdersPerStationHour": 1,
+          "hourlyOrdersPerStation": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+          "hourlyDemandMultiplier": [0.8, 0.8, 0.8, 0.8, 0.8, 0.9, 1, 1.1, 1.2, 1.2, 1.1, 1, 1, 1, 1, 1.1, 1.2, 1.3, 1.3, 1.2, 1.1, 1, 0.9, 0.8]
+        },
+        "fuel": {
+          "stationCount": 1,
+          "meanCapacity": 9,
+          "meanServiceMinutes": 7.5,
+          "holdoutSamples": 408,
+          "holdoutWape": 0.17848,
+          "meanPredictedOrdersPerStationHour": 1,
+          "hourlyOrdersPerStation": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+          "hourlyDemandMultiplier": [0.8, 0.8, 0.8, 0.8, 0.8, 0.9, 1, 1.1, 1.2, 1.2, 1.1, 1, 1, 1, 1, 1.1, 1.2, 1.3, 1.3, 1.2, 1.1, 1, 0.9, 0.8]
+        }
+      }
+    }
+  ],
+  "limitations": ["脱敏测试样例，不代表企业业务数据"]
+}

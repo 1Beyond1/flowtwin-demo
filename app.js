@@ -1743,7 +1743,10 @@
     const status = byId("forecastStatus");
     if (status) {
       const methodLabel = entry.method === "port-discrete-event" ? "端口级离散事件仿真" : "聚合流量仿真";
-      status.textContent = `${entry.simulation || entry.forecastSource === "simulation" ? "仿真预测" : "演示预测"} · ${methodLabel} · ${entry.horizonMinutes || points.length * 5 - 5} 分钟`;
+      const enterpriseLabel = String(entry.source || entry.forecastSource || "").includes("enterprise-prior")
+        ? " · 企业需求先验已纳入"
+        : "";
+      status.textContent = `${entry.simulation || entry.forecastSource === "simulation" ? "仿真预测" : "演示预测"} · ${methodLabel}${enterpriseLabel} · ${entry.horizonMinutes || points.length * 5 - 5} 分钟`;
     }
     const meta = byId("forecastMeta");
     if (meta) {
@@ -1775,6 +1778,9 @@
       ["服务参数", `平均服务 ${snapshot.averageSessionMinutes ?? "—"} 分钟 · 预计释放 ${Array.isArray(snapshot.estimatedReleaseMinutes) ? snapshot.estimatedReleaseMinutes.slice(0, 4).join(" / ") : "—"} 分钟`],
       ["情景输入", `到站偏移 ${scenario.arrivalOffsetMinutes ?? scenario.etaMinutes ?? 0} 分钟 · 天气因子 ${scenario.weatherFactor ?? 1} · 需求因子 ${scenario.demandFactor ?? 1}`],
       ["当前输出", `排队 P50 ${Number(current.p50 ?? current.wait ?? 0).toFixed(1)} 分钟 · 排队 P90 ${Number(current.p90 ?? current.wait ?? 0).toFixed(1)} 分钟`],
+      ["企业需求先验", entry?.enterprisePrior?.matched
+        ? `${entry.enterprisePrior.city} · ${entry.enterprisePrior.energyType === "fuel" ? "油站" : "电站"} · 需求倍率 ${Number(entry.enterprisePrior.demandFactor || 1).toFixed(2)} · 匹配距离 ${Number(entry.enterprisePrior.matchDistanceKm || 0).toFixed(1)} km`
+        : "未匹配企业先验，使用演示输入"],
       ["置信度依据", Number.isFinite(Number(entry?.confidenceScore))
         ? `${entry.confidenceLabel || `${Math.round(Number(entry.confidenceScore))}/100`} · ${(entry.confidenceReasons || []).slice(0, 3).join("；")}`
         : "当前版本未计算动态置信度"],
@@ -1978,6 +1984,7 @@
           forecastConfidenceLevel: entry.confidenceLevel || null,
           forecastConfidenceLabel: entry.confidenceLabel || null,
           forecastConfidenceReasons: Array.isArray(entry.confidenceReasons) ? entry.confidenceReasons.slice(0, 8) : [],
+          forecastEnterprisePrior: entry.enterprisePrior || null,
           forecastHorizonMinutes: entry.horizonMinutes || payload.horizonMinutes || horizonMinutes,
           forecastSimulation: entry.simulation === true || payload.simulation === true || entry.source === "simulation" || payload.source === "simulation",
           status: risk,
@@ -5441,6 +5448,7 @@
       forecastDataAsOf: textOrUndefined(station.forecastDataAsOf || station.forecastAsOf, 80),
       forecastSimulation: station.forecastSimulation !== false,
       forecastFreshnessSeconds: numberOrUndefined(station.forecastFreshnessSeconds),
+      forecastEnterprisePrior: station.forecastEnterprisePrior || station.enterprisePrior || null,
       forecastArrivalWaitP50: numberOrUndefined(station.forecastArrivalWaitP50 ?? station.p50),
       forecastArrivalWaitP90: numberOrUndefined(station.forecastArrivalWaitP90 ?? station.p90)
     };
