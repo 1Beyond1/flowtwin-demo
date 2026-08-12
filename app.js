@@ -224,6 +224,7 @@
     simulation: {
       active: false,
       paused: false,
+      autoAdvance: true,
       speed: 1,
       phaseIndex: 0,
       phaseElapsedMs: 0,
@@ -237,7 +238,8 @@
       lastFrameAt: 0,
       lastMapCenterAt: 0,
       savedMapView: null,
-      stageContext: null
+      stageContext: null,
+      reservedStops: new Set()
     }
   };
 
@@ -4375,9 +4377,18 @@
       const fallback = (index + 1) / (stops.length + 1);
       const progress = Math.max(previousProgress + 0.035, simulationStopProgress(stop, path, fallback));
       const stopProgress = Math.min(0.94, progress);
+      // Reservation is intentionally triggered just before the station rather
+      // than after the car has already stopped. This mirrors the product story:
+      // the system uses ETA to reserve the next available charging window as
+      // arrival approaches, then the vehicle enters the station.
+      if (!isFuelActive()) {
+        const reservationProgress = Math.max(previousProgress + 0.02, stopProgress - 0.018);
+        addDrive(reservationProgress);
+        const reservationBase = { stop, stopIndex: index, progressStart: reservationProgress, progressEnd: reservationProgress };
+        phases.push({ ...reservationBase, type: "reservation", durationMs: SIMULATION_STAGE_MS.reservation });
+      }
       addDrive(stopProgress);
       const base = { stop, stopIndex: index, progressStart: stopProgress, progressEnd: stopProgress };
-      phases.push({ ...base, type: "reservation", durationMs: SIMULATION_STAGE_MS.reservation });
       phases.push({ ...base, type: "recognition", durationMs: SIMULATION_STAGE_MS.recognition });
       phases.push({ ...base, type: "queue", durationMs: SIMULATION_STAGE_MS.queue });
       phases.push({ ...base, type: "service", durationMs: SIMULATION_STAGE_MS.service });
@@ -4401,7 +4412,7 @@
     const serviceMinutes = Number(stop.chargeMinutes ?? stop.serviceMinutes ?? stop.refuelMinutes);
     switch (phase?.type) {
       case "drive": return { title: "沿路线行驶", meta: "车辆正在按已选路线前往下一个节点" };
-      case "reservation": return { title: "自动预约补能", meta: `${name} · 根据预计到站时间生成演示预约` };
+      case "reservation": return { title: "即将到站 · 自动预约补能", meta: `${name} · 系统已根据 ETA 自动发起演示预约` };
       case "recognition": return { title: "进站车牌识别", meta: "尝试调用本地 PaddleOCR；识别失败不会生成虚假结果" };
       case "queue": return { title: "排队等待", meta: `${name} · ${Number.isFinite(p90) ? `P90 约 ${p90} 分钟` : Number.isFinite(p50) ? `典型约 ${p50} 分钟` : "等待时间为演示仿真"}` };
       case "service": return { title: fuel ? "加油服务" : "充电服务", meta: `${name} · ${Number.isFinite(serviceMinutes) ? `服务约 ${serviceMinutes} 分钟` : "服务时长为演示仿真"}` };
@@ -4422,11 +4433,53 @@
 
   function simulationSceneText(phase) {
     const energy = isFuelActive() ? "燃油" : "纯电";
+    if (phase?.type === "reservation") return `这是${energy}车辆接近补能站的阶段素材。系统根据预计到站时间自动预约，不需要用户手动点击。`;
     if (phase?.type === "recognition") return `这是${energy}车辆到站素材，用于展示视觉链路。图片为 AI 生成样例，不代表实时摄像头。`;
     if (phase?.type === "queue") return `排队数量、端口占用和等待时长来自当前演示仿真；真实接入时由站点状态或企业数据替换。`;
     if (phase?.type === "service") return `展示${energy}补能场景。服务耗时是路线计算中的演示字段，不把图片识别当作服务完成依据。`;
     if (phase?.type === "payment") return "离场扣款仅展示业务步骤；真实支付仍需企业支付接口和授权链路。";
     return "AI 生成场景素材 · 用于模拟驾驶中的流程说明，不是实时摄像头画面。";
+  }
+
+  function simulationMetricValue(value, suffix = "") {
+    return Number.isFinite(Number(value)) ? `${Number(value)}${suffix}` : "—";
+  }
+
+  function simulationSnapshotFor(stop) {
+    const canonical = state.stations.find((candidate) => String(candidate.id) === String(stop?.id)) || null;
+    const station = canonical || state.selectedStation || stop || {};
+    // A long-trip stop can be a compact copy created before the forecast
+    // enrichment finishes. Keep the scene cards connected to the same
+    // deterministic port snapshot used by /api/forecast instead of showing
+    // empty placeholders while the right-hand forecast panel already has
+    // usable station inputs.
+    const fallback = buildDemoPortSnapshot(station);
+    const input = canonical?.forecastInputSnapshot
+      || canonical?.inputSnapshot
+      || state.selectedStation?.forecastInputSnapshot
+      || state.selectedStation?.inputSnapshot
+      || stop?.forecastInputSnapshot
+      || stop?.inputSnapshot
+      || fallback;
+    const firstFinite = (...values) => values.map(Number).find(Number.isFinite);
+    const waitP50 = firstFinite(canonical?.p50, state.selectedStation?.p50, stop?.p50, canonical?.forecastArrivalWaitP50, state.selectedStation?.forecastArrivalWaitP50, stop?.forecastArrivalWaitP50, input.p50, fallback.p50, fallback.wait);
+    const waitP90 = firstFinite(canonical?.p90, state.selectedStation?.p90, stop?.p90, canonical?.forecastArrivalWaitP90, state.selectedStation?.forecastArrivalWaitP90, stop?.forecastArrivalWaitP90, input.p90, fallback.p90, fallback.wait);
+    const queue = firstFinite(input.queueVehicles, input.waitingVehicles, canonical?.queueVehicles, canonical?.waitingVehicles, state.selectedStation?.queueVehicles, state.selectedStation?.waitingVehicles, stop?.queueVehicles, stop?.waitingVehicles, fallback.queueVehicles, fallback.waitingVehicles);
+    const idle = firstFinite(input.idlePorts, input.availablePorts, canonical?.idlePorts, canonical?.availablePorts, state.selectedStation?.idlePorts, state.selectedStation?.availablePorts, stop?.idlePorts, stop?.availablePorts, fallback.idlePorts, fallback.availablePorts);
+    const total = firstFinite(input.totalPorts, canonical?.totalPorts, state.selectedStation?.totalPorts, stop?.totalPorts, fallback.totalPorts);
+    const reserved = firstFinite(input.reservedPorts, canonical?.reservedPorts, state.selectedStation?.reservedPorts, stop?.reservedPorts, fallback.reservedPorts);
+    const service = firstFinite(stop?.serviceMinutes, stop?.chargeMinutes, stop?.refuelMinutes, canonical?.serviceMinutes, canonical?.chargeMinutes, canonical?.refuelMinutes, state.selectedStation?.serviceMinutes, state.selectedStation?.chargeMinutes, state.selectedStation?.refuelMinutes, input.averageSessionMinutes, fallback.averageSessionMinutes);
+    return {
+      station,
+      waitP50,
+      waitP90,
+      queue,
+      idle,
+      total,
+      reserved,
+      service,
+      source: station.forecastSource || input.dataSource || "FlowTwin 演示仿真"
+    };
   }
 
   function renderSimulationScene(phase) {
@@ -4438,6 +4491,8 @@
     const ocrRow = byId("simulationOcrRow");
     if (!card || !image || !phase || !phase.stop || !["reservation", "recognition", "queue", "service", "payment", "leave"].includes(phase.type)) {
       if (card) card.hidden = true;
+      byId("simulationDataGrid")?.setAttribute("hidden", "");
+      byId("simulationDataSource")?.setAttribute("hidden", "");
       return;
     }
     const asset = simulationAssetFor(phase);
@@ -4447,7 +4502,50 @@
     image.onerror = () => { image.removeAttribute("src"); if (badge) badge.textContent = "素材未找到"; };
     if (title) title.textContent = phase.type === "recognition" ? "到站视觉画面" : isFuelActive() ? "加油站场景" : "充电站场景";
     if (badge) badge.textContent = asset ? "AI 生成素材" : "素材待替换";
-    if (text) text.textContent = simulationSceneText(phase);
+    const snapshot = simulationSnapshotFor(phase.stop);
+    if (text) text.textContent = phase.type === "reservation"
+      ? `预计 ${phase.stop?.name || "下一补能站"} 即将到达，系统提前根据 ETA 自动预约，不需要用户手动点击。`
+      : simulationSceneText(phase);
+    let dataGrid = byId("simulationDataGrid");
+    if (!dataGrid) {
+      dataGrid = document.createElement("div");
+      dataGrid.id = "simulationDataGrid";
+      dataGrid.className = "simulation-data-grid";
+      text?.after(dataGrid);
+    }
+    const stageItems = phase.type === "reservation"
+      ? [["预约状态", "已自动预约"], ["预计到站", formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))]]
+      : phase.type === "recognition"
+        ? [["车牌链路", "待执行本地 OCR"], ["到站状态", "已进入识别区"]]
+        : phase.type === "queue"
+          ? [["预计排队 P50", simulationMetricValue(snapshot.waitP50, " 分钟")], ["尾部排队 P90", simulationMetricValue(snapshot.waitP90, " 分钟")], ["排队车辆", simulationMetricValue(snapshot.queue, " 辆")], ["空闲补能位", Number.isFinite(snapshot.idle) ? `${snapshot.idle}/${snapshot.total}` : "—"]]
+          : phase.type === "service"
+            ? [[isFuelActive() ? "加油服务" : "充电服务", simulationMetricValue(snapshot.service, " 分钟")], ["预约占用", simulationMetricValue(snapshot.reserved, " 个")]]
+            : phase.type === "payment"
+              ? [["支付状态", "演示扣款"], ["电子收据", "已生成（演示）"]]
+              : [["站点状态", "已完成补能"], ["下一动作", "继续沿路线行驶"]];
+    dataGrid.innerHTML = stageItems.map(([label, value]) => `<div class="simulation-data-item"><span>${label}</span><strong>${value}</strong></div>`).join("");
+    dataGrid.hidden = false;
+    let source = byId("simulationDataSource");
+    if (!source) {
+      source = document.createElement("div");
+      source.id = "simulationDataSource";
+      source.className = "simulation-data-source";
+      dataGrid.after(source);
+    }
+    source.textContent = phase.type === "recognition"
+      ? "视觉素材：AI 生成样例；OCR：本地 PaddleOCR 实际调用；若服务回传标注图则展示标注结果，否则只展示结构化响应。"
+      : `数据依据：${snapshot.source} · 排队/端口/服务时长仍是演示或企业先验推演。`;
+    source.hidden = false;
+    let ocrDetail = byId("simulationOcrDetail");
+    if (!ocrDetail) {
+      ocrDetail = document.createElement("div");
+      ocrDetail.id = "simulationOcrDetail";
+      ocrDetail.className = "simulation-ocr-detail";
+      source.after(ocrDetail);
+    }
+    ocrDetail.hidden = phase.type !== "recognition";
+    if (phase.type === "recognition") ocrDetail.textContent = "识别结果将在本地 OCR 返回后显示；不会用素材中的文字冒充识别结果。";
     if (ocrRow) ocrRow.hidden = phase.type !== "recognition";
     const ocrStatus = byId("simulationOcrStatus");
     if (ocrStatus && phase.type === "recognition") ocrStatus.textContent = "等待执行本地 OCR";
@@ -4466,7 +4564,19 @@
     if (progress) progress.style.width = `${Math.max(0, Math.min(100, state.simulation.progress * 100))}%`;
     const pause = byId("simulationPauseButton");
     if (pause) {
-      pause.innerHTML = `<i data-lucide="${state.simulation.paused ? "play" : "pause"}"></i><span>${state.simulation.paused ? "继续模拟" : "暂停模拟"}</span>`;
+      const manual = !state.simulation.autoAdvance;
+      pause.disabled = manual;
+      pause.innerHTML = manual
+        ? '<i data-lucide="hand"></i><span>手动推进中</span>'
+        : `<i data-lucide="${state.simulation.paused ? "play" : "pause"}"></i><span>${state.simulation.paused ? "继续模拟" : "暂停模拟"}</span>`;
+    }
+    const next = byId("simulationNextButton");
+    if (next) {
+      const arrived = phase?.type === "arrived";
+      next.disabled = arrived;
+      next.innerHTML = arrived
+        ? '<i data-lucide="check"></i><span>已到达目的地</span>'
+        : '<i data-lucide="skip-forward"></i><span>快进到下一阶段</span>';
     }
     const destination = byId("simulationDestination");
     if (destination) destination.textContent = state.destinationName || "目的地";
@@ -4474,6 +4584,26 @@
     if (navMeta) navMeta.textContent = `${state.simulation.phaseIndex + 1}/${total} 阶段 · ${state.simulation.record?.displayName || "已选方案"}`;
     renderSimulationScene(phase);
     refreshIcons();
+  }
+
+  async function autoReserveSimulationStop(stop) {
+    if (!stop?.id || isFuelActive()) return;
+    const key = String(stop.id);
+    if (state.simulation.reservedStops.has(key)) return;
+    state.simulation.reservedStops.add(key);
+    state.reservationOverrides[key] = 1;
+    state.stationForecastScenarioKey = null;
+    const station = state.stations.find((candidate) => String(candidate.id) === key) || stop;
+    state.selectedStation = station;
+    selectStation(station, false);
+    const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
+    if (base) await ensureStationForecasts(base);
+    const updated = state.stations.find((candidate) => String(candidate.id) === key) || station;
+    state.selectedStation = updated;
+    selectStation(updated, false);
+    const phase = state.simulation.phase;
+    if (phase?.stop && String(phase.stop.id) === key) renderSimulationPhase(phase);
+    showToast(`已为您自动预约${updated.name || "下一补能站"}，等待时间已按预约队列重算`, 3200);
   }
 
   function fallbackSimulationPoint(point) {
@@ -4557,8 +4687,15 @@
     simulation.phase = phase;
     simulation.progress = phase.progressStart ?? simulation.progress;
     if (phase.type !== "drive") simulation.speed = 1;
+    if (phase.stop && ["reservation", "recognition", "queue", "service", "payment", "leave"].includes(phase.type)) {
+      const station = state.stations.find((candidate) => String(candidate.id) === String(phase.stop.id)) || phase.stop;
+      state.selectedStation = station;
+      selectStation(station, false);
+      revealSimulationStationPanel();
+    }
     renderSimulationPhase(phase);
     updateSimulationMarker();
+    if (phase.type === "reservation") void autoReserveSimulationStop(phase.stop);
     if (phase.type === "recognition") void runSimulationOcr();
   }
 
@@ -4585,10 +4722,14 @@
   function simulationFrame(timestamp) {
     const simulation = state.simulation;
     if (!simulation.active) return;
+    if (!simulation.autoAdvance) {
+      simulation.rafId = null;
+      return;
+    }
     const previous = simulation.lastFrameAt || timestamp;
     const delta = Math.min(100, Math.max(0, timestamp - previous));
     simulation.lastFrameAt = timestamp;
-    if (!simulation.paused) {
+    if (!simulation.paused && simulation.autoAdvance) {
       const phase = simulation.phase || simulation.phases[simulation.phaseIndex];
       const phaseSpeed = phase?.type === "drive" ? simulation.speed : 1;
       simulation.phaseElapsedMs += delta * phaseSpeed;
@@ -4598,7 +4739,7 @@
       updateSimulationMarker();
       if (ratio >= 1) simulationAdvancePhase();
     }
-    simulation.rafId = window.requestAnimationFrame(simulationFrame);
+    if (simulation.autoAdvance && simulation.active) simulation.rafId = window.requestAnimationFrame(simulationFrame);
   }
 
   async function runSimulationOcr(force = false) {
@@ -4606,8 +4747,12 @@
     const status = byId("simulationOcrStatus");
     const button = byId("simulationOcrButton");
     if (!image?.src || !status) return;
-    if (!force && state.simulation.ocrAttemptedFor === state.simulation.phase?.stopIndex) return;
-    state.simulation.ocrAttemptedFor = state.simulation.phase?.stopIndex;
+    const targetStopIndex = state.simulation.phase?.stopIndex;
+    if (!force && state.simulation.ocrAttemptedFor === targetStopIndex) return;
+    state.simulation.ocrAttemptedFor = targetStopIndex;
+    const isCurrentRecognitionPhase = () => state.simulation.active
+      && state.simulation.phase?.type === "recognition"
+      && state.simulation.phase?.stopIndex === targetStopIndex;
     if (button) { button.disabled = true; button.textContent = "识别中…"; }
     status.textContent = "正在调用本地 PaddleOCR…";
     try {
@@ -4615,13 +4760,43 @@
       if (!response.ok) throw new Error("读取场景素材失败");
       const imageData = await readVisionBlob(await response.blob(), "模拟驾驶场景");
       const result = await postJson("/api/cv/analyze", { mode: "upload", imageData, fileName: "simulation-scene.png" }, 65000);
+      // OCR runs asynchronously while the reviewer may manually advance to
+      // the queue/service phase. Never let a late response rewrite the next
+      // scene's badge or status with the previous phase's recognition result.
+      if (!isCurrentRecognitionPhase()) return;
       const inference = visionInferenceStatus(result);
       const plate = result?.arrivalRecognition?.plate;
-      status.textContent = inference === "executed" && plate ? `本地 OCR 已识别：${plate}` : inference === "executed" ? "本地 OCR 已执行，但未识别到车牌" : "本次未执行 OCR，未生成虚假车牌";
+      const processingMs = Number(result?.processingMs);
+      const timing = Number.isFinite(processingMs) ? ` · ${Math.round(processingMs)} ms` : "";
+      const detail = byId("simulationOcrDetail");
+      const badge = byId("simulationSceneBadge");
+      if (inference === "executed" && plate) {
+        status.textContent = `本地 OCR 已识别：${plate}`;
+        if (badge) badge.textContent = "本地 OCR 结果";
+        if (detail) detail.textContent = `实际结果：${plate}${result?.arrivalRecognition?.confidence != null ? ` · 识别分数 ${Number(result.arrivalRecognition.confidence).toFixed(3)}` : ""}${timing} · 来源：${result?.engine || "PaddleOCR 本地服务"}`;
+      } else if (inference === "executed") {
+        status.textContent = "本地 OCR 已执行，但未识别到车牌";
+        if (badge) badge.textContent = "本地 OCR 已执行";
+        if (detail) detail.textContent = `实际结果：已完成本地 OCR 推理，但没有返回符合格式的车牌文本${timing}。`;
+      } else {
+        status.textContent = "本次未执行 OCR，未生成虚假车牌";
+        if (badge) badge.textContent = "OCR 未执行";
+        const evidence = Array.isArray(result?.evidence) ? result.evidence.filter(Boolean).at(-1) : null;
+        if (detail) detail.textContent = `实际响应：${evidence || result?.source || "本地模型尚未就绪"}${timing}`;
+      }
+      if (result?.annotatedImage) {
+        image.src = result.annotatedImage;
+        image.alt = "本地 PaddleOCR 标注结果";
+        const badge = byId("simulationSceneBadge");
+        if (badge) badge.textContent = "本地 OCR 标注";
+      }
     } catch (error) {
+      if (!isCurrentRecognitionPhase()) return;
       status.textContent = `OCR 暂不可用 · ${error?.message || "未生成虚假结果"}`;
+      const detail = byId("simulationOcrDetail");
+      if (detail) detail.textContent = `实际响应：本地视觉服务请求失败，未生成车牌结果 · ${error?.message || "请检查服务状态"}`;
     } finally {
-      if (button) { button.disabled = false; button.textContent = "再次执行 OCR"; }
+      if (isCurrentRecognitionPhase() && button) { button.disabled = false; button.textContent = "再次执行 OCR"; }
     }
   }
 
@@ -4639,6 +4814,8 @@
     simulation.active = true;
     simulation.paused = false;
     simulation.speed = 1;
+    simulation.autoAdvance = byId("simulationAutoAdvance")?.checked !== false;
+    if (!simulation.autoAdvance) simulation.paused = true;
     simulation.phaseIndex = 0;
     simulation.phaseElapsedMs = 0;
     simulation.progress = 0;
@@ -4649,8 +4826,18 @@
     simulation.lastFrameAt = 0;
     simulation.lastMapCenterAt = 0;
     simulation.ocrAttemptedFor = null;
+    simulation.reservedStops = new Set();
     simulation.savedMapView = state.live && state.map ? { center: parseLocation(state.map.getCenter?.()), zoom: state.map.getZoom?.() } : null;
     document.body.classList.add("simulation-active");
+    byId("tripPanel")?.classList.remove("collapsed");
+    byId("tripPanel")?.removeAttribute("hidden");
+    const firstStop = built.stops?.[0];
+    if (firstStop) {
+      const station = state.stations.find((candidate) => String(candidate.id) === String(firstStop.id)) || firstStop;
+      state.selectedStation = station;
+      selectStation(station, false);
+      revealSimulationStationPanel();
+    }
     byId("simulationUi").hidden = false;
     byId("simulationToolbox").hidden = false;
     byId("simulationToolbox")?.setAttribute("aria-expanded", "true");
@@ -4658,8 +4845,9 @@
     drawAmapRoutes();
     createSimulationMarker();
     simulationEnterPhase(0);
+    setSimulationSpeed(1);
     setText("mapAttribution", "高德路线 · 模拟驾驶 / 场景素材为演示");
-    simulation.rafId = window.requestAnimationFrame(simulationFrame);
+    if (simulation.autoAdvance) simulation.rafId = window.requestAnimationFrame(simulationFrame);
   }
 
   function stopSimulationDriving() {
@@ -4674,6 +4862,9 @@
     byId("simulationUi").hidden = true;
     byId("simulationToolbox").hidden = true;
     byId("simulationSceneCard").hidden = true;
+    byId("simulationDataGrid")?.remove();
+    byId("simulationDataSource")?.remove();
+    byId("simulationOcrDetail")?.remove();
     if (state.live && state.map) {
       const saved = simulation.savedMapView;
       if (saved?.center && saved.zoom) state.map.setZoomAndCenter(saved.zoom, saved.center);
@@ -4686,11 +4877,54 @@
     renderSimulationLaunch();
   }
 
+  function revealSimulationStationPanel() {
+    const panel = byId("insightPanel");
+    if (!panel) return;
+    panel.hidden = false;
+    panel.classList.remove("hidden", "collapsed", "mobile-visible");
+    if (window.innerWidth <= 760) panel.classList.add("mobile-visible");
+  }
+
   function renderSimulationLaunch() {
-    const launch = byId("simulationLaunch");
-    if (!launch) return;
     const record = state.routeRecords[state.selectedRoute];
-    launch.hidden = !state.hasPlannedRoute || !record || record.feasible === false || !simulationPathFor(record).length || state.simulation.active;
+    const valid = state.hasPlannedRoute && record && record.feasible !== false && simulationPathFor(record).length;
+    $$('[data-simulation-route]').forEach((button) => {
+      const routeKey = button.dataset.simulationRoute;
+      const routeRecord = state.routeRecords[routeKey];
+      const visible = Boolean(valid && routeRecord && routeRecord.feasible !== false && simulationPathFor(routeRecord).length && routeKey === state.selectedRoute && !state.simulation.active);
+      button.hidden = !visible;
+    });
+  }
+
+  function startSimulationForRoute(key) {
+    if (state.simulation.active) return;
+    if (key && state.routeRecords[key]) {
+      state.selectedRoute = key;
+      state.routeSelectionTouched = true;
+      $$(".route-option").forEach((button) => button.classList.toggle("selected", button.dataset.route === key));
+      if (state.live) drawAmapRoutes();
+      else renderFallbackRouteVisuals();
+      renderRouteCards();
+    }
+    startSimulationDriving();
+  }
+
+  function setSimulationAutoAdvance(checked) {
+    state.simulation.autoAdvance = Boolean(checked);
+    if (!state.simulation.autoAdvance && state.simulation.active) {
+      state.simulation.paused = true;
+      if (state.simulation.rafId) window.cancelAnimationFrame(state.simulation.rafId);
+      state.simulation.rafId = null;
+    }
+    setText("simulationAutoState", state.simulation.autoAdvance ? "开启" : "手动推进");
+    if (state.simulation.active && state.simulation.autoAdvance) {
+      if (state.simulation.paused) state.simulation.paused = false;
+      if (!state.simulation.rafId) {
+        state.simulation.lastFrameAt = performance.now();
+        state.simulation.rafId = window.requestAnimationFrame(simulationFrame);
+      }
+    }
+    renderSimulationPhase(state.simulation.phase || state.simulation.phases[state.simulation.phaseIndex]);
   }
 
   function toggleSimulationToolbox() {
@@ -4711,6 +4945,10 @@
 
   function toggleSimulationPause() {
     if (!state.simulation.active) return;
+    if (!state.simulation.autoAdvance) {
+      showToast("已关闭自动演示，请使用“快进到下一阶段”推进", 2200);
+      return;
+    }
     state.simulation.paused = !state.simulation.paused;
     renderSimulationPhase(state.simulation.phase || state.simulation.phases[state.simulation.phaseIndex]);
   }
@@ -4752,6 +4990,11 @@
         })
         : record;
       setOptionText(button, displayRecord);
+    });
+    $$("[data-route-shell]").forEach((shell) => {
+      const routeKey = shell.dataset.routeShell;
+      const group = displayGroups.find((candidate) => candidate.representative === routeKey);
+      shell.hidden = !group;
     });
     const routeOptions = byId("routeOptions");
     routeOptions?.classList.toggle("single-route", displayGroups.length === 1);
@@ -7782,6 +8025,10 @@
     initModeChoice();
     $$("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
     $$(".route-option").forEach((button) => button.addEventListener("click", () => selectRoute(button.dataset.route)));
+    $$('[data-simulation-route]').forEach((button) => button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      startSimulationForRoute(button.dataset.simulationRoute);
+    }));
     byId("resetView").addEventListener("click", () => {
       selectRoute("reliable");
       if (state.live) fitAmapView();
@@ -7795,7 +8042,6 @@
     byId("closeOperator").addEventListener("click", () => setMode("driver"));
     byId("closeValidation").addEventListener("click", () => setMode("driver"));
     byId("closeVision")?.addEventListener("click", () => setMode("driver"));
-    byId("startSimulationButton")?.addEventListener("click", startSimulationDriving);
     byId("simulationExitButton")?.addEventListener("click", stopSimulationDriving);
     byId("simulationToolboxToggle")?.addEventListener("click", toggleSimulationToolbox);
     byId("simulationNextButton")?.addEventListener("click", () => {
@@ -7804,6 +8050,7 @@
       simulationAdvancePhase();
     });
     byId("simulationPauseButton")?.addEventListener("click", toggleSimulationPause);
+    byId("simulationAutoAdvance")?.addEventListener("change", (event) => setSimulationAutoAdvance(event.target.checked));
     $$('[data-simulation-speed]').forEach((button) => button.addEventListener("click", () => setSimulationSpeed(button.dataset.simulationSpeed)));
     byId("simulationOcrButton")?.addEventListener("click", () => runSimulationOcr(true));
     byId("visionSampleButton")?.addEventListener("click", () => runVisionAnalysis("sample"));

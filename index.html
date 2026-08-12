@@ -985,7 +985,7 @@
         left: 50%;
         z-index: 880;
         display: grid;
-        width: min(360px, calc(100vw - 48px));
+        width: min(640px, calc(100vw - 48px));
         gap: 9px;
         transform: translateX(-50%);
         pointer-events: none;
@@ -1026,18 +1026,26 @@
       .simulation-phase-row small { margin-top: 2px; color: var(--muted); font-size: 9px; }
       .simulation-speed-readout { padding: 4px 7px; border-radius: 999px; background: #e6f5f0; color: #16725f; font: 750 9px/1 var(--mono); }
 
-      .simulation-scene-card { display: grid; grid-template-columns: 92px minmax(0, 1fr); overflow: hidden; }
-      .simulation-scene-media { min-height: 116px; background: #e8ece8; }
-      .simulation-scene-media img { display: block; width: 100%; height: 100%; min-height: 116px; object-fit: cover; }
-      .simulation-scene-copy { min-width: 0; padding: 10px 11px; }
-      .simulation-scene-head { justify-content: space-between; gap: 7px; }
-      .simulation-scene-head strong { min-width: 0; overflow: hidden; color: var(--text); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-      .simulation-scene-head span { flex: 0 0 auto; padding: 3px 5px; border-radius: 999px; background: #f4e9d8; color: #8b5b20; font-size: 7px; font-weight: 700; }
-      .simulation-scene-copy p { margin-top: 7px; color: var(--muted); font-size: 9px; line-height: 1.45; }
-      .simulation-ocr-row { justify-content: space-between; gap: 6px; margin-top: 8px; padding-top: 7px; border-top: 1px solid #edf0ed; }
-      .simulation-ocr-row span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-      .simulation-ocr-row button { flex: 0 0 auto; min-height: 24px; padding: 0 7px; border: 1px solid #cbd8f7; border-radius: 5px; background: #f5f7ff; color: #315bb8; font-size: 8px; font-weight: 700; }
+       .simulation-scene-card { display: grid; grid-template-columns: 236px minmax(0, 1fr); overflow: hidden; }
+       .simulation-scene-media { min-height: 232px; background: #e8ece8; }
+       .simulation-scene-media img { display: block; width: 100%; height: 100%; min-height: 232px; object-fit: cover; }
+       .simulation-scene-copy { min-width: 0; padding: 15px 16px; }
+       .simulation-scene-head { justify-content: space-between; gap: 7px; }
+       .simulation-scene-head strong { min-width: 0; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+       .simulation-scene-head span { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; background: #f4e9d8; color: #8b5b20; font-size: 8px; font-weight: 700; }
+       .simulation-scene-copy p { margin-top: 9px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+       .simulation-data-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 12px; }
+       .simulation-data-item { min-width: 0; padding: 8px 9px; border: 1px solid #edf0ed; border-radius: 8px; background: #fafcfb; }
+       .simulation-data-item span, .simulation-data-item strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+       .simulation-data-item span { color: var(--quiet); font-size: 8px; }
+       .simulation-data-item strong { margin-top: 4px; color: var(--text); font: 750 12px/1.1 var(--mono); }
+       .simulation-data-source { margin-top: 9px; color: var(--quiet); font-size: 8px; line-height: 1.45; }
+       .simulation-ocr-row { justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #edf0ed; }
+       .simulation-ocr-row span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+       .simulation-ocr-row button { flex: 0 0 auto; min-height: 28px; padding: 0 9px; border: 1px solid #cbd8f7; border-radius: 6px; background: #f5f7ff; color: #315bb8; font-size: 9px; font-weight: 700; }
       .simulation-ocr-row button:disabled { cursor: wait; opacity: .55; }
+      .simulation-toolbox-action:disabled { cursor: default; opacity: .62; }
+      .simulation-ocr-detail { margin-top: 7px; padding: 7px 8px; border-radius: 7px; background: #f7f9f8; color: var(--muted); font-size: 8px; line-height: 1.45; }
 
       .simulation-toolbox { position: absolute; right: 24px; bottom: 28px; z-index: 890; width: min(190px, calc(100vw - 48px)); pointer-events: auto; }
       .simulation-toolbox-toggle { display: flex; align-items: center; width: 100%; min-height: 38px; gap: 7px; padding: 0 11px; border: 1px solid rgba(216, 220, 215, .95); border-radius: 999px; background: rgba(255, 255, 255, .96); box-shadow: 0 10px 26px rgba(22, 29, 30, .14); color: var(--text); font-size: 10px; font-weight: 750; backdrop-filter: blur(12px); }
@@ -1057,17 +1065,15 @@
       .simulation-speed-control button.active { border-color: #aac0f8; background: var(--blue-soft); color: #315bb8; }
       .simulation-toolbox-note { color: var(--quiet); font-size: 8px; line-height: 1.45; }
 
-      .simulation-launch { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--line); }
-      .simulation-launch-copy { display: flex; min-width: 0; align-items: center; gap: 9px; }
-      .simulation-launch-icon { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border-radius: 9px; background: #e6f5f0; color: #16725f; }
-      .simulation-launch-icon svg { width: 16px; height: 16px; }
-      .simulation-launch-copy strong,
-      .simulation-launch-copy small { display: block; }
-      .simulation-launch-copy strong { font-size: 10px; }
-      .simulation-launch-copy small { max-width: 480px; margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.45; }
-      .simulation-launch-button { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 6px; min-height: 34px; padding: 0 12px; border-radius: 7px; background: var(--blue); color: #fff; font-size: 10px; font-weight: 750; box-shadow: 0 5px 14px rgba(74, 125, 240, .22); }
-      .simulation-launch-button:hover { background: #3c6fe5; }
-      .simulation-launch-button svg { width: 14px; height: 14px; }
+      .route-option { padding-bottom: 45px; cursor: pointer; }
+      .route-simulate-action { position: absolute; right: 11px; bottom: 10px; display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 9px; border: 1px solid #a9bff5; border-radius: 7px; background: var(--blue); color: #fff; font-size: 9px; font-weight: 750; box-shadow: 0 4px 12px rgba(74, 125, 240, .2); }
+      .route-simulate-action:hover { background: #3c6fe5; transform: translateY(-1px); }
+      .route-simulate-action svg { width: 13px; height: 13px; }
+      .route-simulate-action[hidden] { display: none; }
+      .simulation-auto-control { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 8px; }
+      .simulation-auto-control label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+      .simulation-auto-control input { width: 14px; height: 14px; accent-color: var(--blue); }
+      .simulation-auto-state { color: var(--blue); font-weight: 700; }
 
       .simulation-vehicle-marker,
       .simulation-fallback-marker { display: grid; width: 30px; height: 30px; place-items: center; border: 3px solid #fff; border-radius: 50%; background: var(--blue); box-shadow: 0 4px 14px rgba(22, 29, 30, .35); color: #fff; }
@@ -1075,8 +1081,6 @@
       .simulation-fallback-marker { position: absolute; z-index: 650; width: 28px; height: 28px; transform: translate(-50%, -50%); pointer-events: none; }
       .simulation-fallback-marker::before { width: 0; height: 0; border-right: 5px solid transparent; border-bottom: 9px solid #fff; border-left: 5px solid transparent; content: ""; }
 
-      .simulation-active .trip-panel,
-      .simulation-active .insight-panel,
       .simulation-active .route-sheet,
       .simulation-active #expandRoutes,
       .simulation-active .active-route-summary,
@@ -1085,10 +1089,10 @@
       .simulation-active .ai-composer-dock { opacity: 0; pointer-events: none; }
 
       @media (max-width: 720px) {
-        .simulation-ui { top: 72px; width: min(340px, calc(100vw - 24px)); }
+        .simulation-ui { top: 72px; width: min(640px, calc(100vw - 24px)); }
+        .simulation-scene-card { grid-template-columns: 42% minmax(0, 1fr); }
+        .simulation-scene-media, .simulation-scene-media img { min-height: 190px; }
         .simulation-toolbox { right: 12px; bottom: 14px; width: min(188px, calc(100vw - 24px)); }
-        .simulation-launch { align-items: stretch; flex-direction: column; gap: 9px; }
-        .simulation-launch-button { justify-content: center; }
       }
 
       .sheet-header {
@@ -1138,11 +1142,13 @@
         height: 14px;
       }
 
-      .route-options {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-      }
+       .route-options {
+         display: grid;
+         grid-template-columns: repeat(3, minmax(0, 1fr));
+         gap: 10px;
+       }
+       .route-card-shell { position: relative; min-width: 0; }
+       .route-card-shell[hidden] { display: none; }
 
       .route-options.single-route {
         grid-template-columns: minmax(0, 1fr);
@@ -1289,10 +1295,12 @@
         color: var(--muted);
       }
 
-      .route-option {
-        position: relative;
-        min-width: 0;
-        padding: 12px 13px 11px;
+       .route-option {
+         position: relative;
+         min-width: 0;
+         width: 100%;
+         cursor: pointer;
+         padding: 12px 13px 45px;
         border: 1px solid var(--line);
         border-radius: 6px;
         background: var(--surface-solid);
@@ -5181,8 +5189,9 @@
           <div class="simulation-toolbox-label">演示控制</div>
           <button class="simulation-toolbox-action" id="simulationNextButton" type="button"><i data-lucide="skip-forward"></i><span>快进到下一阶段</span></button>
           <div class="simulation-speed-control"><span>行驶倍速</span><div role="group" aria-label="行驶倍速"><button type="button" data-simulation-speed="1">1×</button><button type="button" data-simulation-speed="2">2×</button><button type="button" data-simulation-speed="3">3×</button></div></div>
+          <div class="simulation-auto-control"><label><input id="simulationAutoAdvance" type="checkbox" checked />自动演示</label><span class="simulation-auto-state" id="simulationAutoState">开启</span></div>
           <button class="simulation-toolbox-action subtle" id="simulationPauseButton" type="button"><i data-lucide="pause"></i><span>暂停模拟</span></button>
-          <div class="simulation-toolbox-note">关键节点会自动恢复 1×，方便查看预约、识别、排队和补能过程。</div>
+          <div class="simulation-toolbox-note">关闭自动演示后，每个节点由“快进到下一阶段”推进；关键节点会自动恢复 1×。</div>
         </div>
       </aside>
 
@@ -5556,31 +5565,27 @@
         </div>
         <div class="hybrid-compare" id="hybridCompare" hidden></div>
         <div class="route-options" id="routeOptions">
-          <button class="route-option" data-route="fastest">
+          <div class="route-card-shell" data-route-shell="fastest"><button class="route-option" data-route="fastest">
             <div class="option-top"><span class="option-name"><i data-lucide="zap"></i><span class="option-name-text">最快到达</span></span><span class="option-tag">少 8 分钟</span></div>
             <div class="option-main"><strong>18:54</strong><span>预计到达</span></div>
             <div class="option-metrics"><span>用时 <b>1小时14分</b></span><span>停靠 <b>31分</b></span><span>排队 <b>13分</b></span><span>电量 <b>48%</b></span></div>
             <div class="option-station">补能 · 站点计算中</div>
             <div class="option-reason">最快，但高峰站点排队尾部风险较高</div>
-          </button>
-          <button class="route-option selected" data-route="reliable">
+          </button><button class="route-simulate-action" data-simulation-route="fastest" type="button" hidden><i data-lucide="play"></i>开始模拟驾驶</button></div>
+          <div class="route-card-shell" data-route-shell="reliable"><button class="route-option selected" data-route="reliable">
             <div class="option-top"><span class="option-name"><i data-lucide="shield-check"></i><span class="option-name-text">最稳妥</span></span><span class="option-tag good">推荐</span></div>
             <div class="option-main"><strong>19:08</strong><span>预计到达</span></div>
             <div class="option-metrics"><span>用时 <b>待计算</b></span><span>停靠 <b>待计算</b></span><span>排队 <b>待计算</b></span><span>准时 <b>待计算</b></span></div>
             <div class="option-station">补能 · 站点计算中</div>
             <div class="option-reason">P90 排队更低 · 绕行较小 · 满足 19:30 到达</div>
-          </button>
-          <button class="route-option" data-route="cheapest">
+          </button><button class="route-simulate-action" data-simulation-route="reliable" type="button" hidden><i data-lucide="play"></i>开始模拟驾驶</button></div>
+          <div class="route-card-shell" data-route-shell="cheapest"><button class="route-option" data-route="cheapest">
             <div class="option-top"><span class="option-name"><i data-lucide="wallet-cards"></i><span class="option-name-text">最低成本</span></span><span class="option-tag">省 ¥9</span></div>
             <div class="option-main"><strong>19:22</strong><span>预计到达</span></div>
             <div class="option-metrics"><span>用时 <b>1小时42分</b></span><span>停靠 <b>29分</b></span><span>排队 <b>11分</b></span><span>成本 <b>¥42</b></span></div>
             <div class="option-station">补能 · 站点计算中</div>
             <div class="option-reason">价格更低，但接近到达时限，不建议作为首选</div>
-          </button>
-        </div>
-        <div class="simulation-launch" id="simulationLaunch" hidden>
-          <div class="simulation-launch-copy"><span class="simulation-launch-icon"><i data-lucide="play-circle"></i></span><div><strong>把路线跑一遍</strong><small>沿已选路线模拟行驶，在补能节点查看预约、排队、视觉识别与演示扣款流程。</small></div></div>
-          <button class="simulation-launch-button" id="startSimulationButton" type="button"><i data-lucide="play"></i>开始模拟驾驶</button>
+          </button><button class="route-simulate-action" data-simulation-route="cheapest" type="button" hidden><i data-lucide="play"></i>开始模拟驾驶</button></div>
         </div>
       </section>
       <button class="panel-reveal reveal-bottom" id="expandRoutes" aria-label="展开路线方案" hidden><i data-lucide="chevron-up"></i><span>3 条补能方案</span></button>
