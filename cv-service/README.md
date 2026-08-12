@@ -52,6 +52,9 @@ CV_SERVICE_URL=http://127.0.0.1:5099
 PADDLEOCR_LOCAL_ONLY=1
 PADDLEOCR_TEXT_DET_MODEL_DIR=C:\path\to\local\det_model
 PADDLEOCR_TEXT_REC_MODEL_DIR=C:\path\to\local\rec_model
+# If a custom directory name does not equal the Paddle model name, set these too.
+PADDLEOCR_TEXT_DET_MODEL_NAME=PP-OCRv4_mobile_det
+PADDLEOCR_TEXT_REC_MODEL_NAME=PP-OCRv4_mobile_rec
 ```
 
 `PADDLEOCR_LOCAL_ONLY=1` 会阻止没有本地模型目录时启动推理，避免运行时偷偷联网下载模型。

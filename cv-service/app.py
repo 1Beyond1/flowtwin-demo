@@ -253,8 +253,22 @@ def _build_ocr_engine() -> tuple[Any, str]:
     if not det_dir and not rec_dir:
         modern["ocr_version"] = os.environ.get("PADDLEOCR_VERSION", "PP-OCRv4").strip() or "PP-OCRv4"
     if det_dir:
+        # PaddleOCR 3.x requires the model name and local directory to agree.
+        # Passing only a v4/v6 directory makes the pipeline keep its default
+        # model name (for example PP-OCRv5_server_det), which then fails with
+        # a misleading "Model name mismatch" assertion. Derive the name from
+        # the staged directory by default, while allowing custom deployments
+        # to override it explicitly.
+        modern["text_detection_model_name"] = (
+            os.environ.get("PADDLEOCR_TEXT_DET_MODEL_NAME", "").strip()
+            or Path(det_dir).name
+        )
         modern["text_detection_model_dir"] = det_dir
     if rec_dir:
+        modern["text_recognition_model_name"] = (
+            os.environ.get("PADDLEOCR_TEXT_REC_MODEL_NAME", "").strip()
+            or Path(rec_dir).name
+        )
         modern["text_recognition_model_dir"] = rec_dir
 
     try:
