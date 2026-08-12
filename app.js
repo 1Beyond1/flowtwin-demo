@@ -4601,12 +4601,12 @@
     simulation.rafId = window.requestAnimationFrame(simulationFrame);
   }
 
-  async function runSimulationOcr() {
+  async function runSimulationOcr(force = false) {
     const image = byId("simulationSceneImage");
     const status = byId("simulationOcrStatus");
     const button = byId("simulationOcrButton");
     if (!image?.src || !status) return;
-    if (state.simulation.ocrAttemptedFor === state.simulation.phase?.stopIndex) return;
+    if (!force && state.simulation.ocrAttemptedFor === state.simulation.phase?.stopIndex) return;
     state.simulation.ocrAttemptedFor = state.simulation.phase?.stopIndex;
     if (button) { button.disabled = true; button.textContent = "识别中…"; }
     status.textContent = "正在调用本地 PaddleOCR…";
@@ -7805,7 +7805,7 @@
     });
     byId("simulationPauseButton")?.addEventListener("click", toggleSimulationPause);
     $$('[data-simulation-speed]').forEach((button) => button.addEventListener("click", () => setSimulationSpeed(button.dataset.simulationSpeed)));
-    byId("simulationOcrButton")?.addEventListener("click", runSimulationOcr);
+    byId("simulationOcrButton")?.addEventListener("click", () => runSimulationOcr(true));
     byId("visionSampleButton")?.addEventListener("click", () => runVisionAnalysis("sample"));
     byId("visionUploadButton")?.addEventListener("click", () => runVisionAnalysis("upload"));
     byId("visionFileInput")?.addEventListener("change", (event) => {
