@@ -52,14 +52,24 @@ test("video fallback validates a bounded container and never claims recognition"
   assert.equal(buildVideoFallback({ videoData: "data:video/mp4;base64,AA==" }).error, "VIDEO_CONTENT_INVALID");
 });
 
-test("vision health only reports optional service configuration", () => {
+test("vision health separates configuration from inference readiness", () => {
   assert.deepEqual(visionHealthSummary({}), {
     configured: false,
+    serviceConfigured: false,
     service: "not-configured",
+    serviceReachable: null,
+    runtimeAvailable: null,
+    modelLoaded: null,
+    inferenceReady: null,
+    status: "not-configured",
     fallback: "safe-not-run",
     modelRuntime: "optional; no model weight is bundled"
   });
-  assert.equal(visionHealthSummary({ cvServiceUrl: "http://127.0.0.1:5099" }).configured, true);
+  const configured = visionHealthSummary({ cvServiceUrl: "http://127.0.0.1:5099" });
+  assert.equal(configured.configured, true);
+  assert.equal(configured.serviceConfigured, true);
+  assert.equal(configured.inferenceReady, null);
+  assert.equal(configured.status, "configured-unchecked");
 });
 
 test("vision input never fabricates a sample result without media", () => {

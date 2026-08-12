@@ -4948,6 +4948,10 @@
       .vision-status { margin-left: auto; color: var(--muted); font-size: 10px; }
       .vision-status[data-state="ready"] { color: var(--teal); font-weight: 700; }
       .vision-status[data-state="degraded"] { color: #976717; font-weight: 700; }
+      .vision-health-status { flex: 1 1 100%; color: var(--muted); font-size: 10px; }
+      .vision-health-status[data-state="checking"], .vision-health-status[data-state="warming"] { color: #6c6f9c; }
+      .vision-health-status[data-state="ready"] { color: var(--teal); font-weight: 700; }
+      .vision-health-status[data-state="degraded"] { color: #976717; font-weight: 700; }
       .vision-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); gap: 16px; margin-top: 16px; }
       .vision-preview-card, .vision-detail-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
       .vision-preview-card h3, .vision-detail-card h3 { margin: 0 0 10px; font-size: 13px; }
@@ -5302,6 +5306,7 @@
           <label for="visionFileInput"><span id="visionUploadLabel">上传车牌照片或短视频</span><input id="visionFileInput" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,video/x-matroska" /></label>
           <button class="vision-action" id="visionUploadButton" type="button" disabled><i data-lucide="scan-search"></i>本地 OCR 识别</button>
           <span class="vision-status" id="visionStatus" data-state="idle" role="status" aria-live="polite">尚未运行</span>
+          <span class="vision-health-status" id="visionHealthStatus" data-state="checking" role="status" aria-live="polite">正在检查本地视觉服务…</span>
         </div>
         <div class="vision-grid">
           <article class="vision-preview-card">

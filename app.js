@@ -2730,32 +2730,59 @@
     }
   }
 
-  function queryDriving(key, policy, station) {
-    if (station?.location) return queryServerRoute(key, station);
+  function queryDrivingOnce(key, policy, station) {
     if (state.tripWaypoints.length) return queryRouteSequence(key, [], { includeTripWaypoints: true });
     return new Promise((resolve) => {
       if (!state.AMap) return resolve(null);
-      const driving = new state.AMap.Driving({ policy, ferry: 1, map: null, panel: false });
-      const done = (status, result) => {
-        const record = status === "complete" && result && result.routes && result.routes.length
-          ? extractDrivingRoute(result.routes[0], key, policy)
-          : null;
-        if (record) {
-          if (station) record.station = station;
-          delete state.routeErrors[`${key}:${station ? "waypoint" : "base"}`];
-          resolve(record);
-        } else {
-          state.routeErrors[`${key}:${station ? "waypoint" : "base"}`] = {
-            // status 为 complete 却没有 record，说明响应本身退化（无折线或零里程）。
-            status: status === "complete" ? "degenerate" : status,
-            info: result && (result.info || result.message || result.type) || "unknown",
-            result: result ? JSON.stringify(result).slice(0, 500) : null
-          };
-          resolve(null);
-        }
-      };
-      driving.search(state.origin, state.destination, done);
+      try {
+        const driving = new state.AMap.Driving({ policy, ferry: 1, map: null, panel: false });
+        const done = (status, result) => {
+          const record = status === "complete" && result && result.routes && result.routes.length
+            ? extractDrivingRoute(result.routes[0], key, policy)
+            : null;
+          if (record) {
+            delete state.routeErrors[`${key}:base`];
+            resolve(record);
+          } else {
+            state.routeErrors[`${key}:base`] = {
+              // status 为 complete 却没有 record，说明响应本身退化（无折线或零里程）。
+              status: status === "complete" ? "degenerate" : status,
+              info: result && (result.info || result.message || result.type) || "unknown",
+              result: result ? JSON.stringify(result).slice(0, 500) : null
+            };
+            resolve(null);
+          }
+        };
+        driving.search(state.origin, state.destination, done);
+      } catch (error) {
+        state.routeErrors[`${key}:base`] = {
+          status: "exception",
+          info: error?.message || "AMAP_DRIVING_EXCEPTION"
+        };
+        resolve(null);
+      }
     });
+  }
+
+  async function queryDriving(key, policy, station) {
+    if (station?.location) return queryServerRoute(key, station);
+    // Prefer the server-side route adapter for the base legs. It is backed by
+    // the same AMap Web Service but benefits from the shared disk cache and
+    // does not depend on a just-created browser SDK callback. The SDK remains
+    // a fallback for deployments where only the browser key is available.
+    if (!state.tripWaypoints.length) {
+      const serverRecord = await queryServerBaseRoute(key, policy);
+      if (serverRecord) return serverRecord;
+    }
+    // The JS SDK occasionally drops a whole burst of policy requests while the
+    // map session is settling. A bounded retry is safe here: it only runs after
+    // a missing result, while real route failures still remain failures.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const record = await queryDrivingOnce(key, policy, station);
+      if (record) return record;
+      if (attempt === 0) await new Promise((resolve) => window.setTimeout(resolve, 260));
+    }
+    return null;
   }
 
   function formatRouteCoordinate(point) {
@@ -3164,7 +3191,13 @@
     });
     const preferred = [state.recommendedRoute, "reliable", "fastest", "cheapest"].filter(Boolean);
     groups.forEach((group) => {
-      group.representative = preferred.find((key) => group.keys.includes(key)) || group.keys[0];
+      // A route identity can be shared by objective aliases whose feasibility
+      // flags were calculated at different stages. Prefer a feasible alias for
+      // the visible card so its heading, badge and card body cannot disagree.
+      const feasiblePreferred = preferred.find((key) => group.keys.includes(key) && records[key]?.feasible);
+      group.representative = feasiblePreferred
+        || preferred.find((key) => group.keys.includes(key))
+        || group.keys[0];
     });
     return groups;
   }
@@ -3625,6 +3658,16 @@
 
   async function replanLongTripRoutes() {
     let proposal = await requestLongTripPlans();
+    // The long-trip endpoint is local and deterministic once its compact
+    // inputs are assembled, but the first request can still lose a transient
+    // server/connection race while the map session is settling. Retry this
+    // bounded local planner failure once; do not retry energy infeasibility or
+    // route-verification failures, because those are real evidence rather
+    // than transport noise.
+    if (proposal?.reason === "PLANNER_UNAVAILABLE") {
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+      proposal = await requestLongTripPlans();
+    }
     // AMap can return no publicly indexed charger for a long motorway section.
     // Rather than declare that six charges cannot cover the distance, introduce
     // explicitly-labelled provisional corridor anchors and run the same energy
@@ -3670,6 +3713,8 @@
             })()
             : proposal.reason === "SEARCH_BUDGET_EXHAUSTED"
               ? "候选组合较多，本次搜索预算已用尽，系统没有把未完成的搜索冒充为“已证明不可行”。请减少候选范围或稍后重试。"
+              : proposal.reason === "PLANNER_UNAVAILABLE"
+                ? "多站规划服务短暂不可用，已重试一次；仍未完成时不会展示虚假的全程方案。"
               : "多站补能候选未能完成计算。"
         };
         return "no-feasible-sequence";
@@ -5476,6 +5521,38 @@
     };
   }
 
+  async function queryServerBaseRoute(key, policy) {
+    const params = new URLSearchParams({
+      origin: formatRouteCoordinate(state.origin),
+      destination: formatRouteCoordinate(state.destination),
+      plan: key,
+      cartype: isFuelActive() ? "0" : "1"
+    });
+    try {
+      const { route, payload } = await fetchRouteWithRetry(params);
+      const path = Array.isArray(route.path) ? route.path.map(parseLocation).filter(Boolean) : [];
+      const distanceKm = Number(route.distance);
+      const durationMinutes = Number(route.duration);
+      // /api/route already normalizes distance to km and duration to minutes;
+      // unlike the browser SDK contract, it does not expose meters/seconds.
+      if (path.length < 2 || !(distanceKm > 0) || !(durationMinutes > 0)) {
+        throw new Error("INVALID_SERVER_ROUTE_RESPONSE");
+      }
+      return {
+        key,
+        path,
+        distance: distanceKm,
+        duration: durationMinutes,
+        tolls: Number(route.tolls) || 0,
+        policy,
+        routeSource: payload.source || route.source || "高德 Web 服务路线规划"
+      };
+    } catch (error) {
+      recordRouteError(`${key}:base`, error);
+      return null;
+    }
+  }
+
   function compactFeishuImpact(value = {}) {
     return {
       divertedVehicles: Number.isFinite(Number(value.divertedVehicles)) ? Number(value.divertedVehicles) : undefined,
@@ -5823,7 +5900,10 @@
     }
     if (mode === "validation") byId("mapAttribution").textContent = "高德地图 · 固定种子验证场景";
     if (mode === "validation" && !state.validationLoaded) loadValidation();
-    if (mode === "vision") byId("mapAttribution").textContent = "站内视觉演示 · 内置样例/上传媒体 · 本地 OCR";
+    if (mode === "vision") {
+      byId("mapAttribution").textContent = "站内视觉演示 · 内置样例/上传媒体 · 本地 OCR";
+      void refreshVisionHealth();
+    }
   }
 
   function planningCompletionMessage() {
@@ -6490,6 +6570,48 @@
     return text || fallback;
   }
 
+  function renderVisionHealth(payload = {}) {
+    const status = byId("visionHealthStatus");
+    if (!status) return;
+    const serviceConfigured = payload.serviceConfigured ?? payload.configured === true;
+    const serviceReachable = payload.serviceReachable ?? payload.localServiceOk;
+    const runtimeAvailable = payload.runtimeAvailable;
+    const inferenceReady = payload.inferenceReady;
+    let stateName = "degraded";
+    let label = "视觉服务状态未知 · 仍会安全降级";
+    if (!serviceConfigured) {
+      label = "本地视觉服务未配置 · 仅提供安全降级";
+    } else if (serviceReachable === false) {
+      label = "已配置 · 本地推理服务未连接";
+    } else if (runtimeAvailable === false) {
+      label = "服务已连接 · OCR 运行时不可用";
+    } else if (inferenceReady === true) {
+      stateName = "ready";
+      label = "本地 PaddleOCR 可用";
+    } else if (serviceReachable === true) {
+      stateName = "warming";
+      label = "服务已连接 · 首次识别时加载模型";
+    } else if (payload.status === "configured-unchecked") {
+      stateName = "checking";
+      label = "已配置 · 正在确认推理服务";
+    }
+    status.dataset.state = stateName;
+    status.textContent = label;
+  }
+
+  async function refreshVisionHealth() {
+    const status = byId("visionHealthStatus");
+    if (status) {
+      status.dataset.state = "checking";
+      status.textContent = "正在检查本地视觉服务…";
+    }
+    try {
+      renderVisionHealth(await getJson("/api/cv/health", 5000));
+    } catch {
+      renderVisionHealth({ configured: true, serviceConfigured: true, serviceReachable: false, status: "unreachable" });
+    }
+  }
+
   function visionInferenceStatus(result = {}) {
     const explicit = String(result.inferenceStatus || "").trim().toLowerCase();
     if (["synthetic", "executed", "error", "not-run"].includes(explicit)) return explicit;
@@ -6586,10 +6708,17 @@
       status.textContent = inferenceStatus === "error"
         ? "视觉推理失败 · 未生成虚构结果"
         : inferenceNotRun
-        ? "已检查 · 未执行视觉推理"
-        : inferenceStatus === "synthetic"
-          ? "合成演示完成 · 结果可追溯"
-          : "视觉推理完成 · 结果可追溯";
+          ? "已检查 · 未执行视觉推理"
+          : inferenceStatus === "synthetic"
+            ? "合成演示完成 · 结果可追溯"
+            : "视觉推理完成 · 结果可追溯";
+    }
+    if (inferenceStatus === "executed") {
+      const health = byId("visionHealthStatus");
+      if (health) {
+        health.dataset.state = "ready";
+        health.textContent = "本次本地 OCR 已实际执行";
+      }
     }
   }
 
@@ -6984,7 +7113,18 @@
     state.serviceRouteOverrides = {};
     if (state.live && state.AMap) {
       const policies = makeDrivingPolicies(state.AMap);
-      const records = await Promise.all(Object.entries(policies).map(async ([key, policy]) => [key, await queryDriving(key, policy)]));
+      // Keep the three policy requests slightly staggered. Sending them in one
+      // Promise.all burst is more likely to hit the JS SDK's transient request
+      // throttle, especially immediately after the map has just initialized.
+      const records = [];
+      const policyEntries = Object.entries(policies);
+      for (let index = 0; index < policyEntries.length; index += 1) {
+        const [key, policy] = policyEntries[index];
+        records.push([key, await queryDriving(key, policy)]);
+        if (index < policyEntries.length - 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 120));
+        }
+      }
       const liveRecords = Object.fromEntries(records.filter((entry) => entry[1]));
       // 一条真实路线都没有时，不能退到演示折线：那是固定的北京→大兴机场数据，
       // 画在"高德已连接"的地图上就是一条与本次行程无关的虚假路线。

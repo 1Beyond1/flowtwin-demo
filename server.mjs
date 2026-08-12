@@ -751,13 +751,37 @@ async function cvHealthApi(response) {
       signal: controller.signal
     });
     const payload = await upstream.json().catch(() => null);
+    const localServiceOk = upstream.ok && payload?.ok === true;
+    const runtime = payload?.runtime && typeof payload.runtime === "object" ? payload.runtime : null;
+    const runtimeAvailable = localServiceOk && runtime?.ocrAvailable === true;
+    const modelLoaded = localServiceOk && runtime?.ocrLoaded === true;
     return json(response, 200, {
       ...summary,
-      localServiceOk: upstream.ok && payload?.ok === true,
-      localRuntime: payload?.runtime || null
+      serviceReachable: localServiceOk,
+      runtimeAvailable,
+      modelLoaded,
+      inferenceReady: Boolean(runtimeAvailable && modelLoaded),
+      status: !localServiceOk
+        ? "unreachable"
+        : !runtimeAvailable
+          ? "runtime-unavailable"
+          : modelLoaded
+            ? "ready"
+            : "warming",
+      localServiceOk,
+      localRuntime: runtime
     });
   } catch {
-    return json(response, 200, { ...summary, localServiceOk: false, localRuntime: null });
+    return json(response, 200, {
+      ...summary,
+      serviceReachable: false,
+      runtimeAvailable: false,
+      modelLoaded: false,
+      inferenceReady: false,
+      status: "unreachable",
+      localServiceOk: false,
+      localRuntime: null
+    });
   } finally {
     clearTimeout(timeout);
   }
