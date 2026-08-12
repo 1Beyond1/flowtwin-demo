@@ -135,12 +135,18 @@ test("Feishu strategy input carries bounded forecast evidence without adding tab
     forecastInputSnapshot: {
       totalPorts: 20,
       idlePorts: 4,
+      availablePorts: 3,
+      reservedPorts: 1,
       chargingPorts: 14,
       faultPorts: 2,
+      waitingVehicles: 6,
       queueVehicles: 6,
+      reservationQueueAhead: 2,
       estimatedReleaseMinutes: Array.from({ length: 30 }, (_, index) => index * 3),
       averageSessionMinutes: 35,
-      dataSource: "FlowTwin 演示仿真 · 端口状态推演"
+      dataSource: "FlowTwin 演示仿真 · 端口状态推演",
+      availabilitySource: "FlowTwin 演示补能位状态",
+      queueSource: "FlowTwin 演示预约队列"
     }
   };
   const started = await startFeishuSync({
@@ -174,6 +180,9 @@ test("Feishu strategy input carries bounded forecast evidence without adding tab
   assert.equal(evidence.forecastEvidence[0].method, "port-discrete-event");
   assert.equal(evidence.forecastEvidence[0].arrivalWaitP90, 18);
   assert.equal(evidence.forecastEvidence[0].portSnapshot.totalPorts, 20);
+  assert.equal(evidence.forecastEvidence[0].portSnapshot.availablePorts, 3);
+  assert.equal(evidence.forecastEvidence[0].portSnapshot.reservedPorts, 1);
+  assert.equal(evidence.forecastEvidence[0].portSnapshot.reservationQueueAhead, 2);
   assert.equal(evidence.forecastEvidence[0].portSnapshot.estimatedReleaseMinutes, undefined);
   assert.ok(Buffer.byteLength(fields["策略输入"], "utf8") <= 1000);
 });

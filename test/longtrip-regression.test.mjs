@@ -26,6 +26,42 @@ test("route timing exposes queue, service, and payment/exit separately", () => {
   assert.equal(plan.totalMinutesP90, 210 + plan.totalStopMinutesP90);
 });
 
+test("long-trip stops preserve availability and reservation evidence", () => {
+  const result = buildLongTripPlans({
+    distanceKm: 300,
+    durationMinutes: 210,
+    departureMinutes: 480,
+    energyType: "electric",
+    soc: 40,
+    minArrivalSoc: 20,
+    maxStops: 1,
+    maxDetourKm: 8,
+    stations: [{
+      id: "reservation-evidence",
+      name: "预约证据站",
+      progressKm: 120,
+      detourKm: 1,
+      price: 1.2,
+      totalPorts: 4,
+      idlePorts: 2,
+      chargingPorts: 2,
+      faultPorts: 0,
+      reservedPorts: 1,
+      queueVehicles: 1,
+      reservationQueueAhead: 2,
+      estimatedReleaseMinutes: [0, 30],
+      averageSessionMinutes: 30
+    }]
+  });
+
+  const stop = result.plansByObjective.fastest.stops[0];
+  assert.equal(stop.totalPorts, 4);
+  assert.equal(stop.availablePorts, 1);
+  assert.equal(stop.reservedPorts, 1);
+  assert.equal(stop.waitingVehicles, 1);
+  assert.equal(stop.reservationQueueAhead, 2);
+});
+
 test("1200 km EV trip at 22% SOC produces an energy-safe multi-stop sequence", () => {
   const capacityKwh = 108;
   const consumptionPerKm = 0.18;

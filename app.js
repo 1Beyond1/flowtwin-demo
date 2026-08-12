@@ -125,6 +125,7 @@
     multiStopRouteRecords: null,
     multiStopPlanningMeta: null,
     serviceRouteOverrides: {},
+    reservationOverrides: {},
     routeOverlays: {},
     stationOverlays: [],
     stations: [],
@@ -1229,6 +1230,7 @@
     state.selectedService = null;
     state.serviceSuggestion = null;
     state.serviceRouteOverrides = {};
+    state.reservationOverrides = {};
     state.serviceSuggestionDismissed = new Set();
     state.aiContext = null;
     state.weather = null;
@@ -1753,7 +1755,7 @@
       const text = meta.querySelector("span") || meta;
       const snapshot = entry.inputSnapshot;
       const portSummary = entry.method === "port-discrete-event" && snapshot
-        ? `总枪位 ${snapshot.totalPorts ?? "—"} · 空闲 ${snapshot.idlePorts ?? "—"} · 排队 ${snapshot.queueVehicles ?? "—"}`
+        ? `总枪位 ${snapshot.totalPorts ?? "—"} · 可用 ${snapshot.availablePorts ?? snapshot.idlePorts ?? "—"} · 已预约 ${snapshot.reservedPorts ?? "—"} · 等待 ${snapshot.waitingVehicles ?? snapshot.queueVehicles ?? "—"}`
         : "";
       const confidenceText = Number.isFinite(Number(entry.confidenceScore))
         ? ` · 置信度 ${entry.confidenceLabel || `${Math.round(Number(entry.confidenceScore))}/100`}`
@@ -1774,7 +1776,8 @@
     const current = points[0] || {};
     const lines = [
       ["预测方法", method],
-      ["输入状态", `总枪位 ${snapshot.totalPorts ?? "—"} · 空闲 ${snapshot.idlePorts ?? "—"} · 充电中 ${snapshot.chargingPorts ?? "—"} · 排队 ${snapshot.queueVehicles ?? "—"}`],
+      ["补能位状态", `总枪位 ${snapshot.totalPorts ?? "—"} · 可用 ${snapshot.availablePorts ?? snapshot.idlePorts ?? "—"} · 已预约 ${snapshot.reservedPorts ?? "—"} · 充电中 ${snapshot.chargingPorts ?? "—"}`],
+      ["预约队列", `已到站等待 ${snapshot.waitingVehicles ?? snapshot.queueVehicles ?? "—"} 辆 · 预计在前 ${snapshot.reservationQueueAhead ?? "—"} 辆 · ${snapshot.queueSource || "未标明来源"}`],
       ["服务参数", `平均服务 ${snapshot.averageSessionMinutes ?? "—"} 分钟 · 预计释放 ${Array.isArray(snapshot.estimatedReleaseMinutes) ? snapshot.estimatedReleaseMinutes.slice(0, 4).join(" / ") : "—"} 分钟`],
       ["情景输入", `到站偏移 ${scenario.arrivalOffsetMinutes ?? scenario.etaMinutes ?? 0} 分钟 · 天气因子 ${scenario.weatherFactor ?? 1} · 需求因子 ${scenario.demandFactor ?? 1}`],
       ["当前输出", `排队 P50 ${Number(current.p50 ?? current.wait ?? 0).toFixed(1)} 分钟 · 排队 P90 ${Number(current.p90 ?? current.wait ?? 0).toFixed(1)} 分钟`],
@@ -1787,7 +1790,7 @@
       ["数据时间", entry?.asOf || snapshot.snapshotTime || "本次演示计算"],
       ["数据来源", entry?.dataSource || "FlowTwin 演示仿真"]
     ];
-    panel.innerHTML = `${lines.map(([label, value]) => `<div><strong>${escapeHtml(label)}：</strong>${escapeHtml(value)}</div>`).join("")}<div><strong>计算口径：</strong>先按到站时刻选择预测点，再用端口释放事件估计排队，并从排队分布计算 P50/P90；路线 ETA 另行叠加补能服务时长和支付驶离缓冲。这是演示仿真，不是能链企业实时数据。</div>${entry?.explanation ? `<div><strong>解释：</strong>${escapeHtml(entry.explanation)}</div>` : ""}`;
+    panel.innerHTML = `${lines.map(([label, value]) => `<div><strong>${escapeHtml(label)}：</strong>${escapeHtml(value)}</div>`).join("")}<div><strong>计算口径：</strong>先按到站时刻选择预测点，再用端口释放事件、已到站等待和预约队列估计排队，并从排队分布计算 P50/P90；路线 ETA 另行叠加补能服务时长和支付驶离缓冲。当前补能位与预约队列仍是演示输入，不是能链企业实时数据。</div>${entry?.explanation ? `<div><strong>解释：</strong>${escapeHtml(entry.explanation)}</div>` : ""}`;
     panel.hidden = true;
     toggle.setAttribute("aria-expanded", "false");
   }
@@ -1846,14 +1849,12 @@
     // forecast array but without the current method/input evidence. Do not
     // render that stale aggregate snapshot as if it were the current forecast
     // contract; the port-level demo snapshot must get a chance to run.
-    if (Array.isArray(station.forecast) && station.forecast.length && station.forecastMethod) {
+    if (Array.isArray(station.forecast) && station.forecast.length && station.forecastMethod && !reservationOverrideFor(station)) {
       renderForecast(station, station);
       return;
     }
     try {
-      const forecastInput = station.forecastInputSnapshot
-        ? station
-        : Object.assign({}, station, buildDemoPortSnapshot(station));
+      const forecastInput = buildStationForecastInput(station);
       const payload = await postJson("/api/forecast", {
         stations: [forecastInput],
         scenario: {
@@ -1881,14 +1882,19 @@
       state.hybridBranch,
       state.destination?.join(","),
       Number(baseRoute?.distance || 0).toFixed(1),
-      Number(state.weather?.weatherFactor || 1).toFixed(2)
+      Number(state.weather?.weatherFactor || 1).toFixed(2),
+      Object.entries(state.reservationOverrides || {})
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([id, count]) => `${id}:${count}`)
+        .join(",")
     ].join("|");
   }
 
   // 企业端口/枪位数据暂未开放。为了让评委能看到“站点排队时间”不是一条
   // 写死的数字，这里从已有演示占用率、容量和等待输入推导一份确定性的端口
-  // 快照，交给后端的 port-discrete-event 仿真。它必须明确标注为演示数据，
-  // 不能伪装成能链实时站点状态；后续拿到脱敏数据时，只替换这层输入。
+  // 快照，交给后端的 port-discrete-event 仿真。预约字段只表示演示队列，
+  // 必须明确标注为演示数据，不能伪装成能链实时站点状态；后续拿到脱敏
+  // 站点接口时，只替换这层输入。
   function buildDemoPortSnapshot(station) {
     const totalPorts = Math.max(4, Math.min(60, Math.round(Number(station?.capacity) || 12)));
     const occupancy = Math.max(0, Math.min(0.96, Number(station?.occupancy) || 0));
@@ -1897,6 +1903,11 @@
     const idlePorts = Math.max(0, totalPorts - chargingPorts - faultPorts);
     const wait = Math.max(0, Number(station?.wait ?? station?.p50) || 0);
     const queueVehicles = Math.max(0, Math.min(24, Math.round(Math.max(0, wait - 4) / 6)));
+    // 两类预约状态有不同含义：reservedPorts 是已经锁定给预约用户的
+    // 资源，reservationQueueAhead 是尚未分配资源、但在当前用户前面的
+    // 预约订单。演示输入刻意保持保守，不把它们混成“实时排队人数”。
+    const reservedPorts = Math.min(idlePorts, wait >= 12 ? 1 : 0);
+    const reservationQueueAhead = Math.max(0, Math.min(6, Math.floor(Math.max(0, wait - 24) / 18)));
     const averageSessionMinutes = station?.type === "加油站" ? 8 : 35;
     const estimatedReleaseMinutes = Array.from({ length: chargingPorts }, (_, index) => Number(Math.max(0, wait * (0.8 + (index % 4) * 0.1)).toFixed(1)));
     return {
@@ -1904,13 +1915,72 @@
       idlePorts,
       chargingPorts,
       faultPorts,
+      reservedPorts,
+      waitingVehicles: queueVehicles,
       queueVehicles,
+      reservationQueueAhead,
       estimatedReleaseMinutes,
       averageSessionMinutes,
       snapshotTime: `simulation@${formatClock(state.departureMinutes)}`,
-      dataSource: "FlowTwin 演示仿真 · 端口状态推演",
+      dataSource: "FlowTwin 演示仿真 · 端口状态 + 预约队列推演",
+      availabilitySource: "FlowTwin 演示补能位状态",
+      queueSource: "FlowTwin 演示预约队列",
       freshnessSeconds: null
     };
+  }
+
+  function buildStationForecastInput(station) {
+    const input = Object.assign(
+      {},
+      station,
+      station?.forecastInputSnapshot || buildDemoPortSnapshot(station)
+    );
+    const override = Math.max(0, Number(state.reservationOverrides?.[String(station?.id)]) || 0);
+    const reservationAlreadyApplied = String(input.queueSource || "").includes("当前用户已预约")
+      || String(input.dataSource || "").includes("当前用户预约");
+    if (!override || reservationAlreadyApplied) return input;
+    const currentAhead = Math.max(0, Number(input.reservationQueueAhead) || 0);
+    return Object.assign(input, {
+      reservationQueueAhead: Math.min(5000, currentAhead + override),
+      queueSource: "FlowTwin 演示预约队列 · 当前用户已预约",
+      dataSource: `${input.dataSource || "FlowTwin 演示仿真"} · 当前用户预约`
+    });
+  }
+
+  function reservationOverrideFor(station) {
+    return Math.max(0, Number(state.reservationOverrides?.[String(station?.id)]) || 0);
+  }
+
+  function renderReservationAction(station) {
+    const action = byId("reservationAction");
+    const button = byId("reservationButton");
+    const status = byId("reservationStatus");
+    if (!action || !button || !status) return;
+    const isFuelStation = String(station?.type || "").includes("油");
+    action.hidden = !station || isFuelStation;
+    if (!station || isFuelStation) return;
+    const override = reservationOverrideFor(station);
+    button.disabled = override > 0;
+    button.textContent = override > 0 ? "已预约" : "模拟预约";
+    status.textContent = override > 0
+      ? "已加入本次演示队列，等待时间已重新计算"
+      : "仅用于演示预约队列，不创建真实订单";
+  }
+
+  async function simulateReservation() {
+    const station = state.selectedStation;
+    if (!station || String(station.type || "").includes("油")) return;
+    const key = String(station.id);
+    if (reservationOverrideFor(station) > 0) return;
+    state.reservationOverrides[key] = 1;
+    state.stationForecastScenarioKey = null;
+    const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
+    if (base) await ensureStationForecasts(base);
+    const updated = state.stations.find((candidate) => String(candidate.id) === key) || station;
+    state.selectedStation = updated;
+    renderReservationAction(updated);
+    selectStation(updated, false);
+    showToast("已加入演示预约队列，站点等待时间已重新计算", 2600);
   }
 
   async function ensureStationForecasts(baseRoute) {
@@ -1925,7 +1995,7 @@
     const horizonMinutes = Math.min(240, Math.max(30, Math.ceil(duration / 5) * 5));
     const inputStations = stations.map((station) => Object.assign({}, station, {
       stationSource: station.source,
-      ...(station.forecastInputSnapshot ? {} : buildDemoPortSnapshot(station)),
+      ...buildStationForecastInput(station),
       arrivalOffsetMinutes: Math.max(0, Number.isFinite(Number(station.routeProgress))
         ? Number(station.routeProgress) * Number(baseRoute.duration || 0)
         : 0)
@@ -3274,22 +3344,34 @@
   // provisionalCorridor: the former orders the sequence and the latter keeps
   // the explicit fallback boundary intact when the route is revalidated.
   function compactLongTripStation(station = {}) {
+    const snapshot = station.forecastInputSnapshot && typeof station.forecastInputSnapshot === "object"
+      ? station.forecastInputSnapshot
+      : {};
     const fields = [
       "id", "name", "type", "location", "address", "source", "sourceLabel", "stationSource",
       "progressKm", "routeProgress", "detourKm", "detour", "price", "wait", "p50", "p90",
       "occupancy", "capacity", "arrivalRate", "serviceRate", "trend",
       "estimatedChargePowerKw", "estimatedRefuelRateLpm", "paymentExitMinutes", "arrivalOffsetMinutes", "arrivalMinute",
-      "arrivalAtMinutes", "provisionalCorridor", "serviceAreaCandidate"
+      "arrivalAtMinutes", "provisionalCorridor", "serviceAreaCandidate",
+      "totalPorts", "idlePorts", "availablePorts", "reservedPorts", "chargingPorts", "faultPorts",
+      "waitingVehicles", "queueVehicles", "reservationQueueAhead", "averageSessionMinutes",
+      "estimatedReleaseMinutes", "snapshotTime", "dataSource", "availabilitySource", "queueSource",
+      "freshnessSeconds"
     ];
     const compact = {};
     fields.forEach((key) => {
-      const value = station[key];
+      const value = station[key] === undefined || station[key] === null
+        ? snapshot[key]
+        : station[key];
       if (value === undefined || value === null) return;
       if (Array.isArray(value)) {
-        if (value.length <= 4 && value.every((item) => Number.isFinite(Number(item)))) compact[key] = value.map(Number);
+        const maxLength = key === "estimatedReleaseMinutes" ? 16 : 4;
+        if (value.length <= maxLength && value.every((item) => Number.isFinite(Number(item)))) {
+          compact[key] = value.map(Number);
+        }
         return;
       }
-      if (["id", "name", "type", "address", "source", "sourceLabel", "stationSource"].includes(key)) {
+      if (["id", "name", "type", "address", "source", "sourceLabel", "stationSource", "dataSource", "availabilitySource", "queueSource", "snapshotTime"].includes(key)) {
         compact[key] = String(value).slice(0, 180);
         return;
       }
@@ -5502,11 +5584,17 @@
       compact.forecastInputSnapshot = {
         totalPorts: numberOrUndefined(input.totalPorts),
         idlePorts: numberOrUndefined(input.idlePorts),
+        availablePorts: numberOrUndefined(input.availablePorts),
+        reservedPorts: numberOrUndefined(input.reservedPorts),
         chargingPorts: numberOrUndefined(input.chargingPorts),
         faultPorts: numberOrUndefined(input.faultPorts),
+        waitingVehicles: numberOrUndefined(input.waitingVehicles ?? input.queueVehicles),
         queueVehicles: numberOrUndefined(input.queueVehicles),
+        reservationQueueAhead: numberOrUndefined(input.reservationQueueAhead),
         averageSessionMinutes: numberOrUndefined(input.averageSessionMinutes),
-        dataSource: textOrUndefined(input.dataSource, 100)
+        dataSource: textOrUndefined(input.dataSource, 100),
+        availabilitySource: textOrUndefined(input.availabilitySource, 100),
+        queueSource: textOrUndefined(input.queueSource, 100)
       };
     }
     return compact;
@@ -5820,6 +5908,7 @@
     if (priceValue) priceValue.innerHTML = Number.isFinite(Number(station.price))
       ? `¥${Number(station.price).toFixed(2)} <small>/${station.priceUnit || (isFuelActive() ? "L" : "kWh")}</small>`
        : "— <small>待确认</small>";
+    renderReservationAction(station);
     const forecastEvidencePanel = byId("forecastEvidencePanel");
     const forecastEvidenceToggle = byId("forecastEvidenceToggle");
     if (forecastEvidencePanel) forecastEvidencePanel.hidden = true;
@@ -5928,6 +6017,7 @@
     state.serviceSuggestion = null;
     state.activeServicePlan = null;
     state.serviceRouteOverrides = {};
+    state.reservationOverrides = {};
     state.tripWaypoints = [];
     state.parseAnalysis = null;
     state.stationForecastScenarioKey = null;
@@ -7060,6 +7150,8 @@
       state.hybridBranchTouched = false;
     }
     state.hybridComparison = null;
+    state.reservationOverrides = {};
+    state.stationForecastScenarioKey = null;
     return true;
   }
 
@@ -7112,6 +7204,7 @@
     state.serviceSuggestion = null;
     state.activeServicePlan = null;
     state.serviceRouteOverrides = {};
+    state.reservationOverrides = {};
     if (state.live && state.AMap) {
       const policies = makeDrivingPolicies(state.AMap);
       // Keep the three policy requests slightly staggered. Sending them in one
@@ -7326,6 +7419,7 @@
       const label = toggle.querySelector("span");
       if (label) label.textContent = expanded ? "查看计算依据" : "收起计算依据";
     });
+    byId("reservationButton")?.addEventListener("click", () => { void simulateReservation(); });
     byId("voiceIntentButton")?.addEventListener("click", () => { toggleVoiceIntent(); });
     byId("composerSubmitButton")?.addEventListener("click", parseIntent);
     byId("destinationCandidates")?.addEventListener("click", (event) => {

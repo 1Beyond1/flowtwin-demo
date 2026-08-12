@@ -94,6 +94,55 @@ test("port discrete-event forecast never lowers wait when the current queue grow
   assert.ok(queue.p90 >= queue.p50 && queue.p50 >= 0);
 });
 
+test("reservation capacity and reservation queue are kept separate and affect arrival wait", () => {
+  const baseline = forecastStations([portStation({
+    totalPorts: 4,
+    idlePorts: 2,
+    chargingPorts: 2,
+    estimatedReleaseMinutes: [0, 30],
+    reservedPorts: 0,
+    reservationQueueAhead: 0
+  })]).stations[0];
+  const reserved = forecastStations([portStation({
+    totalPorts: 4,
+    idlePorts: 2,
+    chargingPorts: 2,
+    estimatedReleaseMinutes: [0, 30],
+    reservedPorts: 1,
+    reservationQueueAhead: 2
+  })]).stations[0];
+
+  assert.equal(reserved.method, "port-discrete-event");
+  assert.equal(reserved.inputSnapshot.availablePorts, 1);
+  assert.equal(reserved.inputSnapshot.reservedPorts, 1);
+  assert.equal(reserved.inputSnapshot.reservationQueueAhead, 2);
+  assert.ok(reserved.wait >= baseline.wait);
+  assert.match(reserved.explanation, /预约队列/);
+});
+
+test("unit-style station fields map to the same port model without changing legacy fields", () => {
+  const result = forecastStations([{
+    id: "unit-style",
+    totalUnits: 4,
+    availableUnits: 2,
+    occupiedUnits: 1,
+    faultUnits: 1,
+    reservedUnits: 1,
+    waitingVehicles: 1,
+    reservationAhead: 2,
+    estimatedReleaseMinutes: [10],
+    averageSessionMinutes: 20
+  }]).stations[0];
+
+  assert.equal(result.method, "port-discrete-event");
+  assert.equal(result.totalPorts, 4);
+  assert.equal(result.inputSnapshot.availablePorts, 1);
+  assert.equal(result.inputSnapshot.reservedPorts, 1);
+  assert.equal(result.inputSnapshot.waitingVehicles, 1);
+  assert.equal(result.inputSnapshot.queueVehicles, 1);
+  assert.equal(result.inputSnapshot.reservationQueueAhead, 2);
+});
+
 test("metadata and queue fields alone do not activate the port model", () => {
   const result = forecastStations([{
     id: "metadata-only",

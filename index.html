@@ -808,6 +808,56 @@
         margin: 14px 0;
       }
 
+      .reservation-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface-soft);
+      }
+
+      .reservation-copy {
+        min-width: 0;
+      }
+
+      .reservation-copy strong,
+      .reservation-copy small {
+        display: block;
+      }
+
+      .reservation-copy strong {
+        color: var(--text);
+        font-size: 10px;
+      }
+
+      .reservation-copy small {
+        margin-top: 3px;
+        color: var(--quiet);
+        font-size: 8px;
+        line-height: 1.35;
+      }
+
+      .reservation-button {
+        flex: 0 0 auto;
+        min-height: 27px;
+        padding: 0 9px;
+        border: 1px solid #b8c9ef;
+        border-radius: 5px;
+        background: #f3f6ff;
+        color: #315bb8;
+        font-size: 8px;
+        font-weight: 700;
+      }
+
+      .reservation-button:disabled {
+        border-color: var(--line);
+        background: var(--surface-solid);
+        color: var(--quiet);
+      }
+
       .stat-block {
         padding: 10px;
         border: 1px solid var(--line);
@@ -5114,12 +5164,16 @@
           <button class="close-button" id="closeInsight" aria-label="收起站点详情"><i data-lucide="panel-right-close"></i></button>
         </div>
         <span class="state-badge" id="stationState"><i data-lucide="check-circle-2"></i>预测可用</span>
-        <div class="station-stat">
-          <div class="stat-block"><div class="stat-label" id="waitLabel" data-reviewer-copy="预计 P90 排队" data-user-copy="预计排队">预计 P90 排队</div><div class="stat-value" id="waitValue">8 <small>分钟</small></div></div>
-          <div class="stat-block"><div class="stat-label" id="energyAdviceLabel">建议补能</div><div class="stat-value" id="energyAdviceValue">— <small>kWh</small></div></div>
-          <div class="stat-block"><div class="stat-label">预计价格</div><div class="stat-value" id="stationPriceValue">— <small>待确认</small></div></div>
-        </div>
-        <div class="forecast-card" data-reviewer-only>
+         <div class="station-stat">
+           <div class="stat-block"><div class="stat-label" id="waitLabel" data-reviewer-copy="预计 P90 排队" data-user-copy="预计排队">预计 P90 排队</div><div class="stat-value" id="waitValue">8 <small>分钟</small></div></div>
+           <div class="stat-block"><div class="stat-label" id="energyAdviceLabel">建议补能</div><div class="stat-value" id="energyAdviceValue">— <small>kWh</small></div></div>
+           <div class="stat-block"><div class="stat-label">预计价格</div><div class="stat-value" id="stationPriceValue">— <small>待确认</small></div></div>
+         </div>
+         <div class="reservation-foot" id="reservationAction" hidden>
+           <div class="reservation-copy"><strong>预约补能</strong><small id="reservationStatus">可加入本次演示预约队列</small></div>
+           <button class="reservation-button" id="reservationButton" type="button">模拟预约</button>
+         </div>
+         <div class="forecast-card" data-reviewer-only>
           <div class="forecast-head"><strong>未来 30 分钟站点预测</strong><span class="forecast-status" id="forecastStatus">5 分钟粒度</span></div>
           <svg class="forecast-chart" id="forecastChart" viewBox="0 0 270 116" role="img" aria-label="未来三十分钟 P50 与 P90 排队时间预测折线图" preserveAspectRatio="none">
             <g aria-hidden="true">
