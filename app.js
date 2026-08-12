@@ -6656,7 +6656,8 @@
     const capability = (name, fallback = "not-run") => String(capabilities[name] || fallback).toLowerCase();
     const capabilityLabel = (name, value) => {
       const status = capability(name, value);
-      if (status === "not-run" || status === "unavailable") return "未执行";
+      if (status === "not-run") return "未接入";
+      if (status === "unavailable") return "服务不可用";
       if (status === "error") return "失败";
       if (status === "simulated") return "模拟";
       if (status === "synthetic") return "合成演示";
@@ -6664,7 +6665,7 @@
     };
     setText("visionVehicleCount", capabilityLabel("vehicleDetection") || `${vehicles.length} 辆`);
     setText("visionIdleSlots", capabilityLabel("parkingDetection") || `${parking.filter((slot) => slot.status === "idle").length} 个`);
-    setText("visionQueueCount", capabilityLabel("parkingDetection", result?.queueVehicles == null ? "not-run" : "executed") || `${result.queueVehicles} 辆`);
+    setText("visionQueueCount", capabilityLabel("queueDetection", result?.queueVehicles == null ? "not-run" : "executed") || `${result.queueVehicles} 辆`);
     const arrivalStatus = String(result?.arrivalRecognition?.status || "not-run").toLowerCase();
     setText("visionArrivalState", inferenceStatus === "error" || arrivalStatus === "error"
       ? "推理失败"

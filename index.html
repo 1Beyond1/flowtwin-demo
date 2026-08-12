@@ -5316,7 +5316,7 @@
             <video class="vision-preview-video" id="visionPreviewVideo" controls muted autoplay loop playsinline preload="auto" hidden></video>
           </article>
           <article class="vision-detail-card">
-            <h3>识别结果</h3>
+            <h3>识别结果（本次启用：车牌 OCR）</h3>
             <div class="vision-metrics">
               <div class="vision-metric"><span>车辆检测</span><strong id="visionVehicleCount">—</strong></div>
               <div class="vision-metric"><span>空闲车位</span><strong id="visionIdleSlots">—</strong></div>
@@ -5325,6 +5325,7 @@
               <div class="vision-metric"><span id="visionConfidenceLabel">模型分数</span><strong id="visionConfidence">—</strong></div>
               <div class="vision-metric"><span>处理来源</span><strong id="visionSource">—</strong></div>
             </div>
+            <div class="vision-boundary vision-capability-note"><strong>本次实际执行：</strong>车牌 OCR。车辆检测、车位检测和排队检测模型尚未接入，因此不输出推测数量。</div>
             <dl class="vision-detail-list">
               <div><dt>车牌</dt><dd id="visionPlate">—</dd></div>
               <div><dt>支付收据</dt><dd id="visionReceipt">—</dd></div>
