@@ -43,7 +43,11 @@
   // The walkthrough is a review surface, not a race.  Stage changes are
   // manual by default; these values are only used when the reviewer turns on
   // optional automatic playback.
-  const SIMULATION_STAGE_MS = Object.freeze({ reservation: 4200, recognition: 4200, queue: 6500, service: 6500, payment: 4200, leave: 3200, arrived: 4500 });
+  // Automatic playback must leave the reservation result on screen long
+  // enough for a reviewer to read it.  The async recalculation can take longer
+  // than one animation frame, so the reservation phase also has a separate
+  // post-completion hold below.
+  const SIMULATION_STAGE_MS = Object.freeze({ reservation: 6000, recognition: 4200, queue: 6500, service: 6500, payment: 4200, leave: 3200, arrived: 4500 });
 
   function paymentExitMinutesFor(energyType, station = {}) {
     const explicit = Number(station?.paymentExitMinutes ?? station?.paymentExitBufferMinutes ?? station?.paymentAndExitMinutes);
@@ -254,7 +258,11 @@
       reservationPending: false,
       reservationBeforeSnapshot: null,
       reservationAfterSnapshot: null,
-      reservationStopKey: null
+      reservationStopKey: null,
+      reservationAutoHoldUntil: 0,
+      reservationResumeTimer: null,
+      reservationEvidenceOpen: false,
+      ocrHealth: null
     }
   };
 
@@ -1952,17 +1960,24 @@
     const chargingPorts = Math.max(1, Math.min(totalPorts - faultPorts, Math.round(totalPorts * occupancy)));
     const idlePorts = Math.max(0, totalPorts - chargingPorts - faultPorts);
     const wait = Math.max(0, Number(station?.wait ?? station?.p50) || 0);
-    const queueVehicles = Math.max(0, Math.min(24, Math.round(Math.max(0, wait - 4) / 6)));
     // 两类预约状态有不同含义：reservedPorts 是已经锁定给预约用户的
     // 资源，reservationQueueAhead 是尚未分配资源、但在当前用户前面的
     // 预约订单。演示输入刻意保持保守，不把它们混成“实时排队人数”。
     const reservedPorts = Math.min(idlePorts, wait >= 12 ? 1 : 0);
+    const availablePorts = Math.max(0, idlePorts - reservedPorts);
+    // 当前有可用端口时，不再凭等待分钟倒推“此刻正在排队”的车辆；否则
+    // 页面会同时出现“空闲 3/12”和“排队 2 辆”的误导性组合。未来到站的
+    // 预约需求仍单列为 reservationQueueAhead，并由预测模型在 ETA 时刻重排。
+    const queueVehicles = availablePorts > 0
+      ? 0
+      : Math.max(0, Math.min(24, Math.round(Math.max(0, wait - 4) / 6)));
     const reservationQueueAhead = Math.max(0, Math.min(6, Math.floor(Math.max(0, wait - 24) / 18)));
     const averageSessionMinutes = station?.type === "加油站" ? 8 : 35;
     const estimatedReleaseMinutes = Array.from({ length: chargingPorts }, (_, index) => Number(Math.max(0, wait * (0.8 + (index % 4) * 0.1)).toFixed(1)));
     return {
       totalPorts,
       idlePorts,
+      availablePorts,
       chargingPorts,
       faultPorts,
       reservedPorts,
@@ -2749,6 +2764,9 @@
       distance: distanceKm,
       duration: durationMinutes,
       tolls: Number(route.tolls) || 0,
+      highway: route.highway === true,
+      routeClass: route.routeClass || (route.highway === true ? "highway" : "unknown"),
+      roadNames: Array.isArray(route.roadNames) ? route.roadNames.slice(0, 80) : [],
       policy
     };
   }
@@ -3362,6 +3380,9 @@
       distance: legs.reduce((sum, leg) => sum + Number(leg.distance || 0), 0),
       duration: legs.reduce((sum, leg) => sum + Number(leg.duration || 0), 0),
       tolls: legs.reduce((sum, leg) => sum + Number(leg.tolls || 0), 0),
+      highway: legs.some((leg) => leg?.highway === true),
+      routeClass: legs.some((leg) => leg?.highway === true) ? "highway" : "unknown",
+      roadNames: Array.from(new Set(legs.flatMap((leg) => Array.isArray(leg?.roadNames) ? leg.roadNames : []))).slice(0, 80),
       source: "高德逐段路线核验"
     };
   }
@@ -4497,9 +4518,14 @@
     const waitP50 = firstFinite(canonical?.p50, state.selectedStation?.p50, stop?.p50, canonical?.forecastArrivalWaitP50, state.selectedStation?.forecastArrivalWaitP50, stop?.forecastArrivalWaitP50, input.p50, fallback.p50, fallback.wait);
     const waitP90 = firstFinite(canonical?.p90, state.selectedStation?.p90, stop?.p90, canonical?.forecastArrivalWaitP90, state.selectedStation?.forecastArrivalWaitP90, stop?.forecastArrivalWaitP90, input.p90, fallback.p90, fallback.wait);
     const queue = firstFinite(input.queueVehicles, input.waitingVehicles, canonical?.queueVehicles, canonical?.waitingVehicles, state.selectedStation?.queueVehicles, state.selectedStation?.waitingVehicles, stop?.queueVehicles, stop?.waitingVehicles, fallback.queueVehicles, fallback.waitingVehicles);
-    const idle = firstFinite(input.idlePorts, input.availablePorts, canonical?.idlePorts, canonical?.availablePorts, state.selectedStation?.idlePorts, state.selectedStation?.availablePorts, stop?.idlePorts, stop?.availablePorts, fallback.idlePorts, fallback.availablePorts);
     const total = firstFinite(input.totalPorts, canonical?.totalPorts, state.selectedStation?.totalPorts, stop?.totalPorts, fallback.totalPorts);
     const reserved = firstFinite(input.reservedPorts, canonical?.reservedPorts, state.selectedStation?.reservedPorts, stop?.reservedPorts, fallback.reservedPorts);
+    const idle = firstFinite(input.idlePorts, canonical?.idlePorts, state.selectedStation?.idlePorts, stop?.idlePorts, fallback.idlePorts);
+    const available = firstFinite(input.availablePorts, Number.isFinite(idle) && Number.isFinite(reserved) ? idle - reserved : undefined, canonical?.availablePorts, state.selectedStation?.availablePorts, stop?.availablePorts, fallback.availablePorts, fallback.idlePorts);
+    const reservationQueueAhead = firstFinite(input.reservationQueueAhead, canonical?.reservationQueueAhead, state.selectedStation?.reservationQueueAhead, stop?.reservationQueueAhead, fallback.reservationQueueAhead);
+    const charging = firstFinite(input.chargingPorts, canonical?.chargingPorts, state.selectedStation?.chargingPorts, stop?.chargingPorts, fallback.chargingPorts);
+    const fault = firstFinite(input.faultPorts, canonical?.faultPorts, state.selectedStation?.faultPorts, stop?.faultPorts, fallback.faultPorts);
+    const averageSession = firstFinite(input.averageSessionMinutes, canonical?.averageSessionMinutes, state.selectedStation?.averageSessionMinutes, stop?.averageSessionMinutes, fallback.averageSessionMinutes);
     const service = firstFinite(stop?.serviceMinutes, stop?.chargeMinutes, stop?.refuelMinutes, canonical?.serviceMinutes, canonical?.chargeMinutes, canonical?.refuelMinutes, state.selectedStation?.serviceMinutes, state.selectedStation?.chargeMinutes, state.selectedStation?.refuelMinutes, input.averageSessionMinutes, fallback.averageSessionMinutes);
     return {
       station,
@@ -4507,8 +4533,13 @@
       waitP90,
       queue,
       idle,
+      available,
       total,
       reserved,
+      reservationQueueAhead,
+      charging,
+      fault,
+      averageSession,
       service,
       source: station.forecastSource || input.dataSource || "FlowTwin 演示仿真"
     };
@@ -4608,10 +4639,13 @@
     const media = card.querySelector(".simulation-scene-media");
     if (media) media.hidden = true;
     byId("simulationReservationSignal")?.setAttribute("hidden", "");
+    byId("simulationReservationEvidenceToggle")?.setAttribute("hidden", "");
+    byId("simulationReservationEvidence")?.setAttribute("hidden", "");
     byId("simulationStageRail")?.setAttribute("hidden", "");
     byId("simulationOcrRow")?.setAttribute("hidden", "");
     byId("simulationDataGrid")?.setAttribute("hidden", "");
     byId("simulationDataSource")?.setAttribute("hidden", "");
+    byId("simulationQueueNote")?.setAttribute("hidden", "");
     byId("simulationOcrDetail")?.setAttribute("hidden", "");
     if (title) title.textContent = "本次模拟驾驶完成";
     if (badge) badge.textContent = "流程回顾";
@@ -4641,6 +4675,45 @@
     renderSimulationSceneAction(phase);
   }
 
+  function renderSimulationReservationEvidence(phase) {
+    const toggle = byId("simulationReservationEvidenceToggle");
+    const panel = byId("simulationReservationEvidence");
+    if (!toggle || !panel) return;
+    const isReservation = phase?.type === "reservation";
+    toggle.hidden = !isReservation;
+    if (!isReservation) {
+      toggle.setAttribute("aria-expanded", "false");
+      panel.hidden = true;
+      panel.innerHTML = "";
+      return;
+    }
+    const simulation = state.simulation;
+    const before = simulation.reservationBeforeSnapshot || {};
+    const after = simulation.reservationAfterSnapshot || before;
+    const snapshot = after || before;
+    const numberText = (value, suffix = "") => Number.isFinite(Number(value)) ? `${Number(value)}${suffix}` : "—";
+    const available = Number.isFinite(Number(snapshot.available)) ? `${snapshot.available}/${numberText(snapshot.total)}` : "—";
+    const queue = numberText(snapshot.queue, " 辆");
+    const reservationAhead = numberText(snapshot.reservationQueueAhead, " 辆");
+    const beforeAfter = Number.isFinite(Number(before.waitP50)) && Number.isFinite(Number(after.waitP50))
+      ? `P50 ${before.waitP50} → ${after.waitP50} 分钟；P90 ${numberText(before.waitP90, " 分钟")} → ${numberText(after.waitP90, " 分钟")}`
+      : "预约前后等待预测将在可用输入完整时对比";
+    const eta = formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes));
+    const station = escapeHtml(phase.stop?.name || "下一补能站");
+    panel.innerHTML = [
+      `<div class="simulation-reservation-evidence-row"><strong>触发条件</strong><span>车辆预计 ${eta} 到达「${station}」，系统在接近站点前预先写入预约状态。</span></div>`,
+      `<div class="simulation-reservation-evidence-row"><strong>输入快照</strong><span>可用补能位 ${available} · 充电中 ${numberText(snapshot.charging, " 个")} · 已预约 ${numberText(snapshot.reserved, " 个")} · 已到站等待 ${queue} · 预约队列前方 ${reservationAhead}。</span></div>`,
+      `<div class="simulation-reservation-evidence-row"><strong>计算过程</strong><span>把本车预计到站时刻加入端口离散事件队列，按端口释放时间、平均服务时长和预约队列前方车辆重新排程，再输出等待 P50/P90。</span></div>`,
+      `<div class="simulation-reservation-evidence-row"><strong>本次结果</strong><span>${beforeAfter}</span></div>`,
+      `<div class="simulation-reservation-evidence-row"><strong>数据边界</strong><span>${escapeHtml(String(snapshot.source || "FlowTwin 演示仿真"))}；这是本地演示/企业需求先验推演，不是实时站点经营数据。</span></div>`
+    ].join("");
+    const expanded = Boolean(simulation.reservationEvidenceOpen);
+    toggle.setAttribute("aria-expanded", String(expanded));
+    const label = toggle.querySelector("span");
+    if (label) label.textContent = expanded ? "收起计算依据" : "展开计算依据";
+    panel.hidden = !expanded;
+  }
+
   function renderSimulationScene(phase) {
     const card = byId("simulationSceneCard");
     const image = byId("simulationSceneImage");
@@ -4652,6 +4725,7 @@
       if (card) card.hidden = true;
       byId("simulationDataGrid")?.setAttribute("hidden", "");
       byId("simulationDataSource")?.setAttribute("hidden", "");
+      byId("simulationQueueNote")?.setAttribute("hidden", "");
       byId("simulationSceneAction")?.setAttribute("hidden", "");
       byId("simulationCompletionBody")?.setAttribute("hidden", "");
       return;
@@ -4666,11 +4740,14 @@
       const media = card.querySelector(".simulation-scene-media");
       if (media) media.hidden = false;
       byId("simulationReservationSignal")?.setAttribute("hidden", "");
+      byId("simulationReservationEvidenceToggle")?.setAttribute("hidden", "");
+      byId("simulationReservationEvidence")?.setAttribute("hidden", "");
       byId("simulationStageRail")?.setAttribute("hidden", "");
       byId("simulationSceneAction")?.setAttribute("hidden", "");
       byId("simulationCompletionBody")?.setAttribute("hidden", "");
       byId("simulationDataGrid")?.setAttribute("hidden", "");
       byId("simulationDataSource")?.setAttribute("hidden", "");
+      byId("simulationQueueNote")?.setAttribute("hidden", "");
       return;
     }
     const asset = simulationAssetFor(phase);
@@ -4717,10 +4794,10 @@
       : "待执行本地 OCR";
     const stageItems = phase.type === "reservation"
       ? [["预约状态", state.simulation.reservationPending ? "计算中" : "已自动预约"], ["预计到站", formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))]]
-      : phase.type === "recognition"
-        ? [["车牌链路", recognitionValue], ["到站状态", "已进入识别区"]]
+        : phase.type === "recognition"
+          ? [["车牌链路", recognitionValue], ["到站状态", "已进入识别区"]]
         : phase.type === "queue"
-          ? [["预计排队 P50", simulationMetricValue(snapshot.waitP50, " 分钟")], ["尾部排队 P90", simulationMetricValue(snapshot.waitP90, " 分钟")], ["排队车辆", simulationMetricValue(snapshot.queue, " 辆")], ["空闲补能位", Number.isFinite(snapshot.idle) ? `${snapshot.idle}/${snapshot.total}` : "—"]]
+          ? [["预计排队 P50", simulationMetricValue(snapshot.waitP50, " 分钟")], ["尾部排队 P90", simulationMetricValue(snapshot.waitP90, " 分钟")], ["当前可用补能位", Number.isFinite(snapshot.available) ? `${snapshot.available}/${snapshot.total}` : "—"], ["预计到站需求", simulationMetricValue((Number(snapshot.queue) || 0) + (Number(snapshot.reservationQueueAhead) || 0), " 辆")]]
           : phase.type === "service"
             ? [[isFuelActive() ? "加油服务" : "充电服务", simulationMetricValue(snapshot.service, " 分钟")], ["预约占用", simulationMetricValue(snapshot.reserved, " 个")]]
             : phase.type === "payment"
@@ -4739,6 +4816,25 @@
       ? "视觉素材：AI 生成样例；OCR：本地 PaddleOCR 实际调用；若服务回传标注图则展示标注结果，否则只展示结构化响应。"
       : `数据依据：${snapshot.source} · 排队/端口/服务时长仍是演示或企业先验推演。`;
     source.hidden = false;
+    let queueNote = byId("simulationQueueNote");
+    if (!queueNote) {
+      queueNote = document.createElement("div");
+      queueNote.id = "simulationQueueNote";
+      queueNote.className = "simulation-queue-note";
+      source.after(queueNote);
+    }
+    queueNote.hidden = phase.type !== "queue";
+    if (phase.type === "queue") {
+      const available = Number(snapshot.available);
+      const total = Number(snapshot.total);
+      const waiting = Math.max(0, Number(snapshot.queue) || 0);
+      const reservationAhead = Math.max(0, Number(snapshot.reservationQueueAhead) || 0);
+      if (Number.isFinite(available) && available > 0) {
+        queueNote.textContent = `当前快照仍有 ${available}/${Number.isFinite(total) ? total : "—"} 个可用补能位；“预计到站需求”由已到站等待 ${waiting} 辆 + 预约队列前方 ${reservationAhead} 辆组成，不表示此刻所有车辆都在排队。P50/P90 按车辆预计到站时刻重新排程。`;
+      } else {
+        queueNote.textContent = `当前没有可用补能位；等待需求会按照端口释放时刻进入队列。预计到站需求：已到站等待 ${waiting} 辆 + 预约队列前方 ${reservationAhead} 辆，P50/P90 是本次到站时刻的仿真结果。`;
+      }
+    }
     let ocrDetail = byId("simulationOcrDetail");
     if (!ocrDetail) {
       ocrDetail = document.createElement("div");
@@ -4766,6 +4862,7 @@
     }
     const reservationSignal = byId("simulationReservationSignal");
     if (reservationSignal) reservationSignal.hidden = phase.type !== "reservation";
+    renderSimulationReservationEvidence(phase);
     if (phase.type === "reservation") {
       setText("simulationReservationStation", phase.stop?.name || "下一补能站");
       setText("simulationReservationEta", `预计到站 ${formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))}`);
@@ -4839,6 +4936,32 @@
     refreshIcons();
   }
 
+  function clearSimulationReservationResumeTimer() {
+    const timer = state.simulation.reservationResumeTimer;
+    if (timer) window.clearTimeout(timer);
+    state.simulation.reservationResumeTimer = null;
+  }
+
+  function scheduleSimulationReservationResume() {
+    const simulation = state.simulation;
+    clearSimulationReservationResumeTimer();
+    if (!simulation.active || !simulation.autoAdvance || simulation.phase?.type !== "reservation" || simulation.reservationPending) return;
+    const delay = Math.max(0, Number(simulation.reservationAutoHoldUntil || 0) - performance.now());
+    if (delay <= 0) {
+      simulation.paused = false;
+      simulation.lastFrameAt = performance.now();
+      if (!simulation.rafId) simulation.rafId = window.requestAnimationFrame(simulationFrame);
+      return;
+    }
+    simulation.reservationResumeTimer = window.setTimeout(() => {
+      simulation.reservationResumeTimer = null;
+      if (!simulation.active || !simulation.autoAdvance || simulation.phase?.type !== "reservation" || simulation.reservationPending) return;
+      simulation.paused = false;
+      simulation.lastFrameAt = performance.now();
+      if (!simulation.rafId) simulation.rafId = window.requestAnimationFrame(simulationFrame);
+    }, delay + 24);
+  }
+
   async function autoReserveSimulationStop(stop) {
     if (!stop?.id || isFuelActive()) return;
     const key = String(stop.id);
@@ -4866,7 +4989,18 @@
     } finally {
       state.simulation.reservationPending = false;
       const phase = state.simulation.phase;
-      if (phase?.stop && String(phase.stop.id) === key) renderSimulationPhase(phase);
+      if (phase?.stop && String(phase.stop.id) === key) {
+        // Freeze the completed reservation card in automatic playback.  The
+        // reviewer must be able to read the station, ETA, before/after P50/P90
+        // and the expandable calculation evidence before the next phase starts.
+        if (state.simulation.autoAdvance && phase.type === "reservation") {
+          state.simulation.phaseElapsedMs = Number(phase.durationMs || SIMULATION_STAGE_MS.reservation);
+          state.simulation.reservationAutoHoldUntil = performance.now() + 5200;
+          state.simulation.paused = true;
+        }
+        renderSimulationPhase(phase);
+        scheduleSimulationReservationResume();
+      }
     }
   }
 
@@ -4951,6 +5085,9 @@
     const simulation = state.simulation;
     const phase = simulation.phases[index];
     if (!phase) return;
+    clearSimulationReservationResumeTimer();
+    simulation.reservationAutoHoldUntil = 0;
+    simulation.reservationEvidenceOpen = false;
     simulation.phaseIndex = index;
     simulation.phaseElapsedMs = 0;
     simulation.phase = phase;
@@ -5044,7 +5181,11 @@
       simulation.progress = (phase?.progressStart ?? simulation.progress) + ((phase?.progressEnd ?? simulation.progress) - (phase?.progressStart ?? simulation.progress)) * ratio;
       updateSimulationMarker();
       if (ratio >= 1) {
-        if (phase?.type === "recognition" && !simulation.recognitionResolved) {
+        if (phase?.type === "reservation" && (simulation.reservationPending || performance.now() < Number(simulation.reservationAutoHoldUntil || 0))) {
+          simulation.paused = true;
+          renderSimulationPhase(phase);
+          if (!simulation.reservationPending) scheduleSimulationReservationResume();
+        } else if (phase?.type === "recognition" && !simulation.recognitionResolved) {
           simulation.paused = true;
           renderSimulationPhase(phase);
         } else {
@@ -5059,7 +5200,15 @@
     const image = byId("simulationSceneImage");
     const status = byId("simulationOcrStatus");
     const button = byId("simulationOcrButton");
-    if (!image?.src || !status) return;
+    const detail = byId("simulationOcrDetail");
+    if (!status) return;
+    if (!image?.src) {
+      status.textContent = "场景素材尚未加载，无法执行 OCR";
+      if (detail) detail.textContent = "请先让到站视觉画面加载完成，再执行本地 OCR；不会把缺少图片当作识别成功。";
+      state.simulation.ocrFallbackAvailable = true;
+      renderSimulationPhase(state.simulation.phase);
+      return;
+    }
     const targetStopIndex = state.simulation.phase?.stopIndex;
     if (!force && state.simulation.ocrAttemptedFor === targetStopIndex) return;
     state.simulation.ocrAttemptedFor = targetStopIndex;
@@ -5071,6 +5220,14 @@
     if (button) { button.disabled = true; button.textContent = "识别中…"; }
     status.textContent = "正在调用本地 PaddleOCR…";
     try {
+      const health = await getJson("/api/cv/health", 5000).catch((error) => ({ status: "unreachable", error: error?.message || "视觉服务健康检查失败" }));
+      state.simulation.ocrHealth = health;
+      if (health?.status === "unreachable" || health?.serviceReachable === false) {
+        status.textContent = "本地 OCR 服务未启动";
+        if (detail) detail.textContent = "视觉服务未连接（127.0.0.1:5099）。请先启动 cv-service，再点“再次执行 OCR”；本次不会生成虚假车牌。";
+      } else if (health?.modelLoaded === false || health?.status === "warming") {
+        status.textContent = "正在加载本地 PaddleOCR 模型…";
+      }
       const response = await fetch(image.src, { cache: "no-store" });
       if (!response.ok) throw new Error("读取场景素材失败");
       const imageData = await readVisionBlob(await response.blob(), "模拟驾驶场景");
@@ -5083,7 +5240,6 @@
       const plate = result?.arrivalRecognition?.plate;
       const processingMs = Number(result?.processingMs);
       const timing = Number.isFinite(processingMs) ? ` · ${Math.round(processingMs)} ms` : "";
-      const detail = byId("simulationOcrDetail");
       const badge = byId("simulationSceneBadge");
       if (inference === "executed" && plate) {
         state.simulation.recognitionResolved = true;
@@ -5102,10 +5258,13 @@
       } else {
         state.simulation.recognitionResolved = false;
         state.simulation.ocrFallbackAvailable = true;
-        status.textContent = "本次未执行 OCR，未生成虚假车牌";
+        const serviceUnavailable = health?.status === "unreachable" || health?.serviceReachable === false;
+        status.textContent = serviceUnavailable ? "本地 OCR 服务未启动" : "本次未执行 OCR，未生成虚假车牌";
         if (badge) badge.textContent = "OCR 未执行";
         const evidence = Array.isArray(result?.evidence) ? result.evidence.filter(Boolean).at(-1) : null;
-        if (detail) detail.textContent = `实际响应：${evidence || result?.source || "本地模型尚未就绪"}${timing}。可选择使用预置样例继续，不把它当成本次图片识别结果。`;
+        if (detail) detail.textContent = serviceUnavailable
+          ? "视觉服务未连接（127.0.0.1:5099）。请先启动 cv-service，再点“再次执行 OCR”；可使用预置样例继续，但不会把它当成本次图片的真实识别结果。"
+          : `实际响应：${evidence || result?.source || "本地模型尚未就绪"}${timing}。可选择使用预置样例继续，不把它当成本次图片识别结果。`;
       }
       if (result?.annotatedImage) {
         image.src = result.annotatedImage;
@@ -5199,6 +5358,10 @@
     simulation.reservationBeforeSnapshot = null;
     simulation.reservationAfterSnapshot = null;
     simulation.reservationStopKey = null;
+    simulation.reservationAutoHoldUntil = 0;
+    clearSimulationReservationResumeTimer();
+    simulation.reservationEvidenceOpen = false;
+    simulation.ocrHealth = null;
     simulation.reservedStops = new Set();
     simulation.savedMapView = state.live && state.map ? { center: parseLocation(state.map.getCenter?.()), zoom: state.map.getZoom?.() } : null;
     document.body.classList.add("simulation-active");
@@ -5232,6 +5395,7 @@
   function stopSimulationDriving() {
     const simulation = state.simulation;
     if (simulation.rafId) window.cancelAnimationFrame(simulation.rafId);
+    clearSimulationReservationResumeTimer();
     simulation.rafId = null;
     removeSimulationMarker();
     simulation.active = false;
@@ -5244,6 +5408,7 @@
     byId("simulationSceneImage")?.removeAttribute("data-simulation-scene-key");
     byId("simulationDataGrid")?.remove();
     byId("simulationDataSource")?.remove();
+    byId("simulationQueueNote")?.remove();
     byId("simulationOcrDetail")?.remove();
     if (state.live && state.map) {
       const saved = simulation.savedMapView;
@@ -5300,7 +5465,10 @@
     setText("simulationAutoState", state.simulation.autoAdvance ? "开启" : "手动推进");
     if (state.simulation.active && state.simulation.autoAdvance) {
       const recognitionPending = state.simulation.phase?.type === "recognition" && !state.simulation.recognitionResolved;
-      if (!recognitionPending && state.simulation.paused) state.simulation.paused = false;
+      const reservationPending = state.simulation.phase?.type === "reservation"
+        && (state.simulation.reservationPending || performance.now() < Number(state.simulation.reservationAutoHoldUntil || 0));
+      if (!recognitionPending && !reservationPending && state.simulation.paused) state.simulation.paused = false;
+      if (reservationPending) scheduleSimulationReservationResume();
       if (!state.simulation.rafId) {
         state.simulation.lastFrameAt = performance.now();
         state.simulation.rafId = window.requestAnimationFrame(simulationFrame);
@@ -5953,6 +6121,47 @@
     refreshIcons();
   }
 
+  function serviceRouteContext(record) {
+    const distance = Math.max(0, Number(record?.distance || 0));
+    const duration = Math.max(0, Number(record?.duration || 0));
+    const explicitHighway = record?.highway === true || record?.routeClass === "highway";
+    // AMap may omit road names on a cached/SDK route.  A long multi-stop
+    // corridor is therefore treated as “service-area preferred”, but the UI
+    // must not call it a confirmed highway unless the route metadata says so.
+    const longCorridor = !explicitHighway && distance >= 180 && duration >= 150 && (record?.multiStop || Number(record?.tolls || 0) > 0);
+    return {
+      explicitHighway,
+      serviceAreaPreferred: explicitHighway || longCorridor,
+      label: explicitHighway ? "高速路线" : longCorridor ? "长途路线" : "普通道路"
+    };
+  }
+
+  function serviceLocationLabel(record, progress) {
+    const target = Math.max(0, Math.min(1, Number(progress) || 0));
+    const landmarks = [
+      ...(Array.isArray(record?.stops) ? record.stops : []),
+      ...(Array.isArray(record?.viaWaypoints) ? record.viaWaypoints : [])
+    ].filter((item) => item?.name && Number.isFinite(Number(item.routeProgress)));
+    const nearest = landmarks
+      .map((item) => ({ item, delta: Math.abs(Number(item.routeProgress) - target) }))
+      .sort((a, b) => a.delta - b.delta)[0];
+    if (nearest && nearest.delta <= 0.14) return `${nearest.item.name}附近`;
+    return `高德路线约 ${Math.round(target * 100)}% 处`;
+  }
+
+  function defaultServiceDetourAllowanceKm(record) {
+    if (!record) return 0;
+    if (state.detourExplicit) return Math.max(0, Number(state.maxDetourKm || 0));
+    const base = Math.max(0, Number(record.baseDistance || record.distance || 0));
+    const context = serviceRouteContext(record);
+    if (context.serviceAreaPreferred) return Math.max(8, Math.min(20, base * 0.015));
+    if (record.multiStop) return Math.max(6, Math.min(16, base * 0.012));
+    // City/non-highway service candidates need a small but non-zero allowance;
+    // the old zero-kilometre default rejected any POI that was not exactly on
+    // the polyline, even when a few kilometres of local road were reasonable.
+    return Math.max(3, Math.min(10, base * 0.03 || 4));
+  }
+
   function nextDailyMoment(departureMinutes, durationMinutes, startMinute, endMinute) {
     const earliest = departureMinutes + 25;
     const latest = departureMinutes + durationMinutes;
@@ -5982,40 +6191,53 @@
       : "";
     const lunch = nextDailyMoment(departure, duration, 11 * 60 + 30, 13 * 60 + 30);
     const dinner = nextDailyMoment(departure, duration, 17 * 60 + 30, 20 * 60);
-    const mealMoment = [lunch, dinner].filter(Number.isFinite).sort((a, b) => a - b)[0];
-    if (Number.isFinite(mealMoment)) {
-      return {
-        kind: "meal",
-        icon: "utensils",
-        title: `预计 ${formatClock(mealMoment)} 接近用餐时段`,
-        text: `主路线纯驾驶约 ${driveLabel}。是否在该时刻附近安排简餐或咖啡？确认后会把服务停靠加入路线并重算 ETA。${weatherSuffix}`,
-        targetMinute: mealMoment,
-        progress: Math.max(0.08, Math.min(0.92, (mealMoment - departure) / Math.max(1, duration)))
-      };
-    }
-    if (duration >= 130) {
-      // Suggest resting after ~2h on-road, not “trip total = 2 hours”.
-      const restAfterMinutes = 120;
-      const targetMinute = departure + restAfterMinutes;
+    const events = [
+      ...[lunch, dinner].filter(Number.isFinite).map((targetMinute) => ({ kind: "meal", icon: "utensils", targetMinute })),
+      ...(duration >= 130 ? [{ kind: "rest", icon: "armchair", targetMinute: departure + 120 }] : [])
+    ].filter((event) => event.targetMinute > departure + 25 && event.targetMinute <= departure + duration)
+      .sort((a, b) => a.targetMinute - b.targetMinute);
+    const primary = events[0];
+    const secondary = events[1];
+    if (primary) {
+      const progress = Math.max(0.08, Math.min(0.92, (primary.targetMinute - departure) / Math.max(1, duration)));
+      const locationLabel = serviceLocationLabel(record, progress);
+      const secondaryCopy = secondary
+        ? `之后约 ${formatClock(secondary.targetMinute)} 还会进入${secondary.kind === "meal" ? "用餐" : "休息"}窗口。`
+        : "";
+      if (primary.kind === "meal") {
+        return {
+          kind: "meal",
+          icon: "utensils",
+          title: `预计 ${formatClock(primary.targetMinute)} 在${locationLabel}进入用餐时段`,
+          text: `主路线纯驾驶约 ${driveLabel}。预计在${locationLabel}可以进行就餐或短暂休息，是否需要？确认后会在该位置附近检索服务并重算 ETA。${secondaryCopy}${weatherSuffix}`,
+          targetMinute: primary.targetMinute,
+          progress,
+          locationLabel
+        };
+      }
       return {
         kind: "rest",
         icon: "armchair",
-        title: `全程约 ${driveLabel} · 建议 ${formatClock(targetMinute)} 途中休息`,
-        text: `这是高德主路线纯驾驶时长（约 ${driveLabel}），不是把全程算成 2 小时。系统建议在出发后约 2 小时处短暂休息或咖啡，并优先找顺路服务点。${weatherSuffix}`,
-        targetMinute,
-        progress: Math.max(0.08, Math.min(0.92, restAfterMinutes / duration))
+        title: `连续驾驶约 2 小时 · ${formatClock(primary.targetMinute)} 在${locationLabel}休息`,
+        text: `高德主路线纯驾驶约 ${driveLabel}。预计在${locationLabel}附近短暂休息或喝咖啡，是否需要？这是疲劳驾驶提醒，确认后会按该位置检索顺路服务。${secondaryCopy}${weatherSuffix}`,
+        targetMinute: primary.targetMinute,
+        progress,
+        locationLabel
       };
     }
     if (duration >= 90) {
       const restAfterMinutes = 90;
       const targetMinute = departure + restAfterMinutes;
+      const progress = Math.max(0.08, Math.min(0.92, restAfterMinutes / duration));
+      const locationLabel = serviceLocationLabel(record, progress);
       return {
         kind: "coffee",
         icon: "coffee",
-        title: `全程约 ${driveLabel} · 建议 ${formatClock(targetMinute)} 短暂停靠`,
-        text: `主路线纯驾驶约 ${driveLabel}。是否在出发后约 1.5 小时查看沿线咖啡或休息建议？${weatherSuffix}`,
+        title: `全程约 ${driveLabel} · ${formatClock(targetMinute)} 在${locationLabel}短暂停靠`,
+        text: `主路线纯驾驶约 ${driveLabel}。预计在${locationLabel}附近可以短暂停靠，是否需要？确认后会在该位置附近查看咖啡或休息建议。${weatherSuffix}`,
         targetMinute,
-        progress: Math.max(0.08, Math.min(0.92, restAfterMinutes / duration))
+        progress,
+        locationLabel
       };
     }
     return null;
@@ -6074,12 +6296,9 @@
     if (!record || !service) return false;
     const inline = Boolean(service.inlineStationId);
     const estimatedRoadKm = inline ? 0 : Math.max(0.6, Number(service.detourKm || 0) * 2);
-    const base = state.baseRouteRecords[record.key] || state.baseRouteRecords.reliable || record;
     const detourAllowanceKm = state.detourExplicit
       ? Math.max(0, Number(state.maxDetourKm || 0))
-      : record.multiStop
-        ? Math.max(6, Math.min(16, Number(record.baseDistance || base.distance || 0) * 0.012))
-        : 0;
+      : defaultServiceDetourAllowanceKm(record);
     if (!inline && estimatedRoadKm > detourAllowanceKm + 1e-6) return false;
     if (!hasArrivalDeadline()) return true;
     const slackMinutes = Number(state.deadlineMinutes) - Number(record?.arrival);
@@ -6107,7 +6326,8 @@
         options: [],
         kind,
         targetMinute: Math.round(state.departureMinutes + Number(record.duration || 0) * progress),
-        progress
+        progress,
+        locationLabel: serviceLocationLabel(record, progress)
       });
       state.serviceSuggestion = suggestion;
     }
@@ -6122,13 +6342,21 @@
     if (!center) return;
     const preferredName = String(options.preferredName || "").trim();
     const serviceKind = options.kind || suggestion.kind || "meal";
-    const searches = preferredName
+    let searches = preferredName
       ? [[preferredName, serviceKind], ...(serviceKind === "meal" ? [["餐厅", "meal"], ["咖啡厅", "coffee"]] : serviceKind === "rest" ? [["休息区", "rest"], ["咖啡厅", "coffee"]] : [["咖啡厅", "coffee"], ["便利店", "rest"]])]
       : suggestion.kind === "meal"
         ? [["餐厅", "meal"], ["咖啡厅", "coffee"]]
         : suggestion.kind === "rest"
           ? [["休息区", "rest"], ["咖啡厅", "coffee"]]
           : [["咖啡厅", "coffee"], ["便利店", "rest"]];
+    const routeContext = serviceRouteContext(record);
+    if (!preferredName && routeContext.serviceAreaPreferred && (serviceKind === "meal" || serviceKind === "rest" || serviceKind === "coffee")) {
+      // On a confirmed highway, search service areas first.  For a long
+      // corridor whose AMap response omitted road names, this is a deliberate
+      // “service-area preferred” fallback, not a claim that every metre is
+      // motorway.  It avoids asking a driver to leave the highway for lunch.
+      searches = [["服务区", "service-area"], ...searches];
+    }
     const results = await searchInBatches(searches.map(([keyword, type]) => () => searchNearby(keyword, center, type)), 2);
     if (requestId !== state.serviceRequestVersion || state.serviceSuggestion?.key !== suggestion.key) return;
     const durationByType = { meal: 20, coffee: 12, rest: 15 };
@@ -6136,19 +6364,28 @@
     const energyStops = record.stops?.length ? record.stops : record.station ? [record.station] : [];
     const allCandidates = dedupePois(results.flat())
       .map((poi) => {
-        const type = poi.type === "meal" || poi.type === "coffee" ? poi.type : "rest";
+        const type = poi.serviceAreaCandidate
+          ? serviceKind === "meal" ? "meal" : "rest"
+          : poi.type === "meal" || poi.type === "coffee" ? poi.type : "rest";
         const nearestEnergyStop = energyStops.slice().sort((a, b) => distanceKm(a.location, poi.location) - distanceKm(b.location, poi.location))[0];
         const inlineStationId = nearestEnergyStop && distanceKm(nearestEnergyStop.location, poi.location) <= 1.5 ? nearestEnergyStop.id : null;
         const detourKm = Math.max(0.3, nearestPointDistance(poi.location, record.path) * 2 + 0.3);
+        const candidateProgress = Number(routeProgress(poi.location, record.path).toFixed(4));
+        const candidateLocation = suggestion.locationLabel || serviceLocationLabel(record, candidateProgress);
+        const reason = poi.serviceAreaCandidate
+          ? `${routeContext.explicitHighway ? "高速服务区候选" : "长途路线服务区候选"} · 预计在${candidateLocation}附近停靠，避免下高速`
+          : inlineStationId ? "靠近计划补能站，可与驻留时间并行安排" : `预计在${candidateLocation}附近 · 距主路线约 ${detourKm.toFixed(1)} km，加入后会重算 ETA`;
         return Object.assign({}, poi, {
           id: `service-${poi.id || stableHash(`${poi.name}-${poi.location.join(",")}`)}`,
           serviceType: type,
           icon: iconByType[type],
           durationMinutes: durationByType[type],
-          routeProgress: Number(routeProgress(poi.location, record.path).toFixed(4)),
+          routeProgress: candidateProgress,
           detourKm: Number(detourKm.toFixed(1)),
           inlineStationId,
-          reason: inlineStationId ? "靠近计划补能站，可与驻留时间并行安排" : `距主路线约 ${detourKm.toFixed(1)} km，加入后会重算 ETA`
+          targetLocationLabel: candidateLocation,
+          highwayServiceArea: Boolean(poi.serviceAreaCandidate),
+          reason
         });
       })
       .sort((a, b) => a.detourKm - b.detourKm);
@@ -6227,7 +6464,7 @@
     }
     const options = suggestion.options || [];
     const excludedByDeadline = Number(suggestion.filteredOutCount || 0);
-    if (dwellLabel) dwellLabel.textContent = `预计 ${formatClock(suggestion.targetMinute)} 经过 · 高德真实 POI`;
+    if (dwellLabel) dwellLabel.textContent = `预计 ${formatClock(suggestion.targetMinute)} 在${suggestion.locationLabel || serviceLocationLabel(record, suggestion.progress)}附近经过 · 高德真实 POI`;
     const requestedName = String(suggestion.requestedServiceName || "").trim();
     const hasExact = Boolean(suggestion.exactMatchFound);
     container.innerHTML = options.length
@@ -6268,9 +6505,7 @@
       const baseWaypoints = isInlineService ? energyWaypoints : energyWaypoints.concat(serviceWaypoint);
       const waypoints = routeStopsWithTripWaypoints(baseWaypoints, true);
       const base = state.baseRouteRecords[role] || state.baseRouteRecords.reliable || record;
-      const longTripServiceAllowanceKm = !state.detourExplicit && record.multiStop
-        ? Math.max(6, Math.min(16, Number(record.baseDistance || base.distance || 0) * 0.012))
-        : 0;
+      const longTripServiceAllowanceKm = defaultServiceDetourAllowanceKm(record);
       const route = await queryRouteSequence(role, waypoints, { includeTripWaypoints: false });
       const servicePlan = {
         id: service.id,
@@ -6288,7 +6523,7 @@
       let estimatedServiceRoute = false;
       let serviceDetourWithinLimit = isInlineService
         || Boolean(updated?.detourWithinLimit)
-        || (!state.detourExplicit && record.multiStop && incrementalDetourKm <= longTripServiceAllowanceKm + 1e-6);
+        || (!state.detourExplicit && Number.isFinite(incrementalDetourKm) && incrementalDetourKm <= longTripServiceAllowanceKm + 1e-6);
       // The POI itself is real, but a routing provider can occasionally reject
       // a burst of national-road leg requests. For a small, non-explicit
       // detour, retain a clearly-labelled corridor estimate rather than making
@@ -6435,11 +6670,14 @@
     }
     const preferredName = String(action?.name || "").trim();
     const kind = label === "休息" ? "rest" : preferredName && /咖啡|星巴克|瑞幸/.test(preferredName) ? "coffee" : "meal";
+    const trigger = serviceTriggerForRecord(record);
     await loadServiceRecommendations(record, {
       action: true,
       kind,
       preferredName,
-      progress: Number.isFinite(Number(record.duration)) && Number(record.duration) > 0 ? Math.min(0.82, Math.max(0.18, 90 / Number(record.duration))) : 0.45
+      progress: Number.isFinite(Number(trigger?.progress))
+        ? trigger.progress
+        : Number.isFinite(Number(record.duration)) && Number(record.duration) > 0 ? Math.min(0.82, Math.max(0.18, 90 / Number(record.duration))) : 0.45
     });
     const options = state.serviceSuggestion?.recordKey === record.key ? (state.serviceSuggestion.options || []) : [];
     if (!options.length) {
@@ -6691,6 +6929,9 @@
         distance: distanceKm,
         duration: durationMinutes,
         tolls: Number(route.tolls) || 0,
+        highway: route.highway === true,
+        routeClass: route.routeClass || (route.highway === true ? "highway" : "unknown"),
+        roadNames: Array.isArray(route.roadNames) ? route.roadNames.slice(0, 80) : [],
         policy,
         routeSource: payload.source || route.source || "高德 Web 服务路线规划"
       };
@@ -8437,6 +8678,12 @@
     $$('[data-simulation-speed]').forEach((button) => button.addEventListener("click", () => setSimulationSpeed(button.dataset.simulationSpeed)));
     byId("simulationOcrButton")?.addEventListener("click", () => runSimulationOcr(true));
     byId("simulationOcrFallbackButton")?.addEventListener("click", useSimulationOcrFallback);
+    byId("simulationReservationEvidenceToggle")?.addEventListener("click", () => {
+      if (!state.simulation.active || state.simulation.phase?.type !== "reservation") return;
+      state.simulation.reservationEvidenceOpen = !state.simulation.reservationEvidenceOpen;
+      renderSimulationReservationEvidence(state.simulation.phase);
+      refreshIcons();
+    });
     byId("visionSampleButton")?.addEventListener("click", () => runVisionAnalysis("sample"));
     byId("visionUploadButton")?.addEventListener("click", () => runVisionAnalysis("upload"));
     byId("visionFileInput")?.addEventListener("change", (event) => {

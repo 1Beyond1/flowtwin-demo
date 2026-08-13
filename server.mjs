@@ -118,6 +118,11 @@ function parseCoordinate(value) {
 function normalizePath(path, key, station) {
   const steps = Array.isArray(path.steps) ? path.steps : [];
   const points = steps.flatMap((step) => String(step.polyline || "").split(";")).map((point) => point.split(",").map(Number)).filter((point) => point.length === 2 && point.every(Number.isFinite));
+  const roadNames = steps
+    .map((step) => String(step.road || step.road_name || "").trim())
+    .filter(Boolean)
+    .slice(0, 80);
+  const highwaySteps = steps.filter((step) => /高速|expressway|highway/i.test(`${step.road || ""} ${step.toll_road || ""}`));
   return {
     key,
     station,
@@ -125,6 +130,9 @@ function normalizePath(path, key, station) {
     distance: Number(path.distance || 0) / 1000,
     duration: Number(path.cost?.duration || 0) / 60,
     tolls: Number(path.cost?.tolls || 0),
+    highway: highwaySteps.length > 0,
+    routeClass: highwaySteps.length > 0 ? "highway" : "unknown",
+    roadNames,
     policy: path.strategy || key,
     source: "高德 Web 路线 2.0"
   };

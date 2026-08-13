@@ -1059,6 +1059,14 @@
        .simulation-reservation-copy { color: #476084; font-size: 9px; line-height: 1.45; }
        .simulation-reservation-meta { display: flex; flex-wrap: wrap; gap: 5px 12px; color: #315bb8; font: 750 9px/1.2 var(--mono); }
        .simulation-reservation-delta { padding-top: 7px; border-top: 1px dashed #cbd8f7; color: #54709e; font-size: 8px; line-height: 1.45; }
+       .simulation-reservation-evidence-toggle { display: inline-flex; align-items: center; justify-content: flex-start; gap: 5px; width: max-content; padding: 3px 0; border: 0; background: transparent; color: #315bb8; font-size: 8px; font-weight: 800; }
+       .simulation-reservation-evidence-toggle:hover { color: #21478f; }
+       .simulation-reservation-evidence-toggle svg { width: 12px; height: 12px; transition: transform .2s ease; }
+       .simulation-reservation-evidence-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+       .simulation-reservation-evidence { display: grid; gap: 6px; padding: 8px 9px; border: 1px solid #dbe5fb; border-radius: 8px; background: rgba(255, 255, 255, .78); color: #526984; font-size: 8px; line-height: 1.45; }
+       .simulation-reservation-evidence strong { color: #315bb8; font-weight: 800; }
+       .simulation-reservation-evidence-row { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 7px; }
+       .simulation-queue-note { margin-top: 7px; padding: 8px 9px; border-left: 2px solid #8fb0f7; border-radius: 0 7px 7px 0; background: #f5f8ff; color: #526984; font-size: 8px; line-height: 1.5; }
        .simulation-stage-rail { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; margin: 12px 0 10px; }
        .simulation-stage-rail span { min-width: 0; padding: 5px 3px; border-radius: 6px; background: #f1f3f2; color: var(--quiet); font-size: 8px; text-align: center; white-space: nowrap; }
        .simulation-stage-rail span.is-unavailable { display: none; }
@@ -5219,6 +5227,8 @@
               <div class="simulation-reservation-copy" id="simulationReservationCopy">系统将根据预计到站时间自动安排补能窗口，无需手动操作。</div>
               <div class="simulation-reservation-meta"><span id="simulationReservationStation">下一补能站</span><span id="simulationReservationEta">预计到站 —</span></div>
               <div class="simulation-reservation-delta" id="simulationReservationDelta">预约后将重新计算排队预测。</div>
+              <button class="simulation-reservation-evidence-toggle" id="simulationReservationEvidenceToggle" type="button" aria-expanded="false" aria-controls="simulationReservationEvidence" hidden><span>展开计算依据</span><i data-lucide="chevron-down"></i></button>
+              <div class="simulation-reservation-evidence" id="simulationReservationEvidence" hidden></div>
             </div>
             <div class="simulation-scene-head"><strong id="simulationSceneTitle">站内场景</strong><span id="simulationSceneBadge">AI 生成素材</span></div>
             <p id="simulationSceneText">用于展示到站流程，不代表实时摄像头画面。</p>
