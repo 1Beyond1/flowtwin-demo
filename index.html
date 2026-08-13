@@ -5205,6 +5205,11 @@
            right: calc(24px + 302px + 16px);
            bottom: 18px;
            left: calc(24px + 354px + 16px);
+           /* The map corridor is asymmetric because the left panel is wider.
+              Give the sheet an explicit centering anchor so its visual center
+              stays in the corridor instead of appearing pulled toward the
+              narrower right panel. */
+           transform: translateX(calc((354px - 302px) / 2));
            max-height: min(270px, 29dvh);
            overflow: hidden;
            padding: 12px 14px 13px;
