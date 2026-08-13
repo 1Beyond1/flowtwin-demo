@@ -1137,6 +1137,10 @@
          Hide the map credit while the toolbox is open so it cannot sit on top
          of the speed controls at the lower edge of the viewport. */
       .simulation-active .map-attribution { display: none !important; }
+      /* The simulation has its own central arrival/OCR/payment cards. Keep
+         the pre-arrival plate widget out of the navigation view so the top
+         bar does not show a stale “等待到站” state during the walkthrough. */
+      .simulation-active .vehicle-identity { display: none !important; }
        .simulation-active .ai-composer-dock { opacity: 0; pointer-events: none; }
 
       @media (max-width: 720px) {
