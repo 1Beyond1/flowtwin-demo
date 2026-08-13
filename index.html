@@ -985,7 +985,7 @@
         left: 50%;
         z-index: 880;
         display: grid;
-        width: min(640px, calc(100vw - 48px));
+         width: min(720px, calc(100vw - 36px));
         gap: 9px;
         transform: translateX(-50%);
         pointer-events: none;
@@ -1001,7 +1001,7 @@
         backdrop-filter: blur(14px);
       }
 
-      .simulation-nav-card { padding: 12px 14px 11px; }
+       .simulation-nav-card { padding: 12px 14px 11px; }
       .simulation-nav-head,
       .simulation-scene-head,
       .simulation-phase-row,
@@ -1017,37 +1017,66 @@
       .simulation-nav-route span { flex: 0 0 auto; color: var(--muted); font-size: 9px; }
       .simulation-progress-track { height: 4px; margin-top: 12px; overflow: hidden; border-radius: 999px; background: #e8ece8; }
       .simulation-progress-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--teal)); transition: width 180ms linear; }
-      .simulation-phase-row { gap: 9px; margin-top: 10px; }
-      .simulation-phase-index { display: grid; width: 26px; height: 26px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--blue-soft); color: #315bb8; font: 750 10px/1 var(--mono); }
-      .simulation-phase-row > div { min-width: 0; flex: 1; }
-      .simulation-phase-row strong,
-      .simulation-phase-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .simulation-phase-row strong { color: var(--text); font-size: 11px; }
-      .simulation-phase-row small { margin-top: 2px; color: var(--muted); font-size: 9px; }
-      .simulation-speed-readout { padding: 4px 7px; border-radius: 999px; background: #e6f5f0; color: #16725f; font: 750 9px/1 var(--mono); }
+       .simulation-phase-row { gap: 9px; margin-top: 10px; }
+       .simulation-phase-index { display: grid; width: 26px; height: 26px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--blue-soft); color: #315bb8; font: 750 10px/1 var(--mono); }
+       .simulation-phase-row > div { min-width: 0; flex: 1; }
+       .simulation-phase-row strong,
+       .simulation-phase-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+       .simulation-phase-row strong { color: var(--text); font-size: 11px; }
+       .simulation-phase-row small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+       .simulation-speed-readout { padding: 4px 7px; border-radius: 999px; background: #e6f5f0; color: #16725f; font: 750 9px/1 var(--mono); }
+       .simulation-stage-group { flex: 0 0 auto; padding: 4px 7px; border: 1px solid #dbe5fb; border-radius: 999px; background: #f4f7ff; color: #315bb8; font-size: 8px; font-weight: 750; }
 
-       .simulation-scene-card { display: grid; grid-template-columns: 236px minmax(0, 1fr); overflow: hidden; }
-       .simulation-scene-media { min-height: 232px; background: #e8ece8; }
-       .simulation-scene-media img { display: block; width: 100%; height: 100%; min-height: 232px; object-fit: cover; }
-       .simulation-scene-copy { min-width: 0; padding: 15px 16px; }
-       .simulation-scene-head { justify-content: space-between; gap: 7px; }
-       .simulation-scene-head strong { min-width: 0; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-       .simulation-scene-head span { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; background: #f4e9d8; color: #8b5b20; font-size: 8px; font-weight: 700; }
-       .simulation-scene-copy p { margin-top: 9px; color: var(--muted); font-size: 10px; line-height: 1.55; }
-       .simulation-data-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 12px; }
-       .simulation-data-item { min-width: 0; padding: 8px 9px; border: 1px solid #edf0ed; border-radius: 8px; background: #fafcfb; }
-       .simulation-data-item span, .simulation-data-item strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-       .simulation-data-item span { color: var(--quiet); font-size: 8px; }
-       .simulation-data-item strong { margin-top: 4px; color: var(--text); font: 750 12px/1.1 var(--mono); }
-       .simulation-data-source { margin-top: 9px; color: var(--quiet); font-size: 8px; line-height: 1.45; }
-      .simulation-ocr-row { justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #edf0ed; }
-      .simulation-ocr-row span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-      .simulation-ocr-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
-      .simulation-ocr-row button { min-height: 28px; padding: 0 9px; border: 1px solid #cbd8f7; border-radius: 6px; background: #f5f7ff; color: #315bb8; font-size: 9px; font-weight: 700; }
-      .simulation-ocr-row button.simulation-ocr-fallback { border-color: #e8d0a5; background: #fff9ee; color: #8b5b20; }
-      .simulation-ocr-row button:disabled { cursor: wait; opacity: .55; }
-      .simulation-toolbox-action:disabled { cursor: default; opacity: .62; }
-      .simulation-ocr-detail { margin-top: 7px; padding: 7px 8px; border-radius: 7px; background: #f7f9f8; color: var(--muted); font-size: 8px; line-height: 1.45; }
+        .simulation-scene-card { display: grid; grid-template-columns: 250px minmax(0, 1fr); overflow: hidden; }
+        .simulation-scene-card.is-complete { display: block; }
+        .simulation-scene-media { min-height: 236px; background: #e8ece8; }
+        .simulation-scene-media img { display: block; width: 100%; height: 100%; min-height: 232px; object-fit: cover; }
+        .simulation-scene-copy { min-width: 0; padding: 15px 16px; }
+        .simulation-scene-card.is-complete .simulation-scene-copy { padding: 18px 20px 17px; }
+        .simulation-scene-head { justify-content: space-between; gap: 7px; }
+        .simulation-scene-head strong { min-width: 0; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+        .simulation-scene-head span { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; background: #f4e9d8; color: #8b5b20; font-size: 8px; font-weight: 700; }
+        .simulation-scene-copy p { margin-top: 9px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+        .simulation-data-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 12px; }
+        .simulation-data-item { min-width: 0; padding: 8px 9px; border: 1px solid #edf0ed; border-radius: 8px; background: #fafcfb; }
+        .simulation-data-item span, .simulation-data-item strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .simulation-data-item span { color: var(--quiet); font-size: 8px; }
+        .simulation-data-item strong { margin-top: 4px; color: var(--text); font: 750 13px/1.1 var(--mono); }
+        .simulation-data-item.is-primary { border-color: #cbd8f7; background: #f6f8ff; }
+        .simulation-data-item.is-primary strong { color: #315bb8; }
+        .simulation-data-source { margin-top: 9px; color: var(--quiet); font-size: 8px; line-height: 1.45; }
+       .simulation-ocr-row { justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #edf0ed; }
+       .simulation-ocr-row span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+       .simulation-ocr-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+       .simulation-ocr-row button { min-height: 28px; padding: 0 9px; border: 1px solid #cbd8f7; border-radius: 6px; background: #f5f7ff; color: #315bb8; font-size: 9px; font-weight: 700; }
+       .simulation-ocr-row button.simulation-ocr-fallback { border-color: #e8d0a5; background: #fff9ee; color: #8b5b20; }
+       .simulation-ocr-row button:disabled { cursor: wait; opacity: .55; }
+       .simulation-toolbox-action:disabled { cursor: default; opacity: .62; }
+       .simulation-ocr-detail { margin-top: 7px; padding: 7px 8px; border-radius: 7px; background: #f7f9f8; color: var(--muted); font-size: 8px; line-height: 1.45; }
+       .simulation-reservation-signal { display: grid; gap: 8px; margin: -2px 0 12px; padding: 11px 12px; border: 1px solid #b9ccf9; border-left: 3px solid var(--blue); border-radius: 10px; background: linear-gradient(135deg, #f2f6ff, #fbfdff); box-shadow: 0 7px 17px rgba(74, 125, 240, .1); }
+       .simulation-reservation-title { display: flex; align-items: center; gap: 7px; color: #315bb8; font-size: 13px; font-weight: 800; }
+       .simulation-reservation-title svg { width: 17px; height: 17px; }
+       .simulation-reservation-copy { color: #476084; font-size: 9px; line-height: 1.45; }
+       .simulation-reservation-meta { display: flex; flex-wrap: wrap; gap: 5px 12px; color: #315bb8; font: 750 9px/1.2 var(--mono); }
+       .simulation-reservation-delta { padding-top: 7px; border-top: 1px dashed #cbd8f7; color: #54709e; font-size: 8px; line-height: 1.45; }
+       .simulation-stage-rail { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; margin: 12px 0 10px; }
+       .simulation-stage-rail span { min-width: 0; padding: 5px 3px; border-radius: 6px; background: #f1f3f2; color: var(--quiet); font-size: 8px; text-align: center; white-space: nowrap; }
+       .simulation-stage-rail span.is-unavailable { display: none; }
+       .simulation-stage-rail span.is-current { background: var(--blue-soft); color: #315bb8; font-weight: 800; box-shadow: inset 0 -2px 0 var(--blue); }
+       .simulation-stage-rail span.is-done { background: #e8f5f0; color: #16725f; }
+       .simulation-scene-action { display: grid; gap: 7px; margin-top: 12px; padding-top: 11px; border-top: 1px solid #edf0ed; }
+       .simulation-scene-action-note { color: var(--quiet); font-size: 8px; line-height: 1.4; }
+       .simulation-scene-primary { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 12px; border: 1px solid #a9bff5; border-radius: 8px; background: var(--blue); color: #fff; font-size: 10px; font-weight: 800; box-shadow: 0 6px 15px rgba(74, 125, 240, .2); }
+       .simulation-scene-primary:hover { background: #3c6fe5; transform: translateY(-1px); }
+       .simulation-scene-primary:disabled { cursor: default; opacity: .55; transform: none; }
+       .simulation-scene-primary svg { width: 14px; height: 14px; }
+       .simulation-completion-body { display: grid; gap: 10px; margin-top: 13px; }
+       .simulation-completion-title { display: flex; align-items: center; gap: 7px; color: #16725f; font-size: 11px; font-weight: 800; }
+       .simulation-completion-title svg { width: 16px; height: 16px; }
+       .simulation-completion-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+       .simulation-completion-item { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 8px 9px; border: 1px solid #e2eee9; border-radius: 8px; background: #f7fbf9; color: var(--muted); font-size: 9px; }
+       .simulation-completion-item svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--teal); }
+       .simulation-completion-boundary { padding: 8px 9px; border-radius: 8px; background: #fff9ee; color: #8b5b20; font-size: 8px; line-height: 1.45; }
 
       .simulation-toolbox { position: absolute; right: 24px; bottom: 28px; z-index: 890; width: min(190px, calc(100vw - 48px)); pointer-events: auto; }
       .simulation-toolbox-toggle { display: flex; align-items: center; width: 100%; min-height: 38px; gap: 7px; padding: 0 11px; border: 1px solid rgba(216, 220, 215, .95); border-radius: 999px; background: rgba(255, 255, 255, .96); box-shadow: 0 10px 26px rgba(22, 29, 30, .14); color: var(--text); font-size: 10px; font-weight: 750; backdrop-filter: blur(12px); }
@@ -1088,12 +1117,15 @@
       .simulation-active .active-route-summary,
       .simulation-active .map-status { display: none !important; }
       .simulation-active .map-attribution { z-index: 895; }
-      .simulation-active .ai-composer-dock { opacity: 0; pointer-events: none; }
+       .simulation-active .ai-composer-dock { opacity: 0; pointer-events: none; }
 
       @media (max-width: 720px) {
         .simulation-ui { top: 72px; width: min(640px, calc(100vw - 24px)); }
         .simulation-scene-card { grid-template-columns: 42% minmax(0, 1fr); }
         .simulation-scene-media, .simulation-scene-media img { min-height: 190px; }
+        .simulation-scene-copy { padding: 13px; }
+        .simulation-scene-card.is-complete .simulation-scene-copy { padding: 15px; }
+        .simulation-completion-list { grid-template-columns: 1fr; }
         .simulation-toolbox { right: 12px; bottom: 14px; width: min(188px, calc(100vw - 24px)); }
       }
 
@@ -5177,11 +5209,24 @@
           </div>
           <div class="simulation-nav-route"><strong id="simulationDestination">前往目的地</strong><span id="simulationNavMeta">沿已选路线行驶</span></div>
           <div class="simulation-progress-track" aria-label="模拟驾驶进度"><span id="simulationProgressBar"></span></div>
-          <div class="simulation-phase-row"><span class="simulation-phase-index" id="simulationPhaseIndex">01</span><div><strong id="simulationPhaseTitle">准备出发</strong><small id="simulationPhaseMeta">正在加载路线阶段</small></div><span class="simulation-speed-readout" id="simulationSpeedReadout">1×</span></div>
+          <div class="simulation-phase-row"><span class="simulation-phase-index" id="simulationPhaseIndex">01</span><div><strong id="simulationPhaseTitle">准备出发</strong><small id="simulationPhaseMeta">正在加载路线阶段</small></div><span class="simulation-stage-group" id="simulationStageGroup">路上</span><span class="simulation-speed-readout" id="simulationSpeedReadout">1×</span></div>
         </div>
         <div class="simulation-scene-card" id="simulationSceneCard" hidden>
           <div class="simulation-scene-media"><img id="simulationSceneImage" alt="模拟驾驶场景素材" /></div>
-          <div class="simulation-scene-copy"><div class="simulation-scene-head"><strong id="simulationSceneTitle">站内场景</strong><span id="simulationSceneBadge">AI 生成素材</span></div><p id="simulationSceneText">用于展示到站流程，不代表实时摄像头画面。</p><div class="simulation-ocr-row" id="simulationOcrRow" hidden><span id="simulationOcrStatus">等待执行本地 OCR</span><div class="simulation-ocr-actions"><button id="simulationOcrButton" type="button">执行本地 OCR</button><button id="simulationOcrFallbackButton" class="simulation-ocr-fallback" type="button" hidden>使用预置样例继续</button></div></div></div>
+          <div class="simulation-scene-copy">
+            <div class="simulation-reservation-signal" id="simulationReservationSignal" hidden>
+              <div class="simulation-reservation-title"><i data-lucide="calendar-clock"></i><span>提前预约已触发</span></div>
+              <div class="simulation-reservation-copy" id="simulationReservationCopy">系统将根据预计到站时间自动安排补能窗口，无需手动操作。</div>
+              <div class="simulation-reservation-meta"><span id="simulationReservationStation">下一补能站</span><span id="simulationReservationEta">预计到站 —</span></div>
+              <div class="simulation-reservation-delta" id="simulationReservationDelta">预约后将重新计算排队预测。</div>
+            </div>
+            <div class="simulation-scene-head"><strong id="simulationSceneTitle">站内场景</strong><span id="simulationSceneBadge">AI 生成素材</span></div>
+            <p id="simulationSceneText">用于展示到站流程，不代表实时摄像头画面。</p>
+            <div class="simulation-stage-rail" id="simulationStageRail" aria-label="补能流程阶段"><span data-simulation-stage="reservation">提前预约</span><span data-simulation-stage="recognition">车牌识别</span><span data-simulation-stage="queue">排队预测</span><span data-simulation-stage="service">补能服务</span><span data-simulation-stage="payment">自动扣款</span></div>
+            <div class="simulation-ocr-row" id="simulationOcrRow" hidden><span id="simulationOcrStatus">等待执行本地 OCR</span><div class="simulation-ocr-actions"><button id="simulationOcrButton" type="button">执行本地 OCR</button><button id="simulationOcrFallbackButton" class="simulation-ocr-fallback" type="button" hidden>使用预置样例继续</button></div></div>
+            <div class="simulation-scene-action" id="simulationSceneAction" hidden><span class="simulation-scene-action-note" id="simulationSceneActionNote"></span><button class="simulation-scene-primary" id="simulationScenePrimaryButton" type="button"><i data-lucide="arrow-right"></i><span>继续</span></button></div>
+            <div class="simulation-completion-body" id="simulationCompletionBody" hidden><div class="simulation-completion-title"><i data-lucide="check-circle-2"></i><span>路线与站内业务流程已完成一轮演示</span></div><div class="simulation-completion-list" id="simulationCompletionList"></div><div class="simulation-completion-boundary" id="simulationCompletionBoundary">排队、服务时长、价格和支付为演示/仿真数据；高德路线与本地 OCR 调用边界按页面标注为准。</div></div>
+          </div>
         </div>
       </section>
 

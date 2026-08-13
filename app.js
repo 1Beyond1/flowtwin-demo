@@ -250,7 +250,11 @@
       ocrFallbackAvailable: false,
       ocrBusy: false,
       ocrPhaseKey: null,
-      recognizedPlate: null
+      recognizedPlate: null,
+      reservationPending: false,
+      reservationBeforeSnapshot: null,
+      reservationAfterSnapshot: null,
+      reservationStopKey: null
     }
   };
 
@@ -4510,6 +4514,133 @@
     };
   }
 
+  const SIMULATION_STATION_PHASES = new Set(["reservation", "recognition", "queue", "service", "payment", "leave"]);
+  const SIMULATION_FLOW_STAGES = ["reservation", "recognition", "queue", "service", "payment"];
+
+  function isSimulationStationPhase(phase) {
+    return Boolean(phase && SIMULATION_STATION_PHASES.has(phase.type) && phase.stop);
+  }
+
+  function simulationStageGroupFor(phase) {
+    if (phase?.type === "arrived") return { label: "已完成", icon: "check-circle-2" };
+    if (isSimulationStationPhase(phase)) return { label: "进站服务", icon: "building-2" };
+    return { label: "路上", icon: "navigation" };
+  }
+
+  function simulationActionFor(phase) {
+    const simulation = state.simulation;
+    if (!phase) return { visible: false };
+    switch (phase.type) {
+      case "reservation": {
+        const pending = Boolean(simulation.reservationPending);
+        return {
+          visible: true,
+          disabled: pending,
+          label: pending ? "正在更新到站预测" : "继续行驶至补能站",
+          icon: pending ? "loader-circle" : "navigation",
+          note: pending ? "系统正在把预约队列纳入 P50 / P90 重新计算。" : "提前预约已自动完成 · 无需用户手动操作"
+        };
+      }
+      case "recognition":
+        return simulation.recognitionResolved
+          ? { visible: true, label: "进入排队预测", icon: "bar-chart-3", note: "车牌识别结果已确认，下一步查看排队与端口状态。" }
+          : { visible: false };
+      case "queue":
+        return { visible: true, label: "进入补能服务", icon: isFuelActive() ? "fuel" : "battery-charging", note: "先看清 P50 / P90、排队车辆和空闲补能位，再进入服务。" };
+      case "service":
+        return { visible: true, label: "完成补能并生成电子收据", icon: "receipt", note: "服务时长为演示/企业先验推演，不代表真实订单已完成。" };
+      case "payment":
+        return { visible: true, label: "确认离场", icon: "log-out", note: "展示车牌关联与电子收据流程，不连接真实支付。" };
+      case "leave":
+        return { visible: true, label: "继续沿路线行驶", icon: "route", note: "车辆驶离停靠区，返回高德路线继续导航。" };
+      case "arrived":
+        return { visible: true, label: "结束本次演示", icon: "x", note: "演示结果会保留在当前卡片，点击后返回路线方案。" };
+      default:
+        return { visible: false };
+    }
+  }
+
+  function renderSimulationStageRail(phase) {
+    const rail = byId("simulationStageRail");
+    if (!rail) return;
+    const stationPhase = isSimulationStationPhase(phase);
+    rail.hidden = !stationPhase;
+    if (!stationPhase) return;
+    const reservationStep = rail.querySelector('[data-simulation-stage="reservation"]');
+    if (reservationStep) {
+      reservationStep.hidden = isFuelActive();
+      reservationStep.textContent = isFuelActive() ? "到站确认" : "提前预约";
+      reservationStep.classList.toggle("is-unavailable", isFuelActive());
+    }
+    const currentIndex = SIMULATION_FLOW_STAGES.indexOf(phase.type);
+    rail.querySelectorAll("[data-simulation-stage]").forEach((step) => {
+      const key = step.dataset.simulationStage;
+      const index = SIMULATION_FLOW_STAGES.indexOf(key);
+      step.classList.toggle("is-current", key === phase.type);
+      step.classList.toggle("is-done", index >= 0 && currentIndex >= 0 && index < currentIndex);
+    });
+    if (phase.type === "leave") {
+      rail.querySelectorAll("[data-simulation-stage]").forEach((step) => {
+        if (!step.hidden) {
+          step.classList.remove("is-current");
+          step.classList.add("is-done");
+        }
+      });
+    }
+  }
+
+  function renderSimulationSceneAction(phase) {
+    const wrapper = byId("simulationSceneAction");
+    const button = byId("simulationScenePrimaryButton");
+    const note = byId("simulationSceneActionNote");
+    if (!wrapper || !button) return;
+    const action = simulationActionFor(phase);
+    wrapper.hidden = !action.visible;
+    if (!action.visible) return;
+    button.disabled = Boolean(action.disabled);
+    button.innerHTML = `<i data-lucide="${action.icon || "arrow-right"}"></i><span>${action.label}</span>`;
+    if (note) note.textContent = action.note || "";
+  }
+
+  function renderSimulationCompletion(phase, card, image, title, badge, text) {
+    card.classList.add("is-complete");
+    card.hidden = false;
+    const media = card.querySelector(".simulation-scene-media");
+    if (media) media.hidden = true;
+    byId("simulationReservationSignal")?.setAttribute("hidden", "");
+    byId("simulationStageRail")?.setAttribute("hidden", "");
+    byId("simulationOcrRow")?.setAttribute("hidden", "");
+    byId("simulationDataGrid")?.setAttribute("hidden", "");
+    byId("simulationDataSource")?.setAttribute("hidden", "");
+    byId("simulationOcrDetail")?.setAttribute("hidden", "");
+    if (title) title.textContent = "本次模拟驾驶完成";
+    if (badge) badge.textContent = "流程回顾";
+    if (text) {
+      text.hidden = false;
+      text.textContent = `车辆已沿${state.simulation.record?.displayName || "已选路线"}到达${state.destinationName || "目的地"}，站内关键链路已按当前演示数据完成一轮回放。`;
+    }
+    const body = byId("simulationCompletionBody");
+    const list = byId("simulationCompletionList");
+    if (body) body.hidden = false;
+    if (list) {
+      const ocrCopy = state.simulation.ocrFallbackUsed
+        ? "车牌识别：预置样例托底"
+        : state.simulation.recognizedPlate
+          ? `本地 PaddleOCR：${state.simulation.recognizedPlate}`
+          : "本地 PaddleOCR：已执行";
+      const items = [
+        ["map", "高德真实路线与车辆追踪"],
+        ["calendar-clock", `提前预约演示：${state.simulation.reservedStops?.size || 0} 个节点`],
+        ["scan-line", ocrCopy],
+        ["chart-no-axes", "P50 / P90 排队预测"],
+        [isFuelActive() ? "fuel" : "battery-charging", "补能服务时长推演"],
+        ["receipt", "车牌关联与演示电子收据"]
+      ];
+      list.innerHTML = items.map(([icon, label]) => `<div class="simulation-completion-item"><i data-lucide="${icon}"></i><span>${label}</span></div>`).join("");
+    }
+    renderSimulationSceneAction(phase);
+  }
+
   function renderSimulationScene(phase) {
     const card = byId("simulationSceneCard");
     const image = byId("simulationSceneImage");
@@ -4517,14 +4648,37 @@
     const badge = byId("simulationSceneBadge");
     const text = byId("simulationSceneText");
     const ocrRow = byId("simulationOcrRow");
-    if (!card || !image || !phase || !phase.stop || !["reservation", "recognition", "queue", "service", "payment", "leave"].includes(phase.type)) {
+    if (!card || !image || !phase) {
       if (card) card.hidden = true;
+      byId("simulationDataGrid")?.setAttribute("hidden", "");
+      byId("simulationDataSource")?.setAttribute("hidden", "");
+      byId("simulationSceneAction")?.setAttribute("hidden", "");
+      byId("simulationCompletionBody")?.setAttribute("hidden", "");
+      return;
+    }
+    if (phase.type === "arrived") {
+      renderSimulationCompletion(phase, card, image, title, badge, text);
+      return;
+    }
+    if (!isSimulationStationPhase(phase)) {
+      card.hidden = true;
+      card.classList.remove("is-complete");
+      const media = card.querySelector(".simulation-scene-media");
+      if (media) media.hidden = false;
+      byId("simulationReservationSignal")?.setAttribute("hidden", "");
+      byId("simulationStageRail")?.setAttribute("hidden", "");
+      byId("simulationSceneAction")?.setAttribute("hidden", "");
+      byId("simulationCompletionBody")?.setAttribute("hidden", "");
       byId("simulationDataGrid")?.setAttribute("hidden", "");
       byId("simulationDataSource")?.setAttribute("hidden", "");
       return;
     }
     const asset = simulationAssetFor(phase);
     card.hidden = false;
+    card.classList.remove("is-complete");
+    const media = card.querySelector(".simulation-scene-media");
+    if (media) media.hidden = false;
+    byId("simulationCompletionBody")?.setAttribute("hidden", "");
     const sceneKey = `${phase.type}:${phase.stopIndex ?? ""}`;
     const sameScene = image.dataset.simulationSceneKey === sceneKey;
     if (!sameScene) {
@@ -4534,10 +4688,22 @@
       image.onerror = () => { image.removeAttribute("src"); if (badge) badge.textContent = "素材未找到"; };
       if (badge) badge.textContent = asset ? "AI 生成素材" : "素材待替换";
     }
-    if (title) title.textContent = phase.type === "recognition" ? "到站视觉画面" : isFuelActive() ? "加油站场景" : "充电站场景";
+    if (title) {
+        title.textContent = phase.type === "reservation"
+        ? "预约队列已更新"
+        : phase.type === "recognition"
+          ? "到站视觉画面"
+          : phase.type === "queue"
+            ? "排队状态预测"
+            : phase.type === "service"
+              ? (isFuelActive() ? "加油服务" : "充电服务")
+              : phase.type === "payment"
+                ? "离场扣款流程"
+                : "驶离补能站";
+    }
     const snapshot = simulationSnapshotFor(phase.stop);
     if (text) text.textContent = phase.type === "reservation"
-      ? `预计 ${phase.stop?.name || "下一补能站"} 即将到达，系统提前根据 ETA 自动预约，不需要用户手动点击。`
+      ? `预约已自动触发。车辆继续沿高德路线行驶，预计 ${formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))} 到达${phase.stop?.name || "下一补能站"}。`
       : simulationSceneText(phase);
     let dataGrid = byId("simulationDataGrid");
     if (!dataGrid) {
@@ -4550,7 +4716,7 @@
       ? (state.simulation.ocrFallbackUsed ? "预置样例继续" : state.simulation.recognizedPlate || "已识别")
       : "待执行本地 OCR";
     const stageItems = phase.type === "reservation"
-      ? [["预约状态", "已自动预约"], ["预计到站", formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))]]
+      ? [["预约状态", state.simulation.reservationPending ? "计算中" : "已自动预约"], ["预计到站", formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))]]
       : phase.type === "recognition"
         ? [["车牌链路", recognitionValue], ["到站状态", "已进入识别区"]]
         : phase.type === "queue"
@@ -4560,7 +4726,7 @@
             : phase.type === "payment"
               ? [["支付状态", "演示扣款"], ["电子收据", "已生成（演示）"]]
               : [["站点状态", "已完成补能"], ["下一动作", "继续沿路线行驶"]];
-    dataGrid.innerHTML = stageItems.map(([label, value]) => `<div class="simulation-data-item"><span>${label}</span><strong>${value}</strong></div>`).join("");
+    dataGrid.innerHTML = stageItems.map(([label, value], index) => `<div class="simulation-data-item${index === 0 ? " is-primary" : ""}"><span>${label}</span><strong>${value}</strong></div>`).join("");
     dataGrid.hidden = false;
     let source = byId("simulationDataSource");
     if (!source) {
@@ -4598,13 +4764,32 @@
       ocrButton.disabled = state.simulation.ocrBusy || state.simulation.recognitionResolved;
       ocrButton.textContent = state.simulation.ocrBusy ? "识别中…" : state.simulation.ocrAttemptedFor === phase.stopIndex ? "再次执行 OCR" : "执行本地 OCR";
     }
+    const reservationSignal = byId("simulationReservationSignal");
+    if (reservationSignal) reservationSignal.hidden = phase.type !== "reservation";
+    if (phase.type === "reservation") {
+      setText("simulationReservationStation", phase.stop?.name || "下一补能站");
+      setText("simulationReservationEta", `预计到站 ${formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))}`);
+      setText("simulationReservationCopy", state.simulation.reservationPending ? "系统正在根据预计到站时间安排补能窗口，并重新计算预约队列。" : "系统已根据预计到站时间自动安排补能窗口，无需手动操作。 ");
+      const before = state.simulation.reservationBeforeSnapshot;
+      const after = state.simulation.reservationAfterSnapshot;
+      const delta = byId("simulationReservationDelta");
+      if (delta) {
+        if (state.simulation.reservationPending) delta.textContent = "预约处理完成后，P50 / P90 等待预测会在此处更新。";
+        else if (before && after && Number.isFinite(before.waitP50) && Number.isFinite(after.waitP50)) delta.textContent = `预约前后已重算：P50 ${before.waitP50} → ${after.waitP50} 分钟 · P90 ${simulationMetricValue(after.waitP90, " 分钟")}。`;
+        else delta.textContent = "预约已写入本轮演示状态；等待预测仍以演示/企业先验推演为依据。";
+      }
+    }
+    renderSimulationStageRail(phase);
+    renderSimulationSceneAction(phase);
   }
 
   function renderSimulationPhase(phase) {
     const copy = simulationPhaseCopy(phase);
+    const group = simulationStageGroupFor(phase);
     setText("simulationPhaseTitle", copy.title);
     setText("simulationPhaseMeta", copy.meta);
     setText("simulationPhaseIndex", String(state.simulation.phaseIndex + 1).padStart(2, "0"));
+    setText("simulationStageGroup", group.label);
     setText("simulationSpeedReadout", `${state.simulation.speed}×`);
     const total = Math.max(1, state.simulation.phases.length);
     const progress = byId("simulationProgressBar");
@@ -4621,6 +4806,8 @@
     if (next) {
       const arrived = phase?.type === "arrived";
       const recognitionPending = phase?.type === "recognition" && !state.simulation.recognitionResolved;
+      const stationPhase = isSimulationStationPhase(phase);
+      next.hidden = arrived || stationPhase;
       next.disabled = arrived || recognitionPending;
       next.innerHTML = arrived
         ? '<i data-lucide="check"></i><span>已到达目的地</span>'
@@ -4630,10 +4817,24 @@
             ? '<i data-lucide="route"></i><span>行驶至下一节点</span>'
             : '<i data-lucide="skip-forward"></i><span>进入下一阶段</span>';
     }
+    const toolbox = byId("simulationToolbox");
+    const toolboxToggle = byId("simulationToolboxToggle");
+    if (toolbox && (isSimulationStationPhase(phase) || phase?.type === "arrived")) {
+      // The central card owns the station workflow. Collapse the secondary
+      // toolbox while it is visible so the evaluator can always reach OCR and
+      // the next-stage action without a floating panel intercepting clicks.
+      toolbox.setAttribute("aria-expanded", "false");
+      toolboxToggle?.setAttribute("aria-expanded", "false");
+    } else if (toolbox && phase?.type === "drive") {
+      // Driving stages return control to the toolbox. Re-open it after a
+      // station card so “行驶至下一节点” is discoverable without a second click.
+      toolbox.setAttribute("aria-expanded", "true");
+      toolboxToggle?.setAttribute("aria-expanded", "true");
+    }
     const destination = byId("simulationDestination");
     if (destination) destination.textContent = state.destinationName || "目的地";
     const navMeta = byId("simulationNavMeta");
-    if (navMeta) navMeta.textContent = `${state.simulation.phaseIndex + 1}/${total} 阶段 · ${state.simulation.record?.displayName || "已选方案"}`;
+    if (navMeta) navMeta.textContent = `${state.simulation.phaseIndex + 1}/${total} 阶段 · ${group.label} · ${state.simulation.record?.displayName || "已选方案"}`;
     renderSimulationScene(phase);
     refreshIcons();
   }
@@ -4643,19 +4844,30 @@
     const key = String(stop.id);
     if (state.simulation.reservedStops.has(key)) return;
     state.simulation.reservedStops.add(key);
+    state.simulation.reservationPending = true;
+    state.simulation.reservationStopKey = key;
+    state.simulation.reservationAfterSnapshot = null;
     state.reservationOverrides[key] = 1;
     state.stationForecastScenarioKey = null;
     const station = state.stations.find((candidate) => String(candidate.id) === key) || stop;
     state.selectedStation = station;
     selectStation(station, false);
-    const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
-    if (base) await ensureStationForecasts(base);
-    const updated = state.stations.find((candidate) => String(candidate.id) === key) || station;
-    state.selectedStation = updated;
-    selectStation(updated, false);
-    const phase = state.simulation.phase;
-    if (phase?.stop && String(phase.stop.id) === key) renderSimulationPhase(phase);
-    showToast(`已为您自动预约${updated.name || "下一补能站"}，等待时间已按预约队列重算`, 3200);
+    try {
+      const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
+      if (base) await ensureStationForecasts(base);
+      const updated = state.stations.find((candidate) => String(candidate.id) === key) || station;
+      state.selectedStation = updated;
+      selectStation(updated, false);
+      state.simulation.reservationAfterSnapshot = simulationSnapshotFor(updated);
+      showToast(`已为您自动预约${updated.name || "下一补能站"}，等待时间已按预约队列重算`, 3200);
+    } catch (error) {
+      state.simulation.reservationAfterSnapshot = simulationSnapshotFor(station);
+      showToast(`已记录预约演示状态，等待预测暂沿用当前数据 · ${error?.message || "服务稍后重试"}`, 3600);
+    } finally {
+      state.simulation.reservationPending = false;
+      const phase = state.simulation.phase;
+      if (phase?.stop && String(phase.stop.id) === key) renderSimulationPhase(phase);
+    }
   }
 
   function fallbackSimulationPoint(point) {
@@ -4753,6 +4965,12 @@
       simulation.ocrAttemptedFor = null;
       simulation.recognizedPlate = null;
     }
+    if (phase.type === "reservation") {
+      simulation.reservationPending = true;
+      simulation.reservationStopKey = phase.stop?.id ? String(phase.stop.id) : null;
+      simulation.reservationBeforeSnapshot = simulationSnapshotFor(phase.stop);
+      simulation.reservationAfterSnapshot = null;
+    }
     if (phase.stop && ["reservation", "recognition", "queue", "service", "payment", "leave"].includes(phase.type)) {
       const station = state.stations.find((candidate) => String(candidate.id) === String(phase.stop.id)) || phase.stop;
       state.selectedStation = station;
@@ -4762,6 +4980,25 @@
     renderSimulationPhase(phase);
     updateSimulationMarker();
     if (phase.type === "reservation") void autoReserveSimulationStop(phase.stop);
+  }
+
+  function handleSimulationSceneAction() {
+    const simulation = state.simulation;
+    if (!simulation.active || !simulation.phase) return;
+    if (simulation.phase.type === "arrived") {
+      stopSimulationDriving();
+      return;
+    }
+    if (simulation.phase.type === "reservation" && simulation.reservationPending) {
+      showToast("提前预约正在写入演示状态，请稍候片刻", 2200);
+      return;
+    }
+    if (simulation.phase.type === "recognition" && !simulation.recognitionResolved) {
+      void runSimulationOcr(true);
+      return;
+    }
+    simulation.phaseElapsedMs = Number(simulation.phase.durationMs || 1);
+    simulationAdvancePhase();
   }
 
   function simulationAdvancePhase() {
@@ -4958,6 +5195,10 @@
     simulation.ocrBusy = false;
     simulation.ocrPhaseKey = null;
     simulation.recognizedPlate = null;
+    simulation.reservationPending = false;
+    simulation.reservationBeforeSnapshot = null;
+    simulation.reservationAfterSnapshot = null;
+    simulation.reservationStopKey = null;
     simulation.reservedStops = new Set();
     simulation.savedMapView = state.live && state.map ? { center: parseLocation(state.map.getCenter?.()), zoom: state.map.getZoom?.() } : null;
     document.body.classList.add("simulation-active");
@@ -8190,6 +8431,7 @@
       state.simulation.phaseElapsedMs = Number(state.simulation.phase?.durationMs || 1);
       simulationAdvancePhase();
     });
+    byId("simulationScenePrimaryButton")?.addEventListener("click", handleSimulationSceneAction);
     byId("simulationPauseButton")?.addEventListener("click", toggleSimulationPause);
     byId("simulationAutoAdvance")?.addEventListener("change", (event) => setSimulationAutoAdvance(event.target.checked));
     $$('[data-simulation-speed]').forEach((button) => button.addEventListener("click", () => setSimulationSpeed(button.dataset.simulationSpeed)));
