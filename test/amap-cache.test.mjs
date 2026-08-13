@@ -31,7 +31,7 @@ test("AMap file cache writes a normalized value and serves a fresh hit", async (
   assert.equal(files.length, 1);
   assert.match(await readFile(join(root, "runtime", "cache", "amap", files[0]), "utf8"), /"schema":1/);
   assert.doesNotMatch(await readFile(join(root, "runtime", "cache", "amap", files[0]), "utf8"), /key|token|secret/i);
-  assert.equal(AMAP_CACHE_TTLS.route, 10 * 60 * 1000);
+  assert.equal(AMAP_CACHE_TTLS.route, 60 * 60 * 1000);
 });
 
 test("concurrent identical AMap loads are deduplicated", async () => {

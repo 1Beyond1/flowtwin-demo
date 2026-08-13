@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildAiHealthSummary, buildForecastApiScenario, buildLongTripApiInput } from "../server.mjs";
+import { buildAiHealthSummary, buildForecastApiScenario, buildLongTripApiInput, routeSourceLabel } from "../server.mjs";
 import { forecastStations } from "../lib/forecast.mjs";
 import { buildLongTripPlans } from "../lib/longtrip.mjs";
 
@@ -66,6 +66,12 @@ test("AI health summary exposes only configuration booleans", () => {
   assert.equal(JSON.stringify(summary).includes("primary.example"), false);
   assert.equal(JSON.stringify(summary).includes("primary-secret"), false);
   assert.equal(JSON.stringify(summary).includes("primary-model"), false);
+});
+
+test("route responses distinguish fresh AMap results from local cache hits", () => {
+  assert.equal(routeSourceLabel("miss"), "高德 Web 服务路线规划 2.0");
+  assert.equal(routeSourceLabel("hit"), "本地路线缓存 · 高德结果");
+  assert.equal(routeSourceLabel("stale"), "本地路线缓存 · 高德结果（上游暂不可用）");
 });
 
 test("longtrip adapter whitelists and bounds forecast controls", () => {

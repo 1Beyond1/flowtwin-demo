@@ -138,6 +138,12 @@ function normalizePath(path, key, station) {
   };
 }
 
+export function routeSourceLabel(cacheState) {
+  if (cacheState === "hit") return "本地路线缓存 · 高德结果";
+  if (cacheState === "stale") return "本地路线缓存 · 高德结果（上游暂不可用）";
+  return "高德 Web 服务路线规划 2.0";
+}
+
 async function routeApi(requestUrl, response) {
   const origin = parseCoordinate(requestUrl.searchParams.get("origin"));
   const destination = parseCoordinate(requestUrl.searchParams.get("destination"));
@@ -171,7 +177,7 @@ async function routeApi(requestUrl, response) {
   return json(response, 200, {
     route: normalizePath(paths[0], key, station),
     alternatives: paths.length,
-    source: cached.cache?.state === "stale" ? "高德路线缓存 · 上游暂不可用" : "高德 Web 服务路线规划 2.0",
+    source: routeSourceLabel(cached.cache?.state),
     cache: cached.cache || { state: "bypass" }
   });
 }
