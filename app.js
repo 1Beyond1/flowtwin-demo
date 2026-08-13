@@ -40,7 +40,10 @@
       night: Object.freeze({ arrival: "/assets/simulation/ev-front-night.png", station: "/assets/simulation/ev-overhead-night.png" })
     })
   });
-  const SIMULATION_STAGE_MS = Object.freeze({ reservation: 2200, recognition: 2400, queue: 3600, service: 4800, payment: 2300, leave: 1500, arrived: 2600 });
+  // The walkthrough is a review surface, not a race.  Stage changes are
+  // manual by default; these values are only used when the reviewer turns on
+  // optional automatic playback.
+  const SIMULATION_STAGE_MS = Object.freeze({ reservation: 4200, recognition: 4200, queue: 6500, service: 6500, payment: 4200, leave: 3200, arrived: 4500 });
 
   function paymentExitMinutesFor(energyType, station = {}) {
     const explicit = Number(station?.paymentExitMinutes ?? station?.paymentExitBufferMinutes ?? station?.paymentAndExitMinutes);
@@ -224,7 +227,7 @@
     simulation: {
       active: false,
       paused: false,
-      autoAdvance: true,
+      autoAdvance: false,
       speed: 1,
       phaseIndex: 0,
       phaseElapsedMs: 0,
@@ -237,9 +240,17 @@
       rafId: null,
       lastFrameAt: 0,
       lastMapCenterAt: 0,
+      lastCenteredPhaseIndex: -1,
+      pathMetrics: null,
       savedMapView: null,
       stageContext: null,
-      reservedStops: new Set()
+      reservedStops: new Set(),
+      recognitionResolved: false,
+      ocrFallbackUsed: false,
+      ocrFallbackAvailable: false,
+      ocrBusy: false,
+      ocrPhaseKey: null,
+      recognizedPlate: null
     }
   };
 
@@ -3020,16 +3031,24 @@
     });
   }
 
-  function pointAtPathProgress(path, progress) {
-    if (!Array.isArray(path) || !path.length) return null;
-    if (path.length === 1) return path[0];
-    const target = Math.max(0, Math.min(1, Number(progress) || 0));
+  function buildPathMetrics(path) {
+    if (!Array.isArray(path) || path.length < 2) return { lengths: [], total: 0 };
     const lengths = [];
     let total = 0;
     for (let index = 1; index < path.length; index += 1) {
       total += distanceKm(path[index - 1], path[index]);
       lengths.push(total);
     }
+    return { lengths, total };
+  }
+
+  function pointAtPathProgress(path, progress, metrics = null) {
+    if (!Array.isArray(path) || !path.length) return null;
+    if (path.length === 1) return path[0];
+    const target = Math.max(0, Math.min(1, Number(progress) || 0));
+    const cached = metrics && Array.isArray(metrics.lengths) && metrics.lengths.length === path.length - 1 ? metrics : buildPathMetrics(path);
+    const lengths = cached.lengths;
+    const total = cached.total;
     if (!total) return path[Math.round(target * (path.length - 1))];
     const desired = target * total;
     const segmentIndex = lengths.findIndex((length) => length >= desired);
@@ -4342,19 +4361,24 @@
   function simulationDriveDurationMs(record) {
     const duration = Number(record?.duration);
     const distance = Number(record?.distance);
-    // The walkthrough compresses a real trip into a reviewable timeline. The
-    // route geometry and route metrics remain untouched; only playback time is
-    // accelerated for the prototype experience.
+    // The walkthrough compresses a real trip into a reviewable timeline, but it
+    // must still leave enough time for the marker and AMap camera to keep up.
+    // Route geometry and route metrics remain untouched; only playback time is
+    // changed for the prototype experience.
     const estimate = Number.isFinite(duration) && duration > 0
-      ? duration * 650
-      : Number.isFinite(distance) && distance > 0 ? distance * 85 : 18000;
-    return Math.max(12000, Math.min(60000, Math.round(estimate)));
+      ? duration * 1600
+      : Number.isFinite(distance) && distance > 0 ? distance * 210 : 30000;
+    return Math.max(30000, Math.min(180000, Math.round(estimate)));
   }
 
-  function simulationStopProgress(stop, path, fallbackProgress) {
+  function simulationStopTarget(stop, path, fallbackProgress) {
     const location = parseLocation(stop?.location);
-    const progress = location ? routeProgress(location, path) : fallbackProgress;
-    return Math.max(0.04, Math.min(0.96, Number.isFinite(progress) ? progress : fallbackProgress));
+    const projection = location ? projectPointOntoPath(location, path) : null;
+    const rawProgress = projection && projection.totalKm > 0
+      ? projection.alongKm / projection.totalKm
+      : fallbackProgress;
+    const progress = Math.max(0.04, Math.min(0.96, Number.isFinite(rawProgress) ? rawProgress : fallbackProgress));
+    return { progress, point: pointAtPathProgress(path, progress) };
   }
 
   function buildSimulationPhases(record) {
@@ -4363,32 +4387,36 @@
     const stops = simulationStopsFor(record);
     const driveDuration = simulationDriveDurationMs(record);
     const phases = [];
-    let cursor = 0;
     let previousProgress = 0;
     const addDrive = (endProgress) => {
       const end = Math.max(previousProgress, Math.min(1, endProgress));
       const ratio = Math.max(0, end - previousProgress);
       if (ratio > 0.0001) {
-        phases.push({ type: "drive", progressStart: previousProgress, progressEnd: end, durationMs: Math.max(1400, Math.round(driveDuration * ratio)), stop: null });
+        phases.push({ type: "drive", progressStart: previousProgress, progressEnd: end, durationMs: Math.max(1800, Math.round(driveDuration * ratio)), stop: null, targetPoint: pointAtPathProgress(path, end) });
       }
       previousProgress = end;
     };
     stops.forEach((stop, index) => {
       const fallback = (index + 1) / (stops.length + 1);
-      const progress = Math.max(previousProgress + 0.035, simulationStopProgress(stop, path, fallback));
-      const stopProgress = Math.min(0.94, progress);
+      const target = simulationStopTarget(stop, path, fallback);
+      // Keep the station stop monotonic without adding the old 3.5% blind
+      // jump. That jump could put the vehicle before the POI on one route and
+      // past it on another. The marker now uses this exact projected point.
+      const stopProgress = Math.min(0.96, Math.max(previousProgress + 0.006, target.progress));
+      const stopPoint = pointAtPathProgress(path, stopProgress) || target.point;
       // Reservation is intentionally triggered just before the station rather
       // than after the car has already stopped. This mirrors the product story:
       // the system uses ETA to reserve the next available charging window as
       // arrival approaches, then the vehicle enters the station.
       if (!isFuelActive()) {
-        const reservationProgress = Math.max(previousProgress + 0.02, stopProgress - 0.018);
+        const reservationLead = Math.min(0.018, Math.max(0.004, 3 / Math.max(1, routeDistance(path))));
+        const reservationProgress = Math.max(previousProgress, stopProgress - reservationLead);
         addDrive(reservationProgress);
-        const reservationBase = { stop, stopIndex: index, progressStart: reservationProgress, progressEnd: reservationProgress };
+        const reservationBase = { stop, stopIndex: index, progressStart: reservationProgress, progressEnd: reservationProgress, targetPoint: pointAtPathProgress(path, reservationProgress) };
         phases.push({ ...reservationBase, type: "reservation", durationMs: SIMULATION_STAGE_MS.reservation });
       }
       addDrive(stopProgress);
-      const base = { stop, stopIndex: index, progressStart: stopProgress, progressEnd: stopProgress };
+      const base = { stop, stopIndex: index, progressStart: stopProgress, progressEnd: stopProgress, targetPoint: stopPoint };
       phases.push({ ...base, type: "recognition", durationMs: SIMULATION_STAGE_MS.recognition });
       phases.push({ ...base, type: "queue", durationMs: SIMULATION_STAGE_MS.queue });
       phases.push({ ...base, type: "service", durationMs: SIMULATION_STAGE_MS.service });
@@ -4497,11 +4525,16 @@
     }
     const asset = simulationAssetFor(phase);
     card.hidden = false;
-    image.src = asset || "";
-    image.alt = `${isFuelActive() ? "燃油" : "纯电"}车辆${simulationTimeOfDay() === "day" ? "白天" : "夜间"}补能演示素材`;
-    image.onerror = () => { image.removeAttribute("src"); if (badge) badge.textContent = "素材未找到"; };
+    const sceneKey = `${phase.type}:${phase.stopIndex ?? ""}`;
+    const sameScene = image.dataset.simulationSceneKey === sceneKey;
+    if (!sameScene) {
+      image.dataset.simulationSceneKey = sceneKey;
+      image.src = asset || "";
+      image.alt = `${isFuelActive() ? "燃油" : "纯电"}车辆${simulationTimeOfDay() === "day" ? "白天" : "夜间"}补能演示素材`;
+      image.onerror = () => { image.removeAttribute("src"); if (badge) badge.textContent = "素材未找到"; };
+      if (badge) badge.textContent = asset ? "AI 生成素材" : "素材待替换";
+    }
     if (title) title.textContent = phase.type === "recognition" ? "到站视觉画面" : isFuelActive() ? "加油站场景" : "充电站场景";
-    if (badge) badge.textContent = asset ? "AI 生成素材" : "素材待替换";
     const snapshot = simulationSnapshotFor(phase.stop);
     if (text) text.textContent = phase.type === "reservation"
       ? `预计 ${phase.stop?.name || "下一补能站"} 即将到达，系统提前根据 ETA 自动预约，不需要用户手动点击。`
@@ -4513,10 +4546,13 @@
       dataGrid.className = "simulation-data-grid";
       text?.after(dataGrid);
     }
+    const recognitionValue = state.simulation.recognitionResolved
+      ? (state.simulation.ocrFallbackUsed ? "预置样例继续" : state.simulation.recognizedPlate || "已识别")
+      : "待执行本地 OCR";
     const stageItems = phase.type === "reservation"
       ? [["预约状态", "已自动预约"], ["预计到站", formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))]]
       : phase.type === "recognition"
-        ? [["车牌链路", "待执行本地 OCR"], ["到站状态", "已进入识别区"]]
+        ? [["车牌链路", recognitionValue], ["到站状态", "已进入识别区"]]
         : phase.type === "queue"
           ? [["预计排队 P50", simulationMetricValue(snapshot.waitP50, " 分钟")], ["尾部排队 P90", simulationMetricValue(snapshot.waitP90, " 分钟")], ["排队车辆", simulationMetricValue(snapshot.queue, " 辆")], ["空闲补能位", Number.isFinite(snapshot.idle) ? `${snapshot.idle}/${snapshot.total}` : "—"]]
           : phase.type === "service"
@@ -4545,12 +4581,23 @@
       source.after(ocrDetail);
     }
     ocrDetail.hidden = phase.type !== "recognition";
-    if (phase.type === "recognition") ocrDetail.textContent = "识别结果将在本地 OCR 返回后显示；不会用素材中的文字冒充识别结果。";
+    if (phase.type === "recognition" && state.simulation.ocrAttemptedFor !== phase.stopIndex && !state.simulation.recognitionResolved) {
+      ocrDetail.textContent = "请点击“执行本地 OCR”。如果本地服务未返回可用结果，可明确选择预置样例继续；不会把素材中的文字冒充识别结果。";
+    }
     if (ocrRow) ocrRow.hidden = phase.type !== "recognition";
     const ocrStatus = byId("simulationOcrStatus");
-    if (ocrStatus && phase.type === "recognition") ocrStatus.textContent = "等待执行本地 OCR";
+    const ocrFallbackButton = byId("simulationOcrFallbackButton");
+    if (phase.type === "recognition") {
+      if (ocrStatus && state.simulation.ocrAttemptedFor !== phase.stopIndex && !state.simulation.recognitionResolved) ocrStatus.textContent = "等待执行本地 OCR";
+      if (ocrFallbackButton) ocrFallbackButton.hidden = !state.simulation.ocrFallbackAvailable || state.simulation.recognitionResolved;
+    } else if (ocrFallbackButton) {
+      ocrFallbackButton.hidden = true;
+    }
     const ocrButton = byId("simulationOcrButton");
-    if (ocrButton) { ocrButton.disabled = false; ocrButton.textContent = "执行本地 OCR"; }
+    if (ocrButton && phase.type === "recognition") {
+      ocrButton.disabled = state.simulation.ocrBusy || state.simulation.recognitionResolved;
+      ocrButton.textContent = state.simulation.ocrBusy ? "识别中…" : state.simulation.ocrAttemptedFor === phase.stopIndex ? "再次执行 OCR" : "执行本地 OCR";
+    }
   }
 
   function renderSimulationPhase(phase) {
@@ -4573,10 +4620,15 @@
     const next = byId("simulationNextButton");
     if (next) {
       const arrived = phase?.type === "arrived";
-      next.disabled = arrived;
+      const recognitionPending = phase?.type === "recognition" && !state.simulation.recognitionResolved;
+      next.disabled = arrived || recognitionPending;
       next.innerHTML = arrived
         ? '<i data-lucide="check"></i><span>已到达目的地</span>'
-        : '<i data-lucide="skip-forward"></i><span>快进到下一阶段</span>';
+        : recognitionPending
+          ? '<i data-lucide="scan-line"></i><span>请先完成车牌识别</span>'
+          : phase?.type === "drive"
+            ? '<i data-lucide="route"></i><span>行驶至下一节点</span>'
+            : '<i data-lucide="skip-forward"></i><span>进入下一阶段</span>';
     }
     const destination = byId("simulationDestination");
     if (destination) destination.textContent = state.destinationName || "目的地";
@@ -4625,17 +4677,22 @@
   function updateSimulationMarker() {
     const simulation = state.simulation;
     if (!simulation.active || !simulation.path?.length) return;
-    const point = pointAtPathProgress(simulation.path, simulation.progress);
+    const point = simulation.phase?.type !== "drive" && Array.isArray(simulation.phase?.targetPoint)
+      ? simulation.phase.targetPoint
+      : pointAtPathProgress(simulation.path, simulation.progress, simulation.pathMetrics);
     if (!point) return;
     if (simulation.marker?.setPosition) {
       simulation.marker.setPosition(point);
-      // Do not push a map-camera mutation on every animation frame. AMap can
-      // handle the marker cadence, while the camera only needs a gentle
-      // follow update roughly eight times per second.
+      // Keep the camera and marker on the same point. During a drive phase the
+      // camera follows at a stable cadence; when a manual step enters a new
+      // station phase it recentres once on the exact projected stop point.
       const now = performance.now();
-      if (state.map?.setCenter && simulation.phase?.type === "drive" && now - simulation.lastMapCenterAt >= 120) {
+      const phaseChanged = simulation.lastCenteredPhaseIndex !== simulation.phaseIndex;
+      if (state.map?.setCenter && (phaseChanged || simulation.phase?.type === "drive")
+        && (phaseChanged || now - simulation.lastMapCenterAt >= 70)) {
         state.map.setCenter(point);
         simulation.lastMapCenterAt = now;
+        simulation.lastCenteredPhaseIndex = simulation.phaseIndex;
       }
     }
     if (simulation.fallbackMarker) {
@@ -4662,7 +4719,7 @@
 
   function createSimulationMarker() {
     removeSimulationMarker();
-    const point = pointAtPathProgress(state.simulation.path, state.simulation.progress);
+    const point = pointAtPathProgress(state.simulation.path, state.simulation.progress, state.simulation.pathMetrics);
     if (!point) return;
     if (state.live && state.map && state.AMap) {
       const marker = new state.AMap.Marker({ position: point, content: simulationMarkerContent(), offset: new state.AMap.Pixel(-15, -15), zIndex: 190, title: "模拟车辆" });
@@ -4687,6 +4744,15 @@
     simulation.phase = phase;
     simulation.progress = phase.progressStart ?? simulation.progress;
     if (phase.type !== "drive") simulation.speed = 1;
+    if (phase.type === "recognition") {
+      simulation.recognitionResolved = false;
+      simulation.ocrFallbackUsed = false;
+      simulation.ocrFallbackAvailable = false;
+      simulation.ocrBusy = false;
+      simulation.ocrPhaseKey = phase.stopIndex;
+      simulation.ocrAttemptedFor = null;
+      simulation.recognizedPlate = null;
+    }
     if (phase.stop && ["reservation", "recognition", "queue", "service", "payment", "leave"].includes(phase.type)) {
       const station = state.stations.find((candidate) => String(candidate.id) === String(phase.stop.id)) || phase.stop;
       state.selectedStation = station;
@@ -4696,12 +4762,15 @@
     renderSimulationPhase(phase);
     updateSimulationMarker();
     if (phase.type === "reservation") void autoReserveSimulationStop(phase.stop);
-    if (phase.type === "recognition") void runSimulationOcr();
   }
 
   function simulationAdvancePhase() {
     const simulation = state.simulation;
     if (!simulation.active) return;
+    if (simulation.phase?.type === "recognition" && !simulation.recognitionResolved) {
+      showToast("请先执行本地 OCR；若识别失败，可选择使用预置样例继续", 3000);
+      return;
+    }
     const nextIndex = simulation.phaseIndex + 1;
     if (nextIndex >= simulation.phases.length) {
       // Keep the completed navigation state on screen until the reviewer
@@ -4737,7 +4806,14 @@
       const ratio = Math.min(1, simulation.phaseElapsedMs / duration);
       simulation.progress = (phase?.progressStart ?? simulation.progress) + ((phase?.progressEnd ?? simulation.progress) - (phase?.progressStart ?? simulation.progress)) * ratio;
       updateSimulationMarker();
-      if (ratio >= 1) simulationAdvancePhase();
+      if (ratio >= 1) {
+        if (phase?.type === "recognition" && !simulation.recognitionResolved) {
+          simulation.paused = true;
+          renderSimulationPhase(phase);
+        } else {
+          simulationAdvancePhase();
+        }
+      }
     }
     if (simulation.autoAdvance && simulation.active) simulation.rafId = window.requestAnimationFrame(simulationFrame);
   }
@@ -4753,6 +4829,8 @@
     const isCurrentRecognitionPhase = () => state.simulation.active
       && state.simulation.phase?.type === "recognition"
       && state.simulation.phase?.stopIndex === targetStopIndex;
+    state.simulation.ocrBusy = true;
+    state.simulation.ocrFallbackAvailable = false;
     if (button) { button.disabled = true; button.textContent = "识别中…"; }
     status.textContent = "正在调用本地 PaddleOCR…";
     try {
@@ -4771,18 +4849,26 @@
       const detail = byId("simulationOcrDetail");
       const badge = byId("simulationSceneBadge");
       if (inference === "executed" && plate) {
+        state.simulation.recognitionResolved = true;
+        state.simulation.ocrFallbackUsed = false;
+        state.simulation.ocrFallbackAvailable = false;
+        state.simulation.recognizedPlate = plate;
         status.textContent = `本地 OCR 已识别：${plate}`;
         if (badge) badge.textContent = "本地 OCR 结果";
         if (detail) detail.textContent = `实际结果：${plate}${result?.arrivalRecognition?.confidence != null ? ` · 识别分数 ${Number(result.arrivalRecognition.confidence).toFixed(3)}` : ""}${timing} · 来源：${result?.engine || "PaddleOCR 本地服务"}`;
       } else if (inference === "executed") {
+        state.simulation.recognitionResolved = false;
+        state.simulation.ocrFallbackAvailable = true;
         status.textContent = "本地 OCR 已执行，但未识别到车牌";
         if (badge) badge.textContent = "本地 OCR 已执行";
-        if (detail) detail.textContent = `实际结果：已完成本地 OCR 推理，但没有返回符合格式的车牌文本${timing}。`;
+        if (detail) detail.textContent = `实际结果：已完成本地 OCR 推理，但没有返回符合格式的车牌文本${timing}。可选择使用预置样例继续，不把它当成本次图片识别结果。`;
       } else {
+        state.simulation.recognitionResolved = false;
+        state.simulation.ocrFallbackAvailable = true;
         status.textContent = "本次未执行 OCR，未生成虚假车牌";
         if (badge) badge.textContent = "OCR 未执行";
         const evidence = Array.isArray(result?.evidence) ? result.evidence.filter(Boolean).at(-1) : null;
-        if (detail) detail.textContent = `实际响应：${evidence || result?.source || "本地模型尚未就绪"}${timing}`;
+        if (detail) detail.textContent = `实际响应：${evidence || result?.source || "本地模型尚未就绪"}${timing}。可选择使用预置样例继续，不把它当成本次图片识别结果。`;
       }
       if (result?.annotatedImage) {
         image.src = result.annotatedImage;
@@ -4792,11 +4878,50 @@
       }
     } catch (error) {
       if (!isCurrentRecognitionPhase()) return;
+      state.simulation.recognitionResolved = false;
+      state.simulation.ocrFallbackAvailable = true;
       status.textContent = `OCR 暂不可用 · ${error?.message || "未生成虚假结果"}`;
       const detail = byId("simulationOcrDetail");
-      if (detail) detail.textContent = `实际响应：本地视觉服务请求失败，未生成车牌结果 · ${error?.message || "请检查服务状态"}`;
+      if (detail) detail.textContent = `实际响应：本地视觉服务请求失败，未生成车牌结果 · ${error?.message || "请检查服务状态"}。可选择使用预置样例继续。`;
     } finally {
-      if (isCurrentRecognitionPhase() && button) { button.disabled = false; button.textContent = "再次执行 OCR"; }
+      state.simulation.ocrBusy = false;
+      if (isCurrentRecognitionPhase()) {
+        if (button) {
+          button.disabled = state.simulation.recognitionResolved;
+          button.textContent = state.simulation.recognitionResolved ? "已完成 OCR" : "再次执行 OCR";
+        }
+        renderSimulationPhase(state.simulation.phase);
+        if (state.simulation.autoAdvance && state.simulation.recognitionResolved && state.simulation.active) {
+          state.simulation.paused = false;
+          if (!state.simulation.rafId) {
+            state.simulation.lastFrameAt = performance.now();
+            state.simulation.rafId = window.requestAnimationFrame(simulationFrame);
+          }
+        }
+      }
+    }
+  }
+
+  function useSimulationOcrFallback() {
+    const simulation = state.simulation;
+    if (!simulation.active || simulation.phase?.type !== "recognition" || !simulation.ocrFallbackAvailable) return;
+    simulation.recognitionResolved = true;
+    simulation.ocrFallbackUsed = true;
+    simulation.recognizedPlate = null;
+    simulation.ocrFallbackAvailable = false;
+    const status = byId("simulationOcrStatus");
+    const detail = byId("simulationOcrDetail");
+    const badge = byId("simulationSceneBadge");
+    if (status) status.textContent = "已使用预置样例继续";
+    if (badge) badge.textContent = "预置演示结果";
+    if (detail) detail.textContent = "本地 OCR 未返回可用结果，当前仅使用预置车牌完成流程托底；这不是本次图片的真实识别结果。";
+    renderSimulationPhase(simulation.phase);
+    if (simulation.autoAdvance && simulation.active) {
+      simulation.paused = false;
+      if (!simulation.rafId) {
+        simulation.lastFrameAt = performance.now();
+        simulation.rafId = window.requestAnimationFrame(simulationFrame);
+      }
     }
   }
 
@@ -4812,10 +4937,9 @@
     if (!built.phases.length) { showToast("当前路线阶段不足，无法开始模拟", 2600); return; }
     const simulation = state.simulation;
     simulation.active = true;
-    simulation.paused = false;
     simulation.speed = 1;
-    simulation.autoAdvance = byId("simulationAutoAdvance")?.checked !== false;
-    if (!simulation.autoAdvance) simulation.paused = true;
+    simulation.autoAdvance = Boolean(byId("simulationAutoAdvance")?.checked);
+    simulation.paused = !simulation.autoAdvance;
     simulation.phaseIndex = 0;
     simulation.phaseElapsedMs = 0;
     simulation.progress = 0;
@@ -4825,7 +4949,15 @@
     simulation.record = record;
     simulation.lastFrameAt = 0;
     simulation.lastMapCenterAt = 0;
+    simulation.lastCenteredPhaseIndex = -1;
+    simulation.pathMetrics = buildPathMetrics(built.path);
     simulation.ocrAttemptedFor = null;
+    simulation.recognitionResolved = false;
+    simulation.ocrFallbackUsed = false;
+    simulation.ocrFallbackAvailable = false;
+    simulation.ocrBusy = false;
+    simulation.ocrPhaseKey = null;
+    simulation.recognizedPlate = null;
     simulation.reservedStops = new Set();
     simulation.savedMapView = state.live && state.map ? { center: parseLocation(state.map.getCenter?.()), zoom: state.map.getZoom?.() } : null;
     document.body.classList.add("simulation-active");
@@ -4841,7 +4973,13 @@
     byId("simulationUi").hidden = false;
     byId("simulationToolbox").hidden = false;
     byId("simulationToolbox")?.setAttribute("aria-expanded", "true");
-    if (state.live && state.map) state.map.setZoom(14);
+    if (state.live && state.map) {
+      const routeKm = Number(record.distance) || routeDistance(built.path);
+      const simulationZoom = routeKm >= 800 ? 10 : routeKm >= 300 ? 11 : routeKm >= 80 ? 12 : 13;
+      const initialPoint = pointAtPathProgress(built.path, 0, simulation.pathMetrics);
+      if (initialPoint && state.map.setZoomAndCenter) state.map.setZoomAndCenter(simulationZoom, initialPoint);
+      else state.map.setZoom(simulationZoom);
+    }
     drawAmapRoutes();
     createSimulationMarker();
     simulationEnterPhase(0);
@@ -4862,6 +5000,7 @@
     byId("simulationUi").hidden = true;
     byId("simulationToolbox").hidden = true;
     byId("simulationSceneCard").hidden = true;
+    byId("simulationSceneImage")?.removeAttribute("data-simulation-scene-key");
     byId("simulationDataGrid")?.remove();
     byId("simulationDataSource")?.remove();
     byId("simulationOcrDetail")?.remove();
@@ -4873,6 +5012,7 @@
       renderFallbackRouteVisuals();
     }
     simulation.savedMapView = null;
+    simulation.pathMetrics = null;
     setText("mapAttribution", state.live ? "高德地图 · 真实路线与 POI / 演示预测状态" : "固定场景地图 · POI 示意 / 演示预测状态");
     renderSimulationLaunch();
   }
@@ -4918,7 +5058,8 @@
     }
     setText("simulationAutoState", state.simulation.autoAdvance ? "开启" : "手动推进");
     if (state.simulation.active && state.simulation.autoAdvance) {
-      if (state.simulation.paused) state.simulation.paused = false;
+      const recognitionPending = state.simulation.phase?.type === "recognition" && !state.simulation.recognitionResolved;
+      if (!recognitionPending && state.simulation.paused) state.simulation.paused = false;
       if (!state.simulation.rafId) {
         state.simulation.lastFrameAt = performance.now();
         state.simulation.rafId = window.requestAnimationFrame(simulationFrame);
@@ -8053,6 +8194,7 @@
     byId("simulationAutoAdvance")?.addEventListener("change", (event) => setSimulationAutoAdvance(event.target.checked));
     $$('[data-simulation-speed]').forEach((button) => button.addEventListener("click", () => setSimulationSpeed(button.dataset.simulationSpeed)));
     byId("simulationOcrButton")?.addEventListener("click", () => runSimulationOcr(true));
+    byId("simulationOcrFallbackButton")?.addEventListener("click", useSimulationOcrFallback);
     byId("visionSampleButton")?.addEventListener("click", () => runVisionAnalysis("sample"));
     byId("visionUploadButton")?.addEventListener("click", () => runVisionAnalysis("upload"));
     byId("visionFileInput")?.addEventListener("change", (event) => {
