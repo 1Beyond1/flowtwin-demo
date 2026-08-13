@@ -253,28 +253,17 @@
         font-weight: 650;
       }
 
-      .vehicle-identity {
-        gap: 6px;
-        padding-right: 8px;
-      }
-
-      .vehicle-identity .top-plate-summary,
-      .vehicle-identity .top-energy-selector {
-        flex: 0 0 auto;
-      }
-
-      .top-plate-summary {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-      }
-
       .top-energy-selector {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding-left: 8px;
-        border-left: 1px solid var(--line);
+        padding-left: 0;
+        border-left: 0;
+      }
+
+      .top-energy-status {
+        min-width: 0;
+        padding: 0 10px;
       }
 
       .top-energy-label {
@@ -301,37 +290,6 @@
         width: 11px;
         height: 11px;
       }
-
-      .vehicle-identity label {
-        color: var(--quiet);
-        font-size: 10px;
-      }
-
-      .vehicle-identity strong {
-        letter-spacing: 0.2px;
-        font-size: 13px;
-      }
-
-      .arrival-payment-button {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        min-height: 28px;
-        margin-left: 3px;
-        padding: 0 8px;
-        border: 1px solid #c7ded8;
-        border-radius: 6px;
-        background: #eff8f5;
-        color: #227567;
-        font-size: 10px;
-        font-weight: 700;
-        white-space: nowrap;
-      }
-
-      .arrival-payment-button svg { width: 13px; height: 13px; color: currentColor; }
-      .arrival-payment-button:not(:disabled):hover { border-color: #79b5a9; background: #e4f3ee; }
-      .arrival-payment-button:disabled { cursor: default; opacity: 0.62; }
-      .arrival-payment-button.is-paid { border-color: #92cfc1; background: #e4f5ef; color: #16725f; }
 
       .payment-receipt-overlay {
         position: fixed; inset: 0; z-index: 1000;
@@ -1187,10 +1145,6 @@
          Hide the map credit while the toolbox is open so it cannot sit on top
          of the speed controls at the lower edge of the viewport. */
       .simulation-active .map-attribution { display: none !important; }
-      /* The simulation has its own central arrival/OCR/payment cards. Keep
-         the pre-arrival plate widget out of the navigation view so the top
-         bar does not show a stale “等待到站” state during the walkthrough. */
-      .simulation-active .vehicle-identity { display: none !important; }
        .simulation-active .ai-composer-dock { opacity: 0; pointer-events: none; }
 
       @media (max-width: 720px) {
@@ -3776,8 +3730,6 @@
           display: none;
         }
 
-        .vehicle-identity label { display: none; }
-
         .validation-panel {
           top: 76px;
           left: 18px;
@@ -3806,11 +3758,9 @@
 
         .brand-sub,
         .status-item:nth-child(1),
-        .status-item:nth-child(3) {
+        .top-energy-status {
           display: none;
         }
-
-        .vehicle-identity { display: none; }
 
         .status-rail,
         .status-item {
@@ -5233,11 +5183,6 @@
         box-shadow: 0 0 0 2px rgba(22, 143, 126, .12), 0 8px 20px rgba(22, 143, 126, .08);
       }
 
-      /* During the simulation the central workflow already exposes the
-         vehicle identity, OCR and payment chain. Do not duplicate the
-         arrival badge in the global top bar. */
-      .simulation-active .vehicle-identity { display: none !important; }
-
       /* Use one reliable scroll owner for the long simulation card. This
          prevents a nested max-height from trapping the last rows below the
          visible viewport. */
@@ -5447,9 +5392,8 @@
         <div class="status-rail" aria-label="车辆状态">
           <div class="status-item status-editable"><i data-lucide="clock-3"></i><label for="departureTimeInput">当前时间</label><span class="status-editor"><input id="departureTimeInput" type="time" aria-label="当前出发时间" /></span></div>
           <div class="status-item status-editable"><i data-lucide="battery-medium" id="vehicleEnergyIcon"></i><label id="vehicleEnergyLabel" for="topEnergyPercentInput">当前电量</label><span class="status-editor"><input id="topEnergyPercentInput" type="number" min="5" max="100" step="1" value="22" inputmode="numeric" aria-label="当前电量百分比" /><b>%</b></span><span class="status-caption" id="vehicleEnergyRange">预计可行驶 96 km</span></div>
-          <div class="status-item vehicle-identity" aria-label="车牌与动力类型">
-            <span class="top-plate-summary" data-reviewer-only><i data-lucide="scan-line"></i><label>车牌</label><strong id="vehiclePlate">京A·FT2026</strong></span>
-            <div class="top-energy-selector" aria-label="动力类型">
+          <div class="status-item top-energy-status" aria-label="动力类型">
+            <div class="top-energy-selector">
               <span class="top-energy-label">动力</span>
               <div class="energy-type-switch top-energy-type-switch" role="group" aria-label="动力类型">
                 <button type="button" class="active" data-energy-type="electric"><i data-lucide="zap"></i>纯电</button>
@@ -5457,7 +5401,6 @@
                 <button type="button" data-energy-type="hybrid"><i data-lucide="git-compare-arrows"></i>混动</button>
               </div>
             </div>
-            <button id="arrivalPaymentButton" class="arrival-payment-button" data-reviewer-only type="button" disabled title="到达补能站后，模拟车牌识别与授权扣款"><i data-lucide="scan-line"></i><span id="arrivalPaymentText">等待到站</span></button>
           </div>
           <div class="status-item connection-status"><i data-lucide="wifi"></i><strong>已连接</strong></div>
           <div class="mode-switch" role="tablist" aria-label="工作模式">
