@@ -133,6 +133,37 @@ test("simple explicit new trips stay local and do not call AI", async () => {
   assert.equal(formatPlanResponse(result).analysis.mode, "rules");
 });
 
+test("a bare place query resolves through AMap without requiring a destination verb", async () => {
+  const messages = ["天津站", "搜天津站"];
+  for (const message of messages) {
+    const result = await parseTripIntent({
+      message,
+      config: { webServiceKey: "geo-key" },
+      fetchImpl: async (url) => {
+        const href = String(url);
+        if (href.includes("place/text")) {
+          return new Response(JSON.stringify({
+            status: "1",
+            pois: [
+              { name: "天津站", location: "117.2200,39.1400", type: "交通设施服务;火车站", typecode: "150200", pname: "天津市", cityname: "天津市", adname: "和平区" },
+              { name: "天津西站", location: "117.1700,39.1700", type: "交通设施服务;火车站", typecode: "150200", pname: "天津市", cityname: "天津市", adname: "红桥区" }
+            ]
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({
+          status: "1",
+          geocodes: [{ formatted_address: "天津站", province: "天津市", city: "天津市", district: "和平区", level: "门牌号", location: "117.2200,39.1400" }]
+        }), { status: 200 });
+      }
+    });
+    assert.equal(result.aiUsed, false);
+    assert.equal(result.destination, "天津站");
+    assert.equal(result.clarificationNeeded, false);
+    assert.deepEqual(result.locations.destination.coordinate, [117.22, 39.14]);
+    assert.equal(result.locations.destination.needsPick, false);
+  }
+});
+
 test("multi-turn composite service requests call AI after local parsing", async () => {
   const calls = [];
   const result = await parseTripIntent({
