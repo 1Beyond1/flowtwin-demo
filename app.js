@@ -231,8 +231,9 @@
     simulation: {
       active: false,
       paused: false,
-      autoAdvance: false,
-      speed: 1,
+      autoAdvance: true,
+      speed: 3,
+      preferredSpeed: 3,
       phaseIndex: 0,
       phaseElapsedMs: 0,
       progress: 0,
@@ -260,6 +261,7 @@
       reservationAfterSnapshot: null,
       reservationStopKey: null,
       reservationEvidenceOpen: false,
+      skippedStopIndexes: new Set(),
       ocrHealth: null
     }
   };
@@ -1058,7 +1060,13 @@
     const serviceNudge = byId("serviceNudge");
     if (routeSheet) {
       routeSheet.hidden = !hasPlan;
-      if (hasPlan) routeSheet.classList.remove("collapsed");
+      if (hasPlan) {
+        // Every new plan starts as a complete comparison surface. A previous
+        // manual collapse must not make the next result look like it is
+        // missing cards or require the evaluator to discover a drawer.
+        routeSheet.classList.remove("collapsed");
+        routeSheet.style.removeProperty("display");
+      }
     }
     if (insightPanel) {
       insightPanel.hidden = !hasPlan;
@@ -4567,6 +4575,60 @@
     return Boolean(phase && SIMULATION_STATION_PHASES.has(phase.type) && phase.stop);
   }
 
+  function simulationStopIndexToSkip() {
+    const simulation = state.simulation;
+    const phases = simulation.phases || [];
+    const current = simulation.phase || phases[simulation.phaseIndex];
+    if (!current) return null;
+    if (Number.isInteger(current.stopIndex)) return current.stopIndex;
+    for (let index = Math.max(0, simulation.phaseIndex + 1); index < phases.length; index += 1) {
+      const phase = phases[index];
+      if (isSimulationStationPhase(phase) && Number.isInteger(phase.stopIndex)) return phase.stopIndex;
+    }
+    return null;
+  }
+
+  function simulationSkipTargetIndex(stopIndex) {
+    const phases = state.simulation.phases || [];
+    if (!Number.isInteger(stopIndex)) return null;
+    for (let index = Math.max(0, state.simulation.phaseIndex); index < phases.length; index += 1) {
+      const phase = phases[index];
+      if (phase?.type === "leave" && phase.stopIndex === stopIndex) return index + 1;
+    }
+    return null;
+  }
+
+  function canSkipSimulationStop() {
+    const simulation = state.simulation;
+    if (!simulation.active || !simulation.phases.length || simulation.phase?.type === "arrived") return false;
+    return simulationSkipTargetIndex(simulationStopIndexToSkip()) !== null;
+  }
+
+  function skipSimulationEnergyStop() {
+    const simulation = state.simulation;
+    if (!canSkipSimulationStop()) return;
+    const stopIndex = simulationStopIndexToSkip();
+    const targetIndex = simulationSkipTargetIndex(stopIndex);
+    if (!Number.isInteger(stopIndex) || !Number.isInteger(targetIndex)) return;
+    simulation.skippedStopIndexes.add(stopIndex);
+    if (simulation.rafId) window.cancelAnimationFrame(simulation.rafId);
+    simulation.rafId = null;
+    simulation.reservationPending = false;
+    simulation.recognitionResolved = true;
+    simulation.ocrFallbackAvailable = false;
+    simulation.paused = false;
+    showToast(`已跳过第 ${stopIndex + 1} 个补能节点演示，车辆继续沿路线行驶`, 2800);
+    if (targetIndex >= simulation.phases.length) {
+      simulation.phase = { type: "arrived", progressStart: 1, progressEnd: 1, durationMs: 0, stop: null };
+      simulation.progress = 1;
+      simulation.paused = true;
+      renderSimulationPhase(simulation.phase);
+      updateSimulationMarker();
+      return;
+    }
+    simulationEnterPhase(targetIndex);
+  }
+
   function simulationStageGroupFor(phase) {
     if (phase?.type === "arrived") return { label: "已完成", icon: "check-circle-2" };
     if (isSimulationStationPhase(phase)) return { label: "进站服务", icon: "building-2" };
@@ -4905,6 +4967,7 @@
     setText("simulationPhaseIndex", String(state.simulation.phaseIndex + 1).padStart(2, "0"));
     setText("simulationStageGroup", group.label);
     setText("simulationSpeedReadout", `${state.simulation.speed}×`);
+    $$('[data-simulation-speed]').forEach((button) => button.classList.toggle("active", Number(button.dataset.simulationSpeed) === Number(state.simulation.speed)));
     setText("simulationAutoState", state.simulation.autoAdvance ? "路线自动 · 站内手动" : "全程手动推进");
     const total = Math.max(1, state.simulation.phases.length);
     const progress = byId("simulationProgressBar");
@@ -4937,6 +5000,16 @@
           : phase?.type === "drive"
             ? '<i data-lucide="route"></i><span>行驶至下一节点</span>'
             : '<i data-lucide="skip-forward"></i><span>进入下一阶段</span>';
+    }
+    const skipStop = byId("simulationSkipStopButton");
+    if (skipStop) {
+      const canSkip = canSkipSimulationStop();
+      const reservationPending = phase?.type === "reservation" && state.simulation.reservationPending;
+      skipStop.hidden = !canSkip;
+      skipStop.disabled = !canSkip || reservationPending;
+      skipStop.innerHTML = reservationPending
+        ? '<i data-lucide="loader-circle"></i><span>预约处理中…</span>'
+        : '<i data-lucide="skip-forward"></i><span>跳过本次充能演示</span>';
     }
     const toolbox = byId("simulationToolbox");
     const toolboxToggle = byId("simulationToolboxToggle");
@@ -5086,7 +5159,10 @@
     simulation.phaseElapsedMs = 0;
     simulation.phase = phase;
     simulation.progress = phase.progressStart ?? simulation.progress;
-    if (phase.type !== "drive") simulation.speed = 1;
+    // Keep the selected playback speed for route segments. Station stages are
+    // manually inspected, so their readout deliberately returns to 1×; the
+    // next drive segment restores the preferred route speed.
+    simulation.speed = phase.type === "drive" ? Number(simulation.preferredSpeed || 3) : 1;
     if (phase.type === "recognition") {
       simulation.recognitionResolved = false;
       simulation.ocrFallbackUsed = false;
@@ -5332,8 +5408,10 @@
     const built = buildSimulationPhases(record);
     if (!built.phases.length) { showToast("当前路线阶段不足，无法开始模拟", 2600); return; }
     const simulation = state.simulation;
+    const selectedSpeed = Number(document.querySelector("[data-simulation-speed].active")?.dataset.simulationSpeed || simulation.preferredSpeed || 3);
     simulation.active = true;
-    simulation.speed = 1;
+    simulation.preferredSpeed = Math.max(1, Math.min(3, selectedSpeed));
+    simulation.speed = simulation.preferredSpeed;
     simulation.autoAdvance = Boolean(byId("simulationAutoAdvance")?.checked);
     simulation.paused = !simulation.autoAdvance;
     simulation.phaseIndex = 0;
@@ -5361,6 +5439,7 @@
     simulation.reservationEvidenceOpen = false;
     simulation.ocrHealth = null;
     simulation.reservedStops = new Set();
+    simulation.skippedStopIndexes = new Set();
     simulation.savedMapView = state.live && state.map ? { center: parseLocation(state.map.getCenter?.()), zoom: state.map.getZoom?.() } : null;
     document.body.classList.add("simulation-active");
     byId("tripPanel")?.classList.remove("collapsed");
@@ -5385,7 +5464,7 @@
     drawAmapRoutes();
     createSimulationMarker();
     simulationEnterPhase(0);
-    setSimulationSpeed(1);
+    setSimulationSpeed(simulation.preferredSpeed);
     setText("mapAttribution", "高德路线 · 模拟驾驶 / 场景素材为演示");
     if (simulation.autoAdvance && !simulation.rafId) simulation.rafId = window.requestAnimationFrame(simulationFrame);
   }
@@ -5483,6 +5562,7 @@
   function setSimulationSpeed(speed) {
     const next = Math.max(1, Math.min(3, Number(speed) || 1));
     state.simulation.speed = next;
+    state.simulation.preferredSpeed = next;
     $$('[data-simulation-speed]').forEach((button) => button.classList.toggle("active", Number(button.dataset.simulationSpeed) === next));
     setText("simulationSpeedReadout", `${next}×`);
   }
@@ -6246,7 +6326,11 @@
     const expand = byId("expandInsight");
     const trigger = serviceTriggerForRecord(record);
     if (!nudge || !trigger) {
-      if (nudge) nudge.hidden = true;
+      if (nudge) {
+        nudge.hidden = true;
+        nudge.classList.remove("is-recommended");
+      }
+      byId("serviceFlow")?.classList.remove("is-recommended");
       if (expand && expand.dataset.nudgeLabel === "1") {
         const label = expand.querySelector("span");
         if (label) label.textContent = "站点详情";
@@ -6257,6 +6341,7 @@
     const key = `${state.destinationName}|${record.key}|${trigger.kind}|${Math.round(trigger.targetMinute)}`;
     if (state.serviceSuggestionDismissed.has(key)) {
       nudge.hidden = true;
+      nudge.classList.remove("is-recommended");
       return;
     }
     if (!state.serviceSuggestion || state.serviceSuggestion.key !== key) {
@@ -6264,6 +6349,7 @@
     }
     const suggestion = state.serviceSuggestion;
     nudge.hidden = Boolean(suggestion.accepted);
+    nudge.classList.toggle("is-recommended", !suggestion.accepted);
     setText("serviceNudgeTitle", suggestion.title);
     setText("serviceNudgeText", suggestion.text);
     const icon = byId("serviceNudgeIcon");
@@ -6431,10 +6517,12 @@
   function renderServiceRecommendations(record) {
     const container = byId("serviceRecommendations");
     const dwellLabel = byId("serviceDwellTime");
+    const flow = byId("serviceFlow");
     if (!container || !record) return;
     const suggestion = state.serviceSuggestion;
     const serviceButton = byId("serviceFeedbackButton");
     if (state.activeServicePlan) {
+      flow?.classList.add("is-recommended");
       if (dwellLabel) dwellLabel.textContent = `已加入路线 · 预计额外 ${state.activeServicePlan.extraMinutes || 0} 分钟`;
       const estimated = state.activeServicePlan.routeMode === "estimated-corridor";
       const description = estimated
@@ -6447,6 +6535,7 @@
       return;
     }
     if (!suggestion || suggestion.recordKey !== record.key || !suggestion.accepted) {
+      flow?.classList.remove("is-recommended");
       if (dwellLabel) dwellLabel.textContent = "系统会在饭点或长时间驾驶前主动提示";
       container.innerHTML = '<div class="service-card"><i data-lucide="sparkles"></i><span><strong>等待服务建议</strong><small>根据预计经过时间和沿线路况触发餐饮、咖啡或休息建议。</small></span></div>';
       if (serviceButton) { serviceButton.disabled = true; serviceButton.textContent = "等待推荐"; }
@@ -6455,12 +6544,14 @@
       return;
     }
     if (suggestion.loading) {
+      flow?.classList.add("is-recommended");
       if (dwellLabel) dwellLabel.textContent = `正在检索 ${formatClock(suggestion.targetMinute)} 附近服务`;
       container.innerHTML = '<div class="service-card"><i data-lucide="loader-circle"></i><span><strong>正在检索沿线真实 POI</strong><small>仅展示高德返回的餐饮、咖啡和休息候选。</small></span></div>';
       refreshIcons();
       return;
     }
     const options = suggestion.options || [];
+    flow?.classList.toggle("is-recommended", options.length > 0);
     const excludedByDeadline = Number(suggestion.filteredOutCount || 0);
     if (dwellLabel) dwellLabel.textContent = `预计 ${formatClock(suggestion.targetMinute)} 在${suggestion.locationLabel || serviceLocationLabel(record, suggestion.progress)}附近经过 · 高德真实 POI`;
     const requestedName = String(suggestion.requestedServiceName || "").trim();
@@ -8670,6 +8761,7 @@
       state.simulation.phaseElapsedMs = Number(state.simulation.phase?.durationMs || 1);
       simulationAdvancePhase();
     });
+    byId("simulationSkipStopButton")?.addEventListener("click", skipSimulationEnergyStop);
     byId("simulationScenePrimaryButton")?.addEventListener("click", handleSimulationSceneAction);
     byId("simulationPauseButton")?.addEventListener("click", toggleSimulationPause);
     byId("simulationAutoAdvance")?.addEventListener("change", (event) => setSimulationAutoAdvance(event.target.checked));
