@@ -258,6 +258,50 @@
         padding-right: 8px;
       }
 
+      .vehicle-identity .top-plate-summary,
+      .vehicle-identity .top-energy-selector {
+        flex: 0 0 auto;
+      }
+
+      .top-plate-summary {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .top-energy-selector {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding-left: 8px;
+        border-left: 1px solid var(--line);
+      }
+
+      .top-energy-label {
+        color: var(--quiet);
+        font-size: 10px;
+      }
+
+      .top-energy-type-switch {
+        display: inline-flex;
+        grid-template-columns: none;
+        gap: 2px;
+      }
+
+      .top-energy-type-switch button {
+        min-height: 27px;
+        padding: 0 6px;
+        border-color: transparent;
+        border-radius: 5px;
+        font-size: 9px;
+        white-space: nowrap;
+      }
+
+      .top-energy-type-switch button svg {
+        width: 11px;
+        height: 11px;
+      }
+
       .vehicle-identity label {
         color: var(--quiet);
         font-size: 10px;
@@ -626,6 +670,12 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 7px;
         margin-bottom: 16px;
+      }
+
+      /* 动力类型已经移到顶栏车辆卡片；左侧这里只保留到达要求，
+         混动车况在需要时作为第二行展开。 */
+      #manualControls {
+        grid-template-columns: minmax(0, 1fr);
       }
 
       .constraint {
@@ -3697,6 +3747,9 @@
       }
 
       @media (max-width: 1080px) {
+        .top-energy-label { display: none; }
+        .top-energy-selector { padding-left: 5px; }
+        .top-energy-type-switch button { padding: 0 4px; }
         .insight-panel {
           right: 18px;
           width: 278px;
@@ -3756,6 +3809,8 @@
         .status-item:nth-child(3) {
           display: none;
         }
+
+        .vehicle-identity { display: none; }
 
         .status-rail,
         .status-item {
@@ -4727,6 +4782,14 @@
         margin-top: 6px;
       }
 
+      .hybrid-levels-constraint {
+        grid-column: 1;
+        padding: 8px 9px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface-soft);
+      }
+
       .hybrid-levels label {
         display: flex;
         align-items: center;
@@ -5181,13 +5244,46 @@
       .simulation-ui .simulation-scene-card,
       .simulation-ui .simulation-scene-copy { max-height: none; overflow: visible; }
 
-      /* Route plans are a comparison surface, not a drawer. On desktop keep
-         the whole row visible by default instead of forcing a second scroll
-         inside the bottom sheet. */
-      @media (min-width: 761px) {
-        .route-sheet,
-        .route-options { max-height: none; overflow: visible; }
-      }
+       /* Route plans are a comparison surface, not a drawer. On desktop keep
+          the whole row visible by default instead of forcing a second scroll
+          inside the bottom sheet. */
+       @media (min-width: 761px) {
+         .route-sheet,
+         .route-options { max-height: none; overflow: visible; }
+       }
+
+       /* On wide screens the side panels are the primary reading surfaces.
+          Keep the route comparison in the map corridor between them instead
+          of stretching it across the viewport and hiding their lower rows. */
+       @media (min-width: 1440px) {
+         .route-sheet {
+           right: calc(24px + 302px + 16px);
+           bottom: 18px;
+           left: calc(24px + 354px + 16px);
+           max-height: min(270px, 29dvh);
+           overflow: hidden;
+           padding: 12px 14px 13px;
+         }
+
+         .sheet-header { margin-bottom: 8px; }
+         .route-options { gap: 8px; }
+         .route-option { padding: 10px 12px 40px; }
+         .option-main { margin-bottom: 6px; }
+         .option-main strong { font-size: 20px; }
+         .option-metrics { gap: 4px 10px; font-size: 9px; }
+         .option-reason { margin-top: 6px; font-size: 9px; }
+         .option-station { margin-top: 5px; font-size: 9px; }
+         .route-simulate-action { right: 9px; bottom: 8px; min-height: 26px; padding: 0 8px; }
+       }
+
+       /* Keep the same compact height on medium desktop screens, where the
+          route sheet still spans the map but should not become a second panel. */
+       @media (min-width: 761px) and (max-width: 1439px) {
+         .route-sheet {
+           max-height: min(270px, 30dvh);
+           overflow-y: auto;
+         }
+       }
 
       /* Quiet, low-contrast scrollbars across panels; they become slightly
          clearer only while the pointer is over the scrollable surface. */
@@ -5351,9 +5447,17 @@
         <div class="status-rail" aria-label="车辆状态">
           <div class="status-item status-editable"><i data-lucide="clock-3"></i><label for="departureTimeInput">当前时间</label><span class="status-editor"><input id="departureTimeInput" type="time" aria-label="当前出发时间" /></span></div>
           <div class="status-item status-editable"><i data-lucide="battery-medium" id="vehicleEnergyIcon"></i><label id="vehicleEnergyLabel" for="topEnergyPercentInput">当前电量</label><span class="status-editor"><input id="topEnergyPercentInput" type="number" min="5" max="100" step="1" value="22" inputmode="numeric" aria-label="当前电量百分比" /><b>%</b></span><span class="status-caption" id="vehicleEnergyRange">预计可行驶 96 km</span></div>
-          <div class="status-item vehicle-identity" aria-label="车牌到站识别与模拟支付" data-reviewer-only>
-            <i data-lucide="scan-line"></i><label>车牌</label><strong id="vehiclePlate">京A·FT2026</strong>
-            <button id="arrivalPaymentButton" class="arrival-payment-button" type="button" disabled title="到达补能站后，模拟车牌识别与授权扣款"><i data-lucide="scan-line"></i><span id="arrivalPaymentText">等待到站</span></button>
+          <div class="status-item vehicle-identity" aria-label="车牌与动力类型">
+            <span class="top-plate-summary" data-reviewer-only><i data-lucide="scan-line"></i><label>车牌</label><strong id="vehiclePlate">京A·FT2026</strong></span>
+            <div class="top-energy-selector" aria-label="动力类型">
+              <span class="top-energy-label">动力</span>
+              <div class="energy-type-switch top-energy-type-switch" role="group" aria-label="动力类型">
+                <button type="button" class="active" data-energy-type="electric"><i data-lucide="zap"></i>纯电</button>
+                <button type="button" data-energy-type="fuel"><i data-lucide="fuel"></i>燃油</button>
+                <button type="button" data-energy-type="hybrid"><i data-lucide="git-compare-arrows"></i>混动</button>
+              </div>
+            </div>
+            <button id="arrivalPaymentButton" class="arrival-payment-button" data-reviewer-only type="button" disabled title="到达补能站后，模拟车牌识别与授权扣款"><i data-lucide="scan-line"></i><span id="arrivalPaymentText">等待到站</span></button>
           </div>
           <div class="status-item connection-status"><i data-lucide="wifi"></i><strong>已连接</strong></div>
           <div class="mode-switch" role="tablist" aria-label="工作模式">
@@ -5419,8 +5523,8 @@
         </div>
 
         <div class="constraint-grid" id="manualControls" aria-label="行程约束" hidden>
-          <div class="constraint energy-type-constraint"><div class="constraint-label">动力类型</div><div class="energy-type-switch" role="group" aria-label="动力类型"><button type="button" class="active" data-energy-type="electric"><i data-lucide="zap"></i>纯电</button><button type="button" data-energy-type="fuel"><i data-lucide="fuel"></i>燃油</button><button type="button" data-energy-type="hybrid"><i data-lucide="git-compare-arrows"></i>混动</button></div><div class="hybrid-levels" id="hybridLevels" hidden><label>电量<span><input id="hybridElectricInput" type="number" min="5" max="100" step="1" inputmode="numeric" aria-label="混动车当前电量百分比" /><b>%</b></span></label><label>油量<span><input id="hybridFuelInput" type="number" min="5" max="100" step="1" inputmode="numeric" aria-label="混动车当前油量百分比" /><b>%</b></span></label></div></div>
           <div class="constraint constraint-arrival"><div class="constraint-label">到达要求 <small>可选</small></div><div class="arrival-inputs"><label>最晚<input id="deadlineInput" type="time" aria-label="最晚到达时间，可留空" title="留空即不限制最晚到达时间" /></label><label>余量<input id="minArrivalSocInput" type="number" min="5" max="100" step="1" placeholder="不限" inputmode="numeric" aria-label="最低到达余量，可留空" title="留空即不设到达余量要求，仅保留车辆安全下限" /><b>%</b></label></div><div class="constraint-note">留空即不作为硬约束；系统仍保留车辆安全下限。</div></div>
+          <div class="hybrid-levels hybrid-levels-constraint" id="hybridLevels" hidden><label>电量<span><input id="hybridElectricInput" type="number" min="5" max="100" step="1" inputmode="numeric" aria-label="混动车当前电量百分比" /><b>%</b></span></label><label>油量<span><input id="hybridFuelInput" type="number" min="5" max="100" step="1" inputmode="numeric" aria-label="混动车当前油量百分比" /><b>%</b></span></div>
         </div>
 
       </section>

@@ -8602,7 +8602,10 @@
     state.routeSelectionTouched = false;
     state.selectedRoute = "reliable";
     updateEnergyControls();
-    if (replan !== false && state.live && state.AMap) {
+    // The selector now lives in the always-visible vehicle card, so it can be
+    // clicked before the first plan.  Update the local vehicle state in that
+    // case, but do not spend a map/POI request until a route actually exists.
+    if (replan !== false && state.hasPlannedRoute && state.live && state.AMap) {
       setMapStatus("正在按动力类型重新检索补能站…");
       await queryStations();
       await replanRoutesViaStations();
