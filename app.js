@@ -3824,9 +3824,73 @@
     };
   }
 
-  function decorateLongTripRecord(role, record, extra = {}) {
-    const names = { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" };
-    return Object.assign({}, record, { key: role, displayName: names[role] }, extra);
+  // The backend selects objective roles from corridor estimates.  Long-trip
+  // verification then replaces that estimate with real AMap leg durations, and
+  // adding a service stop can change one role again.  Reconcile the aliases
+  // from the values visible in the final records instead of preserving a stale
+  // role label.  Otherwise a card called “fastest” can legitimately be later
+  // than the card called “reliable”.
+  function reconcileRouteObjectiveAliases(records = {}) {
+    const candidates = Object.values(records)
+      .filter((record) => record && record.feasible !== false);
+    if (!candidates.length) return records;
+    const metric = (record, primary, fallback = 0) => {
+      const value = Number(record?.[primary]);
+      return Number.isFinite(value) ? value : Number(fallback) || 0;
+    };
+    const sameRoute = (left, right) => Boolean(left && right && (
+      (left.routeIdentity && right.routeIdentity && left.routeIdentity === right.routeIdentity)
+      || (!left.routeIdentity && !right.routeIdentity
+        && Number(left.distance || 0) === Number(right.distance || 0)
+        && Number(left.duration || 0) === Number(right.duration || 0)
+        && (left.stops || []).map((stop) => stop.id).join("|") === (right.stops || []).map((stop) => stop.id).join("|"))
+    ));
+    const fastest = candidates.slice().sort((a, b) =>
+      metric(a, "total", a.arrival) - metric(b, "total", b.arrival)
+      || metric(a, "p50Wait", a.wait) - metric(b, "p50Wait", b.wait)
+      || metric(a, "cost") - metric(b, "cost"))[0];
+    const reliable = candidates.slice().sort((a, b) =>
+      metric(a, "p90Total", a.total ?? a.arrival) - metric(b, "p90Total", b.total ?? b.arrival)
+      || metric(b, "arrivalSoc") - metric(a, "arrivalSoc")
+      || metric(a, "total", a.arrival) - metric(b, "total", b.arrival)
+      || metric(a, "cost") - metric(b, "cost"))[0];
+    const cheapest = candidates.slice().sort((a, b) =>
+      metric(a, "cost") - metric(b, "cost")
+      || metric(a, "total", a.arrival) - metric(b, "total", b.arrival)
+      || metric(a, "p90Total", a.total ?? a.arrival) - metric(b, "p90Total", b.total ?? b.arrival))[0];
+    const fastestIsStable = sameRoute(fastest, reliable);
+    const fastestIsCheap = sameRoute(fastest, cheapest);
+    const stableIsCheap = sameRoute(reliable, cheapest);
+    const isLongTrip = candidates.some((record) => record.multiStop || record.provisionalCorridorRoute);
+    const names = isLongTrip
+      ? { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }
+      : {
+        fastest: fastestIsStable && fastestIsCheap ? "全优方案" : fastestIsStable ? "最快且最稳" : fastestIsCheap ? "最快且最省" : "最快到达",
+        reliable: fastestIsStable && stableIsCheap ? "全优方案" : fastestIsStable ? "最快且最稳" : stableIsCheap ? "最稳且最省" : "最稳妥",
+        cheapest: fastestIsCheap && stableIsCheap ? "全优方案" : fastestIsCheap ? "最快且最省" : stableIsCheap ? "最稳且最省" : "最低成本"
+      };
+    const preferredRole = ["cost", "cheapest"].includes(state.priority)
+      ? "cheapest"
+      : ["time", "fastest"].includes(state.priority)
+        ? "fastest"
+        : "reliable";
+    const aliases = { fastest, reliable, cheapest };
+    return Object.fromEntries(Object.entries(aliases).map(([role, source]) => [role, Object.assign({}, source, {
+      key: role,
+      candidateKey: source.candidateKey || role,
+      displayName: names[role],
+      isActualFastest: sameRoute(source, fastest),
+      isActualStable: sameRoute(source, reliable),
+      isActualCheapest: sameRoute(source, cheapest),
+      stableCollision: fastestIsStable,
+      costBackup: fastestIsCheap || stableIsCheap,
+      recommended: role === preferredRole,
+      objectiveBadges: [
+        sameRoute(source, fastest) ? "最快" : null,
+        sameRoute(source, reliable) ? "最稳妥" : null,
+        sameRoute(source, cheapest) ? "最低成本" : null
+      ].filter(Boolean)
+    })]));
   }
 
   async function replanLongTripRoutes() {
@@ -3987,28 +4051,13 @@
       };
       return "verification-failed";
     }
-    let fastest = validated.fastest || available.slice().sort((a, b) => a.arrival - b.arrival || a.chargeMinutes - b.chargeMinutes || a.p50Wait - b.p50Wait || a.cost - b.cost)[0];
-    let reliable = validated.reliable || available.slice().sort((a, b) => a.p90Total - b.p90Total || b.arrivalSoc - a.arrivalSoc || a.p90Wait - b.p90Wait || a.arrival - b.arrival)[0];
-    // A single verified road corridor can legitimately be optimal for more
-    // than one objective. Keep the real cost/wait values instead of cloning a
-    // route and applying a made-up 12% tariff discount.
-    const cheapest = validated.cheapest
-      || available.slice().sort((a, b) => a.cost - b.cost || a.roadTolls - b.roadTolls || a.arrival - b.arrival)[0]
-      || fastest;
-    const sameRoute = (left, right) => Boolean(left && right && left.routeIdentity && left.routeIdentity === right.routeIdentity);
-    const preferred = ["cost", "cheapest"].includes(state.priority) ? "cheapest" : ["time", "fastest"].includes(state.priority) ? "fastest" : "reliable";
-    state.multiStopRouteRecords = {
-      fastest: decorateLongTripRecord("fastest", fastest, { isActualFastest: true, isActualStable: sameRoute(fastest, reliable), isActualCheapest: sameRoute(fastest, cheapest), recommended: preferred === "fastest" }),
-      reliable: decorateLongTripRecord("reliable", reliable, { isActualFastest: sameRoute(reliable, fastest), isActualStable: true, isActualCheapest: sameRoute(reliable, cheapest), recommended: preferred === "reliable" }),
-      cheapest: decorateLongTripRecord("cheapest", cheapest, { isActualFastest: sameRoute(cheapest, fastest), isActualStable: sameRoute(cheapest, reliable), isActualCheapest: true, recommended: preferred === "cheapest", costBackup: !cheapest.feasible })
-    };
-    Object.values(state.multiStopRouteRecords).forEach((record) => {
-      record.objectiveBadges = [
-        record.isActualFastest ? "最快" : null,
-        record.isActualStable ? "最稳妥" : null,
-        record.isActualCheapest ? "最低成本" : null
-      ].filter(Boolean);
-    });
+    // The verified records are the source of truth for the visible objective
+    // labels. Do not keep the backend's corridor-level role if AMap's actual
+    // leg durations changed the ranking.
+    state.multiStopRouteRecords = reconcileRouteObjectiveAliases(
+      Object.fromEntries(available.map((record, index) => [`verified-${index}`, record]))
+    );
+    const preferred = Object.entries(state.multiStopRouteRecords).find(([, record]) => record.recommended)?.[0] || "reliable";
     state.multiStopPlanningMeta = {
       candidatesConsidered: proposal.candidatesConsidered,
       candidatesAvailable: proposal.candidatesAvailable || proposal.candidatesConsidered,
@@ -4125,6 +4174,10 @@
 
   function calculateRouteRecords() {
     if (state.multiStopRouteRecords) {
+      // A service stop or a fresh AMap verification can change the visible
+      // ordering.  Reconcile again instead of trusting the aliases created by
+      // the previous planning pass.
+      state.multiStopRouteRecords = reconcileRouteObjectiveAliases(state.multiStopRouteRecords);
       state.routeRecords = state.multiStopRouteRecords;
       const preferred = Object.entries(state.routeRecords).find(([, record]) => record.recommended)?.[0] || "reliable";
       state.recommendedRoute = preferred;
@@ -4254,11 +4307,16 @@
         displayName: state.routeRecords[role].displayName
       });
     });
-    const preferredRole = ["cost", "cheapest"].includes(state.priority)
-      ? "cheapest"
-      : ["time", "fastest"].includes(state.priority)
-        ? "fastest"
-        : "reliable";
+    // Applying a service plan changes the actual ETA/P50/P90/cost.  Re-rank
+    // after the override; otherwise the old role label can say “fastest” even
+    // though another card now has an earlier verified arrival.
+    state.routeRecords = reconcileRouteObjectiveAliases(state.routeRecords);
+    const preferredRole = Object.entries(state.routeRecords).find(([, record]) => record.recommended)?.[0]
+      || (["cost", "cheapest"].includes(state.priority)
+        ? "cheapest"
+        : ["time", "fastest"].includes(state.priority)
+          ? "fastest"
+          : "reliable");
     state.recommendedRoute = preferredRole;
     Object.entries(state.routeRecords).forEach(([role, record]) => { record.recommended = role === preferredRole; });
   }
@@ -6713,10 +6771,11 @@
     updated.recommended = record.recommended;
     if (state.multiStopRouteRecords) {
       state.multiStopRouteRecords[role] = updated;
+      state.multiStopRouteRecords = reconcileRouteObjectiveAliases(state.multiStopRouteRecords);
       state.routeRecords = state.multiStopRouteRecords;
     } else {
       state.serviceRouteOverrides[role] = updated;
-      state.routeRecords[role] = updated;
+      calculateRouteRecords();
     }
     state.selectedService = service.id;
     state.activeServicePlan = updated.servicePlan;
