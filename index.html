@@ -985,10 +985,16 @@
         left: 50%;
         z-index: 880;
         display: grid;
-         width: min(720px, calc(100vw - 36px));
+        box-sizing: border-box;
+        width: min(720px, calc(100vw - 36px));
+        max-height: calc(100vh - 102px);
         gap: 9px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-right: 4px;
+        scrollbar-gutter: stable;
         transform: translateX(-50%);
-        pointer-events: none;
+        pointer-events: auto;
       }
 
       .simulation-nav-card,
@@ -1027,11 +1033,11 @@
        .simulation-speed-readout { padding: 4px 7px; border-radius: 999px; background: #e6f5f0; color: #16725f; font: 750 9px/1 var(--mono); }
        .simulation-stage-group { flex: 0 0 auto; padding: 4px 7px; border: 1px solid #dbe5fb; border-radius: 999px; background: #f4f7ff; color: #315bb8; font-size: 8px; font-weight: 750; }
 
-        .simulation-scene-card { display: grid; grid-template-columns: 250px minmax(0, 1fr); overflow: hidden; }
+        .simulation-scene-card { display: grid; grid-template-columns: 250px minmax(0, 1fr); max-height: calc(100vh - 190px); min-height: 0; overflow: hidden; }
         .simulation-scene-card.is-complete { display: block; }
         .simulation-scene-media { min-height: 236px; background: #e8ece8; }
         .simulation-scene-media img { display: block; width: 100%; height: 100%; min-height: 232px; object-fit: cover; }
-        .simulation-scene-copy { min-width: 0; padding: 15px 16px; }
+        .simulation-scene-copy { min-width: 0; max-height: calc(100vh - 190px); overflow-y: auto; overscroll-behavior: contain; padding: 15px 16px; scrollbar-gutter: stable; }
         .simulation-scene-card.is-complete .simulation-scene-copy { padding: 18px 20px 17px; }
         .simulation-scene-head { justify-content: space-between; gap: 7px; }
         .simulation-scene-head strong { min-width: 0; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
@@ -1044,15 +1050,17 @@
         .simulation-data-item strong { margin-top: 4px; color: var(--text); font: 750 13px/1.1 var(--mono); }
         .simulation-data-item.is-primary { border-color: #cbd8f7; background: #f6f8ff; }
         .simulation-data-item.is-primary strong { color: #315bb8; }
-        .simulation-data-source { margin-top: 9px; color: var(--quiet); font-size: 8px; line-height: 1.45; }
+        .simulation-data-source { margin-top: 9px; padding: 7px 8px; border-left: 3px solid #b9ccf9; border-radius: 0 7px 7px 0; background: #f7f9ff; color: #315bb8; font-size: 9px; font-weight: 650; line-height: 1.5; }
        .simulation-ocr-row { justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #edf0ed; }
-       .simulation-ocr-row span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+       .simulation-ocr-row { align-items: flex-start; }
+       .simulation-ocr-row span { min-width: 0; flex: 1 1 auto; color: var(--muted); font-size: 9px; line-height: 1.4; }
        .simulation-ocr-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
        .simulation-ocr-row button { min-height: 28px; padding: 0 9px; border: 1px solid #cbd8f7; border-radius: 6px; background: #f5f7ff; color: #315bb8; font-size: 9px; font-weight: 700; }
        .simulation-ocr-row button.simulation-ocr-fallback { border-color: #e8d0a5; background: #fff9ee; color: #8b5b20; }
        .simulation-ocr-row button:disabled { cursor: wait; opacity: .55; }
        .simulation-toolbox-action:disabled { cursor: default; opacity: .62; }
-       .simulation-ocr-detail { margin-top: 7px; padding: 7px 8px; border-radius: 7px; background: #f7f9f8; color: var(--muted); font-size: 8px; line-height: 1.45; }
+       .simulation-ocr-detail { margin-top: 7px; padding: 9px 10px; border-left: 3px solid #8fb0f7; border-radius: 7px; background: #f2f6ff; color: #315bb8; font-size: 10px; font-weight: 700; line-height: 1.55; }
+       .simulation-ocr-detail.is-success { border-color: #42a887; background: #eefaf5; color: #16725f; }
        .simulation-reservation-signal { display: grid; gap: 8px; margin: -2px 0 12px; padding: 11px 12px; border: 1px solid #b9ccf9; border-left: 3px solid var(--blue); border-radius: 10px; background: linear-gradient(135deg, #f2f6ff, #fbfdff); box-shadow: 0 7px 17px rgba(74, 125, 240, .1); }
        .simulation-reservation-title { display: flex; align-items: center; gap: 7px; color: #315bb8; font-size: 13px; font-weight: 800; }
        .simulation-reservation-title svg { width: 17px; height: 17px; }
@@ -1112,7 +1120,7 @@
       .simulation-auto-control { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 8px; }
       .simulation-auto-control label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
       .simulation-auto-control input { width: 14px; height: 14px; accent-color: var(--blue); }
-      .simulation-auto-state { color: var(--blue); font-weight: 700; }
+      .simulation-auto-state { color: var(--blue); font-weight: 700; white-space: nowrap; }
 
       .simulation-vehicle-marker,
       .simulation-fallback-marker { display: grid; width: 30px; height: 30px; place-items: center; border: 3px solid #fff; border-radius: 50%; background: var(--blue); box-shadow: 0 4px 14px rgba(22, 29, 30, .35); color: #fff; }
@@ -1124,13 +1132,17 @@
       .simulation-active #expandRoutes,
       .simulation-active .active-route-summary,
       .simulation-active .map-status { display: none !important; }
-      .simulation-active .map-attribution { z-index: 895; }
+      /* The simulation cards already carry their own route/material boundary.
+         Hide the map credit while the toolbox is open so it cannot sit on top
+         of the speed controls at the lower edge of the viewport. */
+      .simulation-active .map-attribution { display: none !important; }
        .simulation-active .ai-composer-dock { opacity: 0; pointer-events: none; }
 
       @media (max-width: 720px) {
-        .simulation-ui { top: 72px; width: min(640px, calc(100vw - 24px)); }
+        .simulation-ui { top: 72px; width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 84px); }
         .simulation-scene-card { grid-template-columns: 42% minmax(0, 1fr); }
         .simulation-scene-media, .simulation-scene-media img { min-height: 190px; }
+        .simulation-scene-card, .simulation-scene-copy { max-height: calc(100vh - 150px); }
         .simulation-scene-copy { padding: 13px; }
         .simulation-scene-card.is-complete .simulation-scene-copy { padding: 15px; }
         .simulation-completion-list { grid-template-columns: 1fr; }
@@ -5248,7 +5260,7 @@
           <div class="simulation-speed-control"><span>行驶倍速</span><div role="group" aria-label="行驶倍速"><button type="button" data-simulation-speed="1">1×</button><button type="button" data-simulation-speed="2">2×</button><button type="button" data-simulation-speed="3">3×</button></div></div>
           <div class="simulation-auto-control"><label><input id="simulationAutoAdvance" type="checkbox" />自动演示</label><span class="simulation-auto-state" id="simulationAutoState">手动推进</span></div>
           <button class="simulation-toolbox-action subtle" id="simulationPauseButton" type="button"><i data-lucide="pause"></i><span>暂停模拟</span></button>
-          <div class="simulation-toolbox-note">默认手动推进，便于看清预约、车牌识别、排队、服务和离场。开启自动演示后，车辆会以较慢速度沿路线移动；车牌识别仍需确认或选择预置样例后继续。</div>
+          <div class="simulation-toolbox-note">自动演示只负责车辆沿路线行驶；进入补能站后会自动暂停。预约、车牌识别、排队、服务和离场都由中央卡片手动推进，方便评委逐步查看。</div>
         </div>
       </aside>
 
