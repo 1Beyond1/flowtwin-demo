@@ -2354,8 +2354,10 @@
   // 时返回空折线：投影到北京→大兴机场的演示折线上，会给任意行程编造出一组
   // 看似合理的沿线里程。空折线会让 routeProgress 归 0、corridorKm 变成无穷，
   // 下游据此判定"无参考路线"，不会当成真实数据展示。
-  function corridorReferenceRoute() {
-    return state.baseRouteRecords.reliable
+  function corridorReferenceRoute(routeKey = "reliable") {
+    return state.baseRouteRecords[routeKey]
+      || state.routeRecords[routeKey]
+      || state.baseRouteRecords.reliable
       || state.routeRecords.reliable
       || { path: state.live ? [] : FALLBACK.routes.reliable };
   }
@@ -2431,9 +2433,13 @@
   // the other branch's fallback must not suppress injection for the active
   // branch.  Derive the flag from the active network instead of trusting the
   // stale value left by the previous branch.
-  function activeProvisionalCorridorActive(pool = state.stations) {
+  function activeProvisionalCorridorActive(routeKey = null, pool = state.stations) {
     return stationsForActiveBranch(Array.isArray(pool) ? pool : [])
-      .some((station) => station && station.provisionalCorridor === true);
+      .some((station) => {
+        if (!station || station.provisionalCorridor !== true) return false;
+        if (!routeKey) return true;
+        return (station.provisionalRouteKey || "reliable") === routeKey;
+      });
   }
 
   function profileForStationType(stationType) {
@@ -3099,6 +3105,24 @@
     return Array.from({ length: count }, (_, index) => pointAtPathProgress(path, index / Math.max(1, count - 1))).filter(Boolean);
   }
 
+  function stationRouteMetrics(station, route) {
+    const path = Array.isArray(route?.path) ? route.path : [];
+    const distance = Math.max(0, Number(route?.distance) || routeDistance(path));
+    if (!path.length) {
+      return { routeProgress: 0, progressKm: 0, corridorKm: Infinity, detourKm: Infinity, detour: "" };
+    }
+    const progress = routeProgress(station.location, path);
+    const corridorKm = nearestPointDistance(station.location, path);
+    const detourKm = Number(Math.max(0.4, corridorKm * 2 + 0.3).toFixed(1));
+    return {
+      routeProgress: Number(progress.toFixed(4)),
+      progressKm: Number((progress * distance).toFixed(1)),
+      corridorKm: Number(corridorKm.toFixed(1)),
+      detourKm,
+      detour: detourKm.toString()
+    };
+  }
+
   async function searchInBatches(tasks, batchSize = 4) {
     const results = [];
     for (let index = 0; index < tasks.length; index += batchSize) {
@@ -3114,21 +3138,58 @@
     state.provisionalCorridorActive = false;
     state.stationForecastScenarioKey = null;
     state.stationForecastRequestVersion += 1;
-    const route = corridorReferenceRoute();
+    const routeContexts = ["reliable", "cheapest"]
+      .map((key) => ({ key, route: corridorReferenceRoute(key) }))
+      .filter(({ route }) => Array.isArray(route?.path) && route.path.length > 1);
+    const primaryDistanceKm = Math.max(0, Number(routeContexts[0]?.route?.distance) || 0);
+    // On short trips the three AMap policies normally share one corridor; do
+    // not spend another POI-search batch just to prove that. Alternate
+    // corridors matter on intercity trips, where the zero-toll route can leave
+    // the motorway entirely.
+    const searchAlternateCorridors = primaryDistanceKm >= 120;
+    const distinctContexts = [];
+    routeContexts.forEach((context) => {
+      if (context.key !== "reliable" && !searchAlternateCorridors) return;
+      const signature = routeDisplayIdentity(context.route);
+      if (!distinctContexts.some((known) => routeDisplayIdentity(known.route) === signature)
+        && !distinctContexts.some((known) => !routeCorridorDiffers(context.route, known.route))) {
+        distinctContexts.push(context);
+      }
+    });
+    const primaryContext = distinctContexts.find((context) => context.key === "reliable")
+      || distinctContexts[0]
+      || { key: "reliable", route: corridorReferenceRoute("reliable") };
+    const route = primaryContext.route;
     const path = route.path;
-    const centers = stationSearchCenters(path, route.distance);
     // A hybrid can refuel or recharge, so both networks are searched and the
     // per-branch filters downstream decide which candidates each plan may use.
     const networks = isHybrid()
       ? [{ keyword: "充电站", type: "electric" }, { keyword: "加油站", type: "fuel" }]
       : [isFuelActive() ? { keyword: "加油站", type: "fuel" } : { keyword: "充电站", type: "electric" }];
-    const stationTasks = centers.flatMap((center) => {
-      const tasks = networks.map((network) => () => searchNearby(network.keyword, center, network.type));
+    const stationTasks = distinctContexts.flatMap((context) => {
+      const allCenters = stationSearchCenters(context.route.path, context.route.distance);
+      const centerCount = context.key === primaryContext.key ? allCenters.length : Math.min(6, allCenters.length);
+      const centers = allCenters.filter((center, index) => {
+        if (centerCount >= allCenters.length) return true;
+        const targetIndex = Math.round(index * (allCenters.length - 1) / Math.max(1, centerCount - 1));
+        return index === targetIndex;
+      });
+      return centers.flatMap((center) => {
+        const tasks = networks.map((network) => async () => ({
+          routeKey: context.key,
+          set: await searchNearby(network.keyword, center, network.type)
+        }));
       // Many cross-province motorway points have no POI explicitly named
       // “充电站”. A real 高德服务区 is a truthful fallback candidate; its
       // availability is explicitly labelled as needing on-site confirmation.
-      if (networks.some((network) => network.type === "electric")) tasks.push(() => searchNearby("服务区", center, "service-area"));
-      return tasks;
+        if (networks.some((network) => network.type === "electric")) {
+          tasks.push(async () => ({
+            routeKey: context.key,
+            set: await searchNearby("服务区", center, "service-area")
+          }));
+        }
+        return tasks;
+      });
     });
     const resultSets = await searchInBatches(stationTasks);
     // Keep a small, even sample from every point along the route rather than
@@ -3136,21 +3197,35 @@
     // matters for cross-province itineraries where the last third otherwise
     // never reaches the long-trip planner.
     const stagedPois = [];
-    resultSets.forEach((set) => dedupePois(set).slice(0, 3).forEach((poi) => stagedPois.push(poi)));
-    const corridorPois = dedupePois(stagedPois).filter((poi) => nearestPointDistance(poi.location, path) < 22);
+    resultSets.forEach((result) => {
+      dedupePois(result?.set || []).slice(0, 3).forEach((poi) => stagedPois.push(poi));
+    });
+    const corridorPois = dedupePois(stagedPois).filter((poi) => distinctContexts.some((context) => (
+      nearestPointDistance(poi.location, context.route.path) < 22
+    )));
+    // Keep a bounded sample from every materially different corridor. Without
+    // this, the reliable route's POIs fill the 36-item cap before the separate
+    // zero-toll route reaches the long-trip planner.
+    const corridorBalanced = distinctContexts.flatMap((context) => {
+      const routePois = corridorPois
+        .filter((poi) => nearestPointDistance(poi.location, context.route.path) < 22)
+        .sort((a, b) => routeProgress(a.location, context.route.path) - routeProgress(b.location, context.route.path));
+      return routePois.slice(0, Math.max(12, Math.ceil(36 / Math.max(1, distinctContexts.length))));
+    });
     // 混动要同时保留油、电两张网。直接截断会让排在后面的那张网被整体切掉，
     // 所以按站点类型交替取样，再统一放宽上限。
-    const selected = takeBalancedByType(dedupePois(corridorPois), isHybrid() ? 48 : 36);
+    const selected = takeBalancedByType(
+      dedupePois(corridorBalanced.concat(corridorPois)),
+      isHybrid() ? 48 : 36
+    );
     state.stations = selected.map((poi, index) => {
       const station = simulateStation(poi, index);
-      const progress = routeProgress(station.location, path);
-      const corridorKm = nearestPointDistance(station.location, path);
-      return Object.assign(station, {
-        routeProgress: Number(progress.toFixed(4)),
-        progressKm: Number((progress * (Number(route.distance) || routeDistance(path))).toFixed(1)),
-        corridorKm: Number(corridorKm.toFixed(1)),
-        detourKm: Number(Math.max(0.4, corridorKm * 2 + 0.3).toFixed(1)),
-        detour: Number(Math.max(0.4, corridorKm * 2 + 0.3).toFixed(1)).toString()
+      const routeMetricsByPolicy = Object.fromEntries(distinctContexts.map((context) => [
+        context.key,
+        stationRouteMetrics(station, context.route)
+      ]));
+      return Object.assign(station, routeMetricsByPolicy[primaryContext.key] || stationRouteMetrics(station, route), {
+        routeMetricsByPolicy
       });
     });
     renderStationSummary();
@@ -3273,11 +3348,12 @@
     }
   }
 
-  function routeStopsWithTripWaypoints(stops = [], includeTripWaypoints = true) {
+  function routeStopsWithTripWaypoints(stops = [], includeTripWaypoints = true, routeKey = "reliable") {
+    const corridor = corridorReferenceRoute(routeKey);
     const baseStops = (Array.isArray(stops) ? stops : []).map((stop, index) => Object.assign({}, stop, {
       routeProgress: Number.isFinite(Number(stop?.routeProgress))
         ? Number(stop.routeProgress)
-        : routeProgress(stop.location, corridorReferenceRoute().path),
+        : routeProgress(stop.location, corridor.path),
       _routeOrder: index
     }));
     if (!includeTripWaypoints || !state.tripWaypoints.length) {
@@ -3286,7 +3362,7 @@
     const waypoints = state.tripWaypoints.map((waypoint, index) => Object.assign({}, waypoint, {
       kind: "waypoint",
       userOrder: Number.isFinite(Number(waypoint.userOrder)) ? Number(waypoint.userOrder) : index,
-      routeProgress: routeProgress(waypoint.location, corridorReferenceRoute().path),
+      routeProgress: routeProgress(waypoint.location, corridor.path),
       _routeOrder: -1000 + index
     }));
     return baseStops.concat(waypoints).sort((a, b) => {
@@ -3319,17 +3395,61 @@
     ].join(";");
   }
 
+  function routeCorridorDiffers(left, right) {
+    if (!left || !right) return false;
+    const leftPath = Array.isArray(left.path) ? left.path : [];
+    const rightPath = Array.isArray(right.path) ? right.path : [];
+    if (leftPath.length < 2 || rightPath.length < 2) {
+      return Math.abs(Number(left.distance || 0) - Number(right.distance || 0)) > 20
+        || Math.abs(Number(left.tolls || 0) - Number(right.tolls || 0)) > 20;
+    }
+    const separation = [0.2, 0.4, 0.6, 0.8].reduce((total, ratio) => {
+      const point = pointAtPathProgress(leftPath, ratio);
+      return total + (point ? nearestPointDistance(point, rightPath) : 0);
+    }, 0) / 4;
+    return separation > 12
+      || Math.abs(Number(left.distance || 0) - Number(right.distance || 0)) > 20
+      || Math.abs(Number(left.tolls || 0) - Number(right.tolls || 0)) > 20;
+  }
+
   // The three objective calculations can legitimately land on the same
   // physical corridor. Keep the full records internally (other parts of the
   // page still use the objective aliases), but use a geometry/stop signature
   // for the cards so we do not present the same trip three times.
+  //
+  // Do not use only three points from routeIdentity here. A highway route and
+  // a no-toll national-road route can share the same origin, destination and
+  // even the same broad midpoint while taking very different corridors. The
+  // old signature also dropped distance, so those genuinely different
+  // choices were incorrectly merged into one visible card.
   function routeDisplayIdentity(record) {
+    const path = Array.isArray(record?.path) ? record.path : [];
+    const ratios = [0, 0.14, 0.28, 0.42, 0.58, 0.72, 0.86, 1];
+    const geometry = path.length
+      ? ratios.map((ratio) => {
+        const point = parseLocation(path[Math.min(path.length - 1, Math.round((path.length - 1) * ratio))]);
+        if (!point) return "";
+        // About 1 km buckets make small AMap ramp/shape differences merge,
+        // while retaining a detour onto a different road corridor.
+        return `${Number(point[0]).toFixed(2)},${Number(point[1]).toFixed(2)}`;
+      }).join("|")
+      : "";
+    const stops = Array.isArray(record?.stops) && record.stops.length
+      ? record.stops
+      : Array.isArray(record?.waypoints) && record.waypoints.length
+        ? record.waypoints
+        : record?.station ? [record.station] : [];
+    const stopIdentity = stops.map((stop) => {
+      if (stop?.id) return String(stop.id);
+      const point = parseLocation(stop?.location);
+      return point ? `${Number(point[0]).toFixed(2)},${Number(point[1]).toFixed(2)}` : "";
+    }).join(",");
+    if (geometry) {
+      // Keep distance in the signature, but not duration/tolls: the latter
+      // can change between AMap objective policies on the same physical road.
+      return `${Math.round(Number(record?.distance || 0))};${geometry};${stopIdentity}`;
+    }
     const identity = String(record?.routeIdentity || "");
-    const parts = identity.split(";");
-    // routeIdentity is distance;duration;tolls;sample;stops. Duration and
-    // tolls can differ between AMap policies even when the road corridor is
-    // identical, so they are intentionally omitted for display grouping.
-    if (parts.length >= 5) return `${parts[3]};${parts.slice(4).join(";")}`;
     return identity || `key:${record?.key || "unknown"}`;
   }
 
@@ -3361,7 +3481,7 @@
   }
 
   async function queryRouteSequence(key, stops, options = {}) {
-    const routeStops = routeStopsWithTripWaypoints(stops, options.includeTripWaypoints !== false);
+    const routeStops = routeStopsWithTripWaypoints(stops, options.includeTripWaypoints !== false, key);
     const locations = [state.origin].concat(routeStops.map((station) => station.location), [state.destination]);
     // Keep a small amount of concurrency instead of sending every long-trip
     // leg at once. This avoids transient route-service throttling while still
@@ -3434,10 +3554,13 @@
   // model inputs only. In particular, do not drop progressKm/routeProgress or
   // provisionalCorridor: the former orders the sequence and the latter keeps
   // the explicit fallback boundary intact when the route is revalidated.
-  function compactLongTripStation(station = {}) {
+  function compactLongTripStation(station = {}, routeKey = null) {
     const snapshot = station.forecastInputSnapshot && typeof station.forecastInputSnapshot === "object"
       ? station.forecastInputSnapshot
       : {};
+    const routeMetrics = routeKey && station.routeMetricsByPolicy && typeof station.routeMetricsByPolicy === "object"
+      ? station.routeMetricsByPolicy[routeKey]
+      : null;
     const fields = [
       "id", "name", "type", "location", "address", "source", "sourceLabel", "stationSource",
       "progressKm", "routeProgress", "detourKm", "detour", "price", "wait", "p50", "p90",
@@ -3451,7 +3574,12 @@
     ];
     const compact = {};
     fields.forEach((key) => {
-      const value = station[key] === undefined || station[key] === null
+      const routeValue = routeMetrics && ["progressKm", "routeProgress", "detourKm", "detour"].includes(key)
+        ? routeMetrics[key]
+        : undefined;
+      const value = routeValue !== undefined
+        ? routeValue
+        : station[key] === undefined || station[key] === null
         ? snapshot[key]
         : station[key];
       if (value === undefined || value === null) return;
@@ -3625,6 +3753,11 @@
     return Object.assign({}, route, {
       key,
       candidateKey: key,
+      // Preserve which corridor pass produced this verified record. The
+      // final objective reconciliation may otherwise choose the cheapest
+      // metric from the reliable pass and erase a genuinely different
+      // no-highway option.
+      planningRole: key,
       station: stops[0] || null,
       stops,
       stopCount: stops.length,
@@ -3671,8 +3804,11 @@
     });
   }
 
-  async function requestLongTripPlans() {
-    const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
+  async function requestLongTripPlans(routeKey = "reliable") {
+    const base = state.baseRouteRecords[routeKey]
+      || state.routeRecords[routeKey]
+      || state.baseRouteRecords.reliable
+      || state.routeRecords.reliable;
     if (!base || !Number.isFinite(Number(base.distance))) return null;
     const stopBudget = longTripStopBudget(base);
     // Do not wait for the combinatorial planner to discover that a low-SOC
@@ -3680,27 +3816,31 @@
     // labelled corridor anchor before the request, so 5% starts can still
     // express a safe “nearest first stop” plan instead of spending the whole
     // search budget on unreachable combinations.
-    if (!activeProvisionalCorridorActive() && state.energyPercent < 100) {
+    if (!activeProvisionalCorridorActive(routeKey) && state.energyPercent < 100) {
       const profile = getEnergyProfile(isFuelActive());
       const safetyEnergy = profile.capacity * profile.safetyReservePercent / 100;
       const initialSafeRange = Math.max(0, profile.capacity * state.energyPercent / 100 - safetyEnergy) / profile.consumptionPerKm;
       const hasSafeFirstCandidate = stationsForActiveBranch(state.stations).some((station) => {
-        const progressKm = Number(station.progressKm);
-        const detourKm = Math.max(0, Number(station.detourKm ?? station.detour ?? 0));
+        const routeMetrics = station.routeMetricsByPolicy?.[routeKey] || station;
+        const progressKm = Number(routeMetrics.progressKm);
+        const detourKm = Math.max(0, Number(routeMetrics.detourKm ?? routeMetrics.detour ?? 0));
         return Number.isFinite(progressKm) && progressKm > 1 && progressKm + detourKm / 2 <= initialSafeRange + 1e-6;
       });
       if (Number(base.distance) > initialSafeRange + 1e-6 && !hasSafeFirstCandidate) {
-        injectProvisionalCorridorStations();
+        injectProvisionalCorridorStations(routeKey);
       }
     }
     await ensureStationForecasts(base);
     // Once route verification has proved that public POI coverage is too sparse,
     // plan only with the explicit corridor anchors. Mixing the original sparse
     // POIs back in can repeatedly select an unverified urban station instead.
-    const activeBranchStations = stationsForActiveBranch(state.stations);
-    const activeCorridorStations = activeBranchStations.filter((station) => station.provisionalCorridor === true);
+    const activeBranchStations = stationsForActiveBranch(state.stations)
+      .filter((station) => !station.provisionalCorridor
+        || (station.provisionalRouteKey || "reliable") === routeKey);
+    const activeCorridorStations = activeBranchStations.filter((station) => station.provisionalCorridor === true
+      && (station.provisionalRouteKey || "reliable") === routeKey);
     const planningStations = (activeCorridorStations.length ? activeCorridorStations : activeBranchStations)
-      .map(compactLongTripStation);
+      .map((station) => compactLongTripStation(station, routeKey));
     try {
       const proposal = await postJson("/api/longtrip", {
         distanceKm: base.distance,
@@ -3742,13 +3882,18 @@
     }
   }
 
-  function injectProvisionalCorridorStations() {
-    const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
+  function injectProvisionalCorridorStations(routeKey = "reliable") {
+    const base = state.baseRouteRecords[routeKey]
+      || state.routeRecords[routeKey]
+      || state.baseRouteRecords.reliable
+      || state.routeRecords.reliable;
     // 兜底候选是按能源网络生成的。混动切换分支后，另一条网络还没有兜底点，
     // 这里必须按当前分支判断是否已注入，否则燃油分支会拿到 0 个可用候选。
     const branchStationType = activeStationType();
     if (!base?.path?.length || !Number.isFinite(Number(base.distance))
-      || state.stations.some((station) => station.provisionalCorridor && station.type === branchStationType)) return 0;
+      || state.stations.some((station) => station.provisionalCorridor
+        && (station.provisionalRouteKey || "reliable") === routeKey
+        && station.type === branchStationType)) return 0;
     const profile = getEnergyProfile(isFuelActive());
     const totalDistanceKm = Number(base.distance);
     const targetEnergy = profile.capacity * effectiveArrivalReserveSoc(profile) / 100;
@@ -3778,7 +3923,13 @@
       if (!location || progressKm <= previousProgress + 5) break;
       const sequence = generated.length + 1;
       const candidate = simulateStation({
-        id: `provisional-${activeEnergyKind()}-${Math.round(progressKm)}-${sequence}`,
+        // The same physical progress can need two labelled fallback anchors:
+        // one for the motorway/reliable corridor and one for the no-toll cheap
+        // corridor. Their coordinates are different, so their identities must
+        // be different too; otherwise state.stations.find(id) silently returns
+        // the first branch's anchor and the cheap plan is validated on the
+        // wrong corridor.
+        id: `provisional-${routeKey}-${activeEnergyKind()}-${Math.round(progressKm)}-${sequence}`,
         name: `沿线补能候选点 ${sequence}`,
         address: "路线补能兜底候选 · 请在出发前确认现场设备",
         location,
@@ -3787,6 +3938,7 @@
       }, 900 + sequence);
       generated.push(Object.assign(candidate, {
         provisionalCorridor: true,
+        provisionalRouteKey: routeKey,
         routeProgress: Number((progressKm / totalDistanceKm).toFixed(4)),
         progressKm: Number(progressKm.toFixed(1)),
         corridorKm: 0,
@@ -3824,6 +3976,25 @@
     };
   }
 
+  function buildProvisionalCorridorPlan(baseRoute, stops) {
+    const orderedStops = (Array.isArray(stops) ? stops : [])
+      .slice()
+      .sort((a, b) => Number(a?.progressKm || 0) - Number(b?.progressKm || 0));
+    if (!baseRoute?.path?.length || !orderedStops.length) return null;
+    let previousProgress = 0;
+    let previousDetour = 0;
+    const legs = orderedStops.map((stop) => {
+      const progress = Math.max(previousProgress, Number(stop.progressKm) || 0);
+      const detour = Math.max(0, Number(stop.detourKm ?? stop.detour ?? 0));
+      const leg = Math.max(0, progress - previousProgress + previousDetour / 2 + detour / 2);
+      previousProgress = progress;
+      previousDetour = detour;
+      return Number(leg.toFixed(1));
+    });
+    legs.push(Number(Math.max(0, Number(baseRoute.distance || 0) - previousProgress + previousDetour / 2).toFixed(1)));
+    return { stops: orderedStops, stopCount: orderedStops.length, legs };
+  }
+
   // The backend selects objective roles from corridor estimates.  Long-trip
   // verification then replaces that estimate with real AMap leg durations, and
   // adding a service stop can change one role again.  Reconcile the aliases
@@ -3845,11 +4016,11 @@
         && Number(left.duration || 0) === Number(right.duration || 0)
         && (left.stops || []).map((stop) => stop.id).join("|") === (right.stops || []).map((stop) => stop.id).join("|"))
     ));
-    const fastest = candidates.slice().sort((a, b) =>
+    const metricFastest = candidates.slice().sort((a, b) =>
       metric(a, "total", a.arrival) - metric(b, "total", b.arrival)
       || metric(a, "p50Wait", a.wait) - metric(b, "p50Wait", b.wait)
       || metric(a, "cost") - metric(b, "cost"))[0];
-    const reliable = candidates.slice().sort((a, b) =>
+    const metricReliable = candidates.slice().sort((a, b) =>
       metric(a, "p90Total", a.total ?? a.arrival) - metric(b, "p90Total", b.total ?? b.arrival)
       || metric(b, "arrivalSoc") - metric(a, "arrivalSoc")
       || metric(a, "total", a.arrival) - metric(b, "total", b.arrival)
@@ -3858,9 +4029,22 @@
       metric(a, "cost") - metric(b, "cost")
       || metric(a, "total", a.arrival) - metric(b, "total", b.arrival)
       || metric(a, "p90Total", a.total ?? a.arrival) - metric(b, "p90Total", b.total ?? b.arrival))[0];
+    // A validated record tagged with `planningRole=cheapest` came from the
+    // dedicated zero-toll/low-cost corridor pass. Prefer that record over a
+    // merely cheaper metric winner from the reliable-corridor pool; otherwise
+    // the second pass can be silently collapsed back into the first route.
+    // Keep an objective's own verified corridor when one exists. The metric
+    // winner is still used as a fallback when a provider did not return a
+    // dedicated policy result, but it must not replace the reliable corridor
+    // with a materially different zero-toll corridor merely because the latter
+    // happens to have a lower simulated P90. Otherwise the UI shows the cheap
+    // national-road route twice and loses the real three-policy comparison.
+    const fastest = candidates.find((record) => record?.planningRole === "fastest") || metricFastest;
+    const reliable = candidates.find((record) => record?.planningRole === "reliable") || metricReliable;
+    const cheapestRecord = candidates.find((record) => record?.planningRole === "cheapest") || cheapest;
     const fastestIsStable = sameRoute(fastest, reliable);
-    const fastestIsCheap = sameRoute(fastest, cheapest);
-    const stableIsCheap = sameRoute(reliable, cheapest);
+    const fastestIsCheap = sameRoute(fastest, cheapestRecord);
+    const stableIsCheap = sameRoute(reliable, cheapestRecord);
     const isLongTrip = candidates.some((record) => record.multiStop || record.provisionalCorridorRoute);
     const names = isLongTrip
       ? { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }
@@ -3874,21 +4058,28 @@
       : ["time", "fastest"].includes(state.priority)
         ? "fastest"
         : "reliable";
-    const aliases = { fastest, reliable, cheapest };
+    // Keep a materially different validated corridor attached to its policy.
+    // Pure metric reconciliation can otherwise select the low-wait fallback
+    // for every alias and hide the genuine cheapest route from the cards.
+    const aliases = {
+      fastest,
+      reliable,
+      cheapest: cheapestRecord
+    };
     return Object.fromEntries(Object.entries(aliases).map(([role, source]) => [role, Object.assign({}, source, {
       key: role,
       candidateKey: source.candidateKey || role,
       displayName: names[role],
       isActualFastest: sameRoute(source, fastest),
       isActualStable: sameRoute(source, reliable),
-      isActualCheapest: sameRoute(source, cheapest),
+      isActualCheapest: sameRoute(source, cheapestRecord),
       stableCollision: fastestIsStable,
       costBackup: fastestIsCheap || stableIsCheap,
       recommended: role === preferredRole,
       objectiveBadges: [
         sameRoute(source, fastest) ? "最快" : null,
         sameRoute(source, reliable) ? "最稳妥" : null,
-        sameRoute(source, cheapest) ? "最低成本" : null
+        sameRoute(source, cheapestRecord) ? "最低成本" : null
       ].filter(Boolean)
     })]));
   }
@@ -3904,6 +4095,37 @@
     if (proposal?.reason === "PLANNER_UNAVAILABLE") {
       await new Promise((resolve) => window.setTimeout(resolve, 250));
       proposal = await requestLongTripPlans();
+    }
+
+    // The base route API can return a materially different zero-toll corridor.
+    // The original long-trip request was always seeded from the reliable
+    // corridor, so its station pool and objective search could never discover
+    // that alternative. Run the cheap objective once on its own corridor and
+    // merge only its candidate plans; this keeps the three policy calculations
+    // honest without showing the same physical trip three times.
+    let cheapestProposal = null;
+    const reliableBase = state.baseRouteRecords.reliable || state.routeRecords.reliable;
+    const cheapestBase = state.baseRouteRecords.cheapest || state.routeRecords.cheapest;
+    const materiallyDifferentCheapRoute = reliableBase && cheapestBase
+      && (Math.abs(Number(reliableBase.distance || 0) - Number(cheapestBase.distance || 0)) > 20
+        || Math.abs(Number(reliableBase.tolls || 0) - Number(cheapestBase.tolls || 0)) > 20
+        || routeDisplayIdentity(reliableBase) !== routeDisplayIdentity(cheapestBase));
+    if (materiallyDifferentCheapRoute) {
+      cheapestProposal = await requestLongTripPlans("cheapest");
+      if (cheapestProposal?.reason === "PLANNER_UNAVAILABLE") {
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+        cheapestProposal = await requestLongTripPlans("cheapest");
+      }
+      const cheapPlans = Array.isArray(cheapestProposal?.plans)
+        ? cheapestProposal.plans.filter((plan) => Number(plan.stopCount || 0) >= 1)
+        : [];
+      if (!cheapPlans.length && !activeProvisionalCorridorActive("cheapest")
+        && injectProvisionalCorridorStations("cheapest")) {
+        // A zero-toll corridor often has fewer indexed charging POIs than the
+        // motorway corridor. Use explicit, labelled geometry anchors only as a
+        // planning fallback, then run the same validator again.
+        cheapestProposal = await requestLongTripPlans("cheapest");
+      }
     }
     // AMap can return no publicly indexed charger for a long motorway section.
     // Rather than declare that six charges cannot cover the distance, introduce
@@ -3924,8 +4146,16 @@
     // when the destination is already reachable. Do not discard that direct
     // result and then manufacture a 0 kWh station visit from an overflow
     // candidate; let the normal direct-route branch render “无需补能”.
-    if (Array.isArray(proposal?.plans) && proposal.plans.some((plan) => Number(plan.stopCount || 0) === 0)) return false;
-    const plans = Array.isArray(proposal?.plans) ? proposal.plans.filter((plan) => Number(plan.stopCount || 0) >= 1) : [];
+    const proposalPlans = [
+      ...(Array.isArray(proposal?.plans) ? proposal.plans : []),
+      ...(Array.isArray(cheapestProposal?.plans) ? cheapestProposal.plans : [])
+    ];
+    // A direct zero-stop result from the primary (reliable) corridor means the
+    // normal direct-trip branch should render it. Do not let an optional cheap
+    // corridor's own direct candidate discard a valid long-trip proposal.
+    if (Array.isArray(proposal?.plans)
+      && proposal.plans.some((plan) => Number(plan.stopCount || 0) === 0)) return false;
+    const plans = proposalPlans.filter((plan) => Number(plan.stopCount || 0) >= 1);
     if (!plans.length) {
       if (proposal?.reason) {
         state.multiStopPlanningMeta = {
@@ -3959,7 +4189,25 @@
       return false;
     }
     const roles = ["fastest", "reliable", "cheapest"];
-    const plansByObjective = proposal?.plansByObjective && typeof proposal.plansByObjective === "object" ? proposal.plansByObjective : {};
+    const plansByObjective = Object.assign(
+      {},
+      proposal?.plansByObjective && typeof proposal.plansByObjective === "object" ? proposal.plansByObjective : {},
+      cheapestProposal?.plansByObjective && typeof cheapestProposal.plansByObjective === "object"
+        ? { cheapest: cheapestProposal.plansByObjective.cheapest }
+        : {}
+    );
+    // Keep candidate plans tied to the corridor that produced them. The cheap
+    // objective is requested a second time when AMap returned a materially
+    // different no-toll route. Mixing both responses into one fallback pool
+    // lets the reliable pass validate a cheap-corridor sequence against the
+    // motorway base, then alias reliable and cheapest to the same physical
+    // record. That is precisely how the third card disappeared.
+    const primaryPlans = (Array.isArray(proposal?.plans) ? proposal.plans : [])
+      .filter((plan) => Number(plan.stopCount || 0) >= 1);
+    const cheapPlans = (materiallyDifferentCheapRoute && Array.isArray(cheapestProposal?.plans)
+      ? cheapestProposal.plans
+      : [])
+      .filter((plan) => Number(plan.stopCount || 0) >= 1);
     const validated = {};
     const routedBackup = {};
     for (let index = 0; index < roles.length; index += 1) {
@@ -3968,20 +4216,40 @@
       // A station sequence that works on a corridor approximation may fail on
       // a particular road policy, so try the objective's plan first and then
       // safe alternatives instead of declaring the whole trip impossible.
+      const rolePlans = role === "cheapest" && materiallyDifferentCheapRoute && cheapPlans.length
+        ? cheapPlans
+        : primaryPlans;
       const candidates = [
-        plansByObjective[role],
-        plans.find((candidate) => candidate.objective === role),
-        plans[index],
-        ...plans,
-        ...Object.values(plansByObjective)
+        rolePlans.find((candidate) => candidate.objective === role),
+        // Only use the primary corridor's objective map for the primary pass.
+        // When the cheap corridor has its own proposal, its station IDs and
+        // progress metrics must not be mixed with the reliable corridor here.
+        ...(role === "cheapest" && materiallyDifferentCheapRoute && cheapPlans.length
+          ? []
+          : [plansByObjective[role]]),
+        rolePlans[index],
+        ...rolePlans
       ].filter(Boolean);
       const seen = new Set();
       for (const plan of candidates) {
         const signature = (plan.stops || []).map((stop) => stop.id).join("|") || "direct";
         if (seen.has(signature)) continue;
         seen.add(signature);
-        const stops = (plan.stops || []).map((stop) => state.stations.find((station) => String(station.id) === String(stop.id))).filter(Boolean);
+        const stops = (plan.stops || []).map((stop) => {
+          const station = state.stations.find((candidate) => String(candidate.id) === String(stop.id));
+          const metrics = station?.routeMetricsByPolicy?.[role];
+          return station && metrics
+            ? Object.assign({}, station, metrics)
+            : station;
+        }).filter(Boolean);
         if (stops.length !== plan.stopCount) continue;
+        // A plan returned from the other corridor is not a valid candidate for
+        // this role. In particular, a reliable-corridor request can see cheap
+        // anchors already present in the shared station pool; accepting those
+        // IDs here makes the reliable alias silently become the cheap route.
+        if (materiallyDifferentCheapRoute && role !== "cheapest"
+          && stops.some((station) => station.provisionalCorridor
+            && (station.provisionalRouteKey || "reliable") !== role)) continue;
         const base = state.baseRouteRecords[role] || state.baseRouteRecords.reliable;
         // A generated corridor anchor can lie on a motorway centre line and
         // therefore cannot always be used as a road-routing endpoint. Its
@@ -3989,8 +4257,11 @@
         // route, but it is explicitly marked as a provisional stop rather
         // than being presented as a real charging facility.
         const energyWaypoints = stops.map((station) => Object.assign({}, station, { kind: "energy" }));
-        const routeStops = routeStopsWithTripWaypoints(energyWaypoints, true);
-        const route = activeProvisionalCorridorActive() && !state.tripWaypoints.length && stops.every((station) => station.provisionalCorridor)
+        const routeStops = routeStopsWithTripWaypoints(energyWaypoints, true, role);
+        const route = activeProvisionalCorridorActive(role) && !state.tripWaypoints.length && stops.every((station) => (
+          station.provisionalCorridor
+          && (station.provisionalRouteKey || "reliable") === role
+        ))
           ? buildProvisionalCorridorRoute(role, base, plan, stops)
           : await queryRouteSequence(role, routeStops, { includeTripWaypoints: false });
         const record = route && buildValidatedLongTripRecord(role, base, route, routeStops);
@@ -3999,6 +4270,54 @@
           validated[role] = record;
           break;
         }
+      }
+    }
+    // If the primary proposal only supplied a cheap-corridor sequence for the
+    // reliable role, rebuild a labelled reliable-corridor sequence instead of
+    // allowing objective reconciliation to rename the cheap route as both
+    // “最稳妥” and “最低成本”. This uses the same provisional-anchor fallback
+    // and the same energy/detour validator; it does not invent a real station.
+    if (materiallyDifferentCheapRoute && (!validated.reliable || validated.reliable.planningRole !== "reliable")) {
+      if (!activeProvisionalCorridorActive("reliable")) injectProvisionalCorridorStations("reliable");
+      const reliableAnchors = state.stations
+        .filter((station) => station.provisionalCorridor === true
+          && (station.provisionalRouteKey || "reliable") === "reliable"
+          && station.type === activeStationType())
+        .sort((a, b) => Number(a.progressKm || 0) - Number(b.progressKm || 0));
+      const reliablePlan = buildProvisionalCorridorPlan(reliableBase, reliableAnchors);
+      if (reliablePlan) {
+        const reliableStops = routeStopsWithTripWaypoints(
+          reliablePlan.stops.map((station) => Object.assign({}, station, { kind: "energy" })),
+          false,
+          "reliable"
+        );
+        const reliableRoute = buildProvisionalCorridorRoute("reliable", reliableBase, reliablePlan, reliableStops);
+        const reliableRecord = reliableRoute && buildValidatedLongTripRecord("reliable", reliableBase, reliableRoute, reliableStops);
+        if (reliableRecord?.feasible) validated.reliable = reliableRecord;
+      }
+    }
+    if (materiallyDifferentCheapRoute && !validated.cheapest) {
+      // A cheap-corridor request can return a public POI sequence that is
+      // rejected by the final leg-by-leg check. Do not then fall back to the
+      // reliable corridor and silently lose the no-highway option: validate
+      // the explicitly labelled cheap-corridor anchors as the same bounded
+      // planning fallback used by the reliable branch.
+      if (!activeProvisionalCorridorActive("cheapest")) injectProvisionalCorridorStations("cheapest");
+      const cheapAnchors = state.stations
+        .filter((station) => station.provisionalCorridor === true
+          && (station.provisionalRouteKey || "reliable") === "cheapest"
+          && station.type === activeStationType())
+        .sort((a, b) => Number(a.progressKm || 0) - Number(b.progressKm || 0));
+      const cheapPlan = buildProvisionalCorridorPlan(cheapestBase, cheapAnchors);
+      if (cheapPlan) {
+        const cheapStops = routeStopsWithTripWaypoints(
+          cheapPlan.stops.map((station) => Object.assign({}, station, { kind: "energy" })),
+          false,
+          "cheapest"
+        );
+        const cheapRoute = buildProvisionalCorridorRoute("cheapest", cheapestBase, cheapPlan, cheapStops);
+        const cheapRecord = cheapRoute && buildValidatedLongTripRecord("cheapest", cheapestBase, cheapRoute, cheapStops);
+        if (cheapRecord?.feasible) validated.cheapest = cheapRecord;
       }
     }
     const available = Object.values(validated).filter((record) => record.feasible);
