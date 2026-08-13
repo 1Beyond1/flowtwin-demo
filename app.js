@@ -5069,20 +5069,10 @@
         ? '<i data-lucide="loader-circle"></i><span>预约处理中…</span>'
         : '<i data-lucide="skip-forward"></i><span>跳过本次充能演示</span>';
     }
-    const toolbox = byId("simulationToolbox");
-    const toolboxToggle = byId("simulationToolboxToggle");
-    if (toolbox && (isSimulationStationPhase(phase) || phase?.type === "arrived")) {
-      // The central card owns the station workflow. Collapse the secondary
-      // toolbox while it is visible so the evaluator can always reach OCR and
-      // the next-stage action without a floating panel intercepting clicks.
-      toolbox.setAttribute("aria-expanded", "false");
-      toolboxToggle?.setAttribute("aria-expanded", "false");
-    } else if (toolbox && phase?.type === "drive") {
-      // Driving stages return control to the toolbox. Re-open it after a
-      // station card so “行驶至下一节点” is discoverable without a second click.
-      toolbox.setAttribute("aria-expanded", "true");
-      toolboxToggle?.setAttribute("aria-expanded", "true");
-    }
+    // Keep the toolbox discoverable throughout the walkthrough. It starts
+    // expanded when simulation begins and only changes state when the user
+    // explicitly clicks its toggle; station-phase rendering must not hide the
+    // controls before the evaluator has a chance to see them.
     const destination = byId("simulationDestination");
     if (destination) destination.textContent = state.destinationName || "目的地";
     const navMeta = byId("simulationNavMeta");
