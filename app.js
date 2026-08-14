@@ -262,6 +262,7 @@
       reservationStopKey: null,
       reservationEvidenceOpen: false,
       skippedStopIndexes: new Set(),
+      paymentNotifiedFor: null,
       ocrHealth: null
     }
   };
@@ -5614,6 +5615,13 @@
       revealSimulationStationPanel();
     }
     renderSimulationPhase(phase);
+    if (phase.type === "payment") {
+      const paymentKey = `${phase.stopIndex ?? index}:${phase.stop?.id || ""}`;
+      if (simulation.paymentNotifiedFor !== paymentKey) {
+        simulation.paymentNotifiedFor = paymentKey;
+        showToast("已扣款成功 · 电子收据已生成（演示）", 4200);
+      }
+    }
     updateSimulationMarker();
     if (simulation.autoAdvance && phase.type === "drive" && !simulation.paused && !simulation.rafId) {
       simulation.lastFrameAt = performance.now();
@@ -5862,6 +5870,7 @@
     simulation.reservationAfterSnapshot = null;
     simulation.reservationStopKey = null;
     simulation.reservationEvidenceOpen = false;
+    simulation.paymentNotifiedFor = null;
     simulation.ocrHealth = null;
     simulation.reservedStops = new Set();
     simulation.skippedStopIndexes = new Set();
@@ -6412,7 +6421,7 @@
       createdAt: Date.now()
     };
     syncArrivalPayment();
-    showToast(`车牌 ${state.vehiclePlate} 已在 ${target.station.name} 完成识别，实付 ¥${breakdown.paid.toFixed(1)}`, 4200);
+    showToast(`已扣款成功 · 实付 ¥${breakdown.paid.toFixed(1)} · 电子收据已生成`, 4200);
     refreshIcons();
   }
 
