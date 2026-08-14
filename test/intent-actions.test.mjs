@@ -41,6 +41,13 @@ test("new trips emit NEW_TRIP and do not inherit a stale destination", async () 
   assert.deepEqual(result.actions, [{ type: "NEW_TRIP", origin: "北京", destination: "南京" }]);
 });
 
+test("speech punctuation between a destination cue and place name is tolerated", async () => {
+  const result = await parseLocal("我想去。南京大学。");
+  assert.equal(result.requestMode, "new_trip");
+  assert.equal(result.destination, "南京大学");
+  assert.deepEqual(result.actions, [{ type: "NEW_TRIP", destination: "南京大学" }]);
+});
+
 test("supplement actions preserve concrete service names and waypoint locations", async () => {
   const service = await parseLocal("中途想去吃麦当劳", currentTrip);
   assert.equal(service.requestMode, "supplement");

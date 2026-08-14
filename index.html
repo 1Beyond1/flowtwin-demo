@@ -3797,7 +3797,7 @@
           bottom: 14px;
           left: 14px;
           max-height: 270px;
-          overflow: hidden;
+          overflow-y: auto;
           background: var(--surface-solid);
           padding: 14px;
         }
@@ -5205,8 +5205,12 @@
            right: calc(24px + 380px + 16px);
            bottom: 18px;
            left: calc(24px + 354px + 16px);
-           max-height: min(270px, 29dvh);
-           overflow: hidden;
+           /* The simulation CTA is a sibling of the route card, not part of
+              the card's intrinsic height. A fixed 270px box clipped it on
+              lower-height desktop windows. Let the sheet grow with the
+              comparison row so the CTA remains fully clickable. */
+           max-height: none;
+           overflow: visible;
            padding: 12px 14px 13px;
          }
 
@@ -5225,8 +5229,8 @@
           route sheet still spans the map but should not become a second panel. */
        @media (min-width: 761px) and (max-width: 1439px) {
          .route-sheet {
-           max-height: min(270px, 30dvh);
-           overflow-y: auto;
+           max-height: none;
+           overflow: visible;
          }
        }
 

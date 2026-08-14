@@ -849,7 +849,9 @@
         return;
       }
       if (!response.ok) throw new Error(payload.error || `HTTP_${response.status}`);
-      const text = String(payload.text || payload.transcript || payload.result || "").trim();
+      const text = String(payload.text || payload.transcript || payload.result || "")
+        .replace(/((?:前往|去|抵达|目的地(?:是)?|到(?!达)|导航(?:到|去)))\s*[。！？!?]+\s*/g, "$1 ")
+        .trim();
       if (!text) {
         setAiStatus("未识别到语音", "unresolved");
         showToast("未识别到有效文本，请重试", 2800);
@@ -1092,7 +1094,11 @@
   }
 
   function extractDestinationFromInput(value) {
-    const text = String(value || "").trim();
+    // ASR may split “我想去南京大学” into “我想去。南京大学。”;
+    // normalize that boundary before extracting the place name.
+    const text = String(value || "")
+      .replace(/((?:前往|去|抵达|目的地(?:是)?|到(?!达)|导航(?:到|去)))\s*[。！？!?]+\s*/g, "$1 ")
+      .trim();
     const directMatches = Array.from(text.matchAll(/(?:前往|去|抵达|目的地(?:是)?|到(?!达))\s*([^，,。；;\n]{2,40})/g));
     const direct = String(directMatches.at(-1)?.[1] || "").trim().replace(/(?:然后|并且|最好).*$/, "");
     // A follow-up such as “中途想去吃麦当劳” contains “去”, but the
@@ -3030,21 +3036,33 @@
           ? "service"
           : typeof serviceIntent.serviceSearchType === "function" ? serviceIntent.serviceSearchType(type) : null;
     if (location && serverType) {
-      try {
-        const query = { location, type: serverType };
-        // For a concrete request, send the same brand/keyword to the server
-        // side AMap search.  The web-service key stays private, while the
-        // browser no longer has to broaden “麦当劳” into an arbitrary餐厅.
-        if (["meal", "coffee", "rest"].includes(serverType) && keyword) query.keyword = keyword;
-        const response = await fetch(`/api/poi?${new URLSearchParams(query)}`, { headers: { Accept: "application/json" } });
-        if (response.ok) {
-          const payload = await response.json();
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const query = { location, type: serverType };
+          // For a concrete request, send the same brand/keyword to the server
+          // side AMap search. The web-service key stays private, while the
+          // browser no longer has to broaden “麦当劳” into an arbitrary餐厅.
+          if (["meal", "coffee", "rest"].includes(serverType) && keyword) query.keyword = keyword;
+          const response = await fetch(`/api/poi?${new URLSearchParams(query)}`, { headers: { Accept: "application/json" } });
+          const payload = response.ok ? await response.json().catch(() => ({})) : {};
           const pois = Array.isArray(payload.pois) ? payload.pois : [];
           if (pois.length) return pois.map((poi, index) => normalizePoi(poi, index, type)).filter(Boolean);
+
+          // AMap may answer with 10021 (CUQPS) while the HTTP request itself
+          // is still 200 because POI enrichment is optional. Retry only this
+          // transient class so later corridor samples are not lost.
+          const infocode = String(payload.infocode || "");
+          const warning = String(payload.warning || "");
+          const retryable = response.status === 429
+            || ["10021", "10022", "10023", "10024"].includes(infocode)
+            || /QPS|频率|rate.?limit|too many/i.test(warning);
+          if (!retryable || attempt >= 2) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 420 * (attempt + 1)));
+        } catch {
+          // Fall through to the JS map SDK. A failed POI lookup must not turn a
+          // valid map/routing session into a fake result.
+          break;
         }
-      } catch {
-        // Fall through to the JS map SDK. A failed POI lookup must not turn a
-        // valid map/routing session into a fake result.
       }
     }
     return new Promise((resolve) => {
@@ -3123,12 +3141,18 @@
     };
   }
 
-  async function searchInBatches(tasks, batchSize = 4) {
+  async function searchInBatches(tasks, batchSize = 1, gapMs = 220) {
     const results = [];
     for (let index = 0; index < tasks.length; index += batchSize) {
       const batch = tasks.slice(index, index + batchSize);
       const settled = await Promise.all(batch.map((task) => task()));
       results.push(...settled);
+      // The AMap Web Service quota is per-second. Keep corridor searches
+      // serial with a short gap so a long trip cannot lose its later samples
+      // to a CUQPS response.
+      if (index + batchSize < tasks.length && gapMs > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, gapMs));
+      }
     }
     return results;
   }
@@ -3174,22 +3198,20 @@
         const targetIndex = Math.round(index * (allCenters.length - 1) / Math.max(1, centerCount - 1));
         return index === targetIndex;
       });
-      return centers.flatMap((center) => {
-        const tasks = networks.map((network) => async () => ({
-          routeKey: context.key,
-          set: await searchNearby(network.keyword, center, network.type)
-        }));
-      // Many cross-province motorway points have no POI explicitly named
-      // “充电站”. A real 高德服务区 is a truthful fallback candidate; its
-      // availability is explicitly labelled as needing on-site confirmation.
-        if (networks.some((network) => network.type === "electric")) {
-          tasks.push(async () => ({
+      return centers.flatMap((center) => networks.map((network) => async () => {
+        const set = await searchNearby(network.keyword, center, network.type);
+        // Many cross-province motorway points have no POI explicitly named
+        // “充电站”. Only then issue the service-area fallback; scheduling it
+        // unconditionally doubled every long-trip POI request and caused
+        // later corridor samples to hit AMap's CUQPS limit.
+        if (network.type === "electric" && !set.length) {
+          return {
             routeKey: context.key,
             set: await searchNearby("服务区", center, "service-area")
-          }));
+          };
         }
-        return tasks;
-      });
+        return { routeKey: context.key, set };
+      }));
     });
     const resultSets = await searchInBatches(stationTasks);
     // Keep a small, even sample from every point along the route rather than

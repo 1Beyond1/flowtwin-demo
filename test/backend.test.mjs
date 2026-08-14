@@ -590,6 +590,7 @@ test("cleanTranscriptText strips SenseVoice emotion and language tags", () => {
     "从能链北京总部前往华山，优先准时"
   );
   assert.equal(cleanTranscriptText("去上海东方明珠"), "去上海东方明珠");
+  assert.equal(cleanTranscriptText("我想去。南京大学。"), "我想去 南京大学。");
   assert.equal(cleanTranscriptText("<|en|><|HAPPY|>hello"), "hello");
 });
 
