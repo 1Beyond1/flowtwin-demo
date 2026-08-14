@@ -5036,7 +5036,9 @@
 
   function canSkipSimulationStop() {
     const simulation = state.simulation;
-    if (!simulation.active || !simulation.phases.length || simulation.phase?.type === "arrived") return false;
+    // Reservation is the approach phase: the reviewer must see the automatic
+    // reservation finish before the station-level skip becomes available.
+    if (!simulation.active || !simulation.phases.length || simulation.phase?.type === "arrived" || simulation.phase?.type === "reservation") return false;
     return simulationSkipTargetIndex(simulationStopIndexToSkip()) !== null;
   }
 
@@ -5529,9 +5531,13 @@
       // station phase it recentres once on the exact projected stop point.
       const now = performance.now();
       const phaseChanged = simulation.lastCenteredPhaseIndex !== simulation.phaseIndex;
-      if (state.map?.setCenter && (phaseChanged || simulation.phase?.type === "drive")
-        && (phaseChanged || now - simulation.lastMapCenterAt >= 70)) {
-        state.map.setCenter(point);
+      if (state.map?.setCenter && (phaseChanged || simulation.phase?.type === "drive")) {
+        // AMap's default setCenter transition queues an animation. Calling it
+        // every 70 ms made those transitions overlap, especially at 3x/5x,
+        // which looked like the vehicle was shivering. Move the camera on the
+        // same animation frame as the marker and request an immediate update;
+        // the browser's own frame cadence now provides the smooth motion.
+        state.map.setCenter(point, true);
         simulation.lastMapCenterAt = now;
         simulation.lastCenteredPhaseIndex = simulation.phaseIndex;
       }
@@ -5843,7 +5849,7 @@
     const simulation = state.simulation;
     const selectedSpeed = Number(document.querySelector("[data-simulation-speed].active")?.dataset.simulationSpeed || simulation.preferredSpeed || 3);
     simulation.active = true;
-    simulation.preferredSpeed = Math.max(1, Math.min(3, selectedSpeed));
+    simulation.preferredSpeed = Math.max(1, Math.min(5, selectedSpeed));
     simulation.speed = simulation.preferredSpeed;
     simulation.autoAdvance = Boolean(byId("simulationAutoAdvance")?.checked);
     simulation.paused = !simulation.autoAdvance;
@@ -5994,7 +6000,7 @@
   }
 
   function setSimulationSpeed(speed) {
-    const next = Math.max(1, Math.min(3, Number(speed) || 1));
+    const next = Math.max(1, Math.min(5, Number(speed) || 1));
     state.simulation.speed = next;
     state.simulation.preferredSpeed = next;
     $$('[data-simulation-speed]').forEach((button) => button.classList.toggle("active", Number(button.dataset.simulationSpeed) === next));
@@ -7724,9 +7730,19 @@
       badge.classList.toggle("risk", station.status === "forecast-risk");
     }
     if (adviceLabel) adviceLabel.textContent = isFuelActive() ? "建议加油" : "建议补能";
-    const stationRecord = Object.values(state.routeRecords).find((record) => record.station?.id === station.id);
-    if (adviceValue) adviceValue.innerHTML = stationRecord
-      ? `${stationRecord.energyAmount} <small>${stationRecord.energyUnit}</small>`
+    const stationId = String(station.id);
+    const selectedRecord = state.routeRecords[state.selectedRoute];
+    const selectedStop = selectedRecord?.stops?.find((stop) => String(stop.id) === stationId);
+    const stationRecord = selectedStop
+      ? selectedRecord
+      : Object.values(state.routeRecords).find((record) => record.station?.id === station.id || record.stops?.some((stop) => String(stop.id) === stationId));
+    const matchedStop = stationRecord?.stops?.find((stop) => String(stop.id) === stationId);
+    const suggestedAmount = [station.energyAmount, matchedStop?.energyAmount, stationRecord?.energyAmount]
+      .map(Number)
+      .find(Number.isFinite);
+    const suggestedUnit = matchedStop?.priceUnit || stationRecord?.energyUnit || station.priceUnit || (isFuelActive() ? "L" : "kWh");
+    if (adviceValue) adviceValue.innerHTML = Number.isFinite(suggestedAmount)
+      ? `${Number(suggestedAmount).toFixed(1)} <small>${suggestedUnit}</small>`
       : isFuelActive() ? "— <small>L</small>" : "— <small>kWh</small>";
     const priceValue = byId("stationPriceValue");
     if (priceValue) priceValue.innerHTML = Number.isFinite(Number(station.price))
