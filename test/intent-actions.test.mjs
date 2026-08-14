@@ -25,6 +25,27 @@ function aiResponse(parsed) {
   };
 }
 
+function aiResponseWithPlace(parsed, place = "南京大学") {
+  return async (url) => {
+    if (url.includes("chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(parsed) } }] }), { status: 200 });
+    }
+    if (url.includes("/v3/geocode/geo")) {
+      return new Response(JSON.stringify({
+        status: "1",
+        geocodes: [{ formatted_address: place, location: "118.78,32.06", city: "南京市", district: "鼓楼区" }]
+      }), { status: 200 });
+    }
+    if (url.includes("/v3/place/text")) {
+      return new Response(JSON.stringify({
+        status: "1",
+        pois: [{ name: place, location: "118.78,32.06", cityname: "南京市", adname: "鼓楼区", type: "教育" }]
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ status: "0" }), { status: 200 });
+  };
+}
+
 async function parseWithAi(message, context, parsed) {
   return parseTripIntent({
     message,
@@ -46,6 +67,41 @@ test("speech punctuation between a destination cue and place name is tolerated",
   assert.equal(result.requestMode, "new_trip");
   assert.equal(result.destination, "南京大学");
   assert.deepEqual(result.actions, [{ type: "NEW_TRIP", destination: "南京大学" }]);
+});
+
+test("AI rechecks when the local rule cannot extract a destination", async () => {
+  const result = await parseTripIntent({
+    message: "导航到那里",
+    context: {},
+    config: {
+      aiBaseUrl: "https://example.invalid/v1",
+      aiApiKey: "placeholder",
+      aiModel: "model",
+      webServiceKey: "placeholder"
+    },
+    fetchImpl: aiResponseWithPlace({
+      destination: "南京大学",
+      requestMode: "new_trip",
+      actions: [{ type: "NEW_TRIP", destination: "南京大学" }],
+      clarificationNeeded: false
+    })
+  });
+  assert.equal(result.destination, "南京大学");
+  assert.equal(result.destinationResolution, "ai-fallback");
+  assert.deepEqual(result.actions, [{ type: "NEW_TRIP", destination: "南京大学" }]);
+  assert.deepEqual(result.locations.destination.coordinate, [118.78, 32.06]);
+});
+
+test("unresolved local and AI destination stays unresolved", async () => {
+  const result = await parseWithAi("我想去那个地方", {}, {
+    destination: null,
+    requestMode: "new_trip",
+    actions: [],
+    clarificationNeeded: true
+  });
+  assert.equal(result.destination, null);
+  assert.equal(result.destinationResolution, "unresolved");
+  assert.equal(formatPlanResponse(result).destinationResolution, "unresolved");
 });
 
 test("supplement actions preserve concrete service names and waypoint locations", async () => {

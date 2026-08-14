@@ -994,6 +994,9 @@
         return { label: "AI 暂不可用，已使用规则完成", state: "fallback", meta: payload.aiFallbackReason || "规则校验已完成" };
       }
       if (ai.used === true) {
+        if (payload.destinationResolution === "ai-fallback") {
+          return { label: "AI 已复核目的地", state: "ready", meta: "规则未直接识别，AI 复核后由高德确认" };
+        }
         return { label: "AI 与规则协同完成", state: "ready", meta: "AI 与规则共同完成需求解析" };
       }
       if (ai.attempted === false || mode === "rules") {
@@ -7826,11 +7829,16 @@
     showToast(message, 4600);
   }
 
-  function showUnresolvedDestination(destination) {
+  function showUnresolvedDestination(destination, resolution = null) {
     clearPlanForUnresolvedDestination();
+    const aiChecked = resolution === "ai-fallback" || resolution === "unresolved";
     const message = destination
-      ? `未能定位“${destination}”，或该地点暂不支持驾车路线。系统没有使用默认机场替代，请检查名称后重试。`
-      : "没有识别到目的地，因此没有使用默认机场代替。请补充一个可驾车到达的目的地后再试。";
+      ? aiChecked
+        ? `未找到地点“${destination}”。规则未直接识别，AI 复核后也没有得到可确认的驾车地点，请换一个更具体的名称。`
+        : `未能定位“${destination}”，或该地点暂不支持驾车路线。系统没有使用默认机场替代，请检查名称后重试。`
+      : aiChecked
+        ? "未找到地点。规则解析和 AI 复核都没有得到可确认的驾车目的地，请补充一个具体地点后再试。"
+        : "没有识别到目的地，因此没有使用默认机场代替。请补充一个可驾车到达的目的地后再试。";
     setAiStatus("目的地未定位", "unresolved");
     setAiReply(message);
     setText("aiReplyMeta", "未生成路线");
@@ -7954,7 +7962,7 @@
           showToast("请先选择一个目的地候选", 3200);
           return;
         }
-        showUnresolvedDestination(applied.destination);
+        showUnresolvedDestination(applied.destination, payload.destinationResolution);
         return;
       }
       clearDestinationCandidates();
