@@ -2833,9 +2833,12 @@
     return marker;
   }
 
-  function addAmapEndpoints() {
-    if (!state.map || !state.AMap) return;
+  function addAmapEndpoints(options = {}) {
+    if (!state.map || !state.AMap) return [];
     const AMap = state.AMap;
+    const includeDestination = options.includeDestination === undefined
+      ? state.hasPlannedRoute || Boolean(state.baseRouteRecords.reliable)
+      : Boolean(options.includeDestination);
     const make = (position, className, iconName, title) => {
       const marker = new AMap.Marker({
         position,
@@ -2847,9 +2850,19 @@
       marker.setMap(state.map);
       return marker;
     };
-    const hasResolvedTrip = state.hasPlannedRoute || Boolean(state.baseRouteRecords.reliable);
-    state.stationOverlays.push(make(state.origin, "origin-marker", "circle-dot", hasResolvedTrip ? (state.originName || DEFAULT_ORIGIN_NAME) : "起点"));
-    if (hasResolvedTrip) state.stationOverlays.push(make(state.destination, "destination-marker", "map-pin", state.destinationName));
+    const endpoints = [make(
+      state.origin,
+      "origin-marker",
+      "circle-dot",
+      includeDestination ? (state.originName || DEFAULT_ORIGIN_NAME) : "起点"
+    )];
+    state.stationOverlays.push(endpoints[0]);
+    if (includeDestination && state.destination) {
+      endpoints.push(make(state.destination, "destination-marker", "map-pin", state.destinationName));
+      state.stationOverlays.push(endpoints[1]);
+    }
+    refreshIcons();
+    return endpoints;
   }
 
   function drawAmapRoutes() {
@@ -4882,6 +4895,26 @@
       case "arrived": return { title: "已到达目的地", meta: "本次模拟驾驶流程完成" };
       default: return { title: "准备出发", meta: "正在加载已选路线" };
     }
+  }
+
+  // Show the two endpoints before the route and station requests finish. This
+  // prevents the map from staying at the old viewport while the UI says it is
+  // calculating a new trip, and gives the reviewer an immediate visual cue
+  // that the requested destination has been located.
+  function previewDestinationComputation() {
+    if (!state.live || !state.map || !state.AMap || !state.destination) return;
+    clearLiveOverlays();
+    state.selectedStation = null;
+    const endpoints = addAmapEndpoints({ includeDestination: true });
+    if (endpoints.length >= 2 && state.map.setFitView) {
+      const distance = distanceKm(state.origin, state.destination);
+      const maxZoom = distance >= 700 ? 8 : distance >= 300 ? 9 : distance >= 100 ? 10 : 12;
+      state.map.setFitView(endpoints, false, [90, 390, 245, 410], maxZoom);
+    } else {
+      state.map.setZoomAndCenter(11, state.destination);
+    }
+    setMapStatus("目的地已定位 · 正在计算路线与沿线补能点");
+    setText("mapAttribution", "高德地图 · 正在计算路线与补能点");
   }
 
   function simulationAssetFor(phase) {
@@ -7967,6 +8000,7 @@
       }
       clearDestinationCandidates();
       const preRouteOutcome = await applyPreRouteActions(actions);
+      if (requestMode === "new_trip") previewDestinationComputation();
       setAiStatus("正在请求路线与沿线补能站", "loading");
       setAiReply(payload.assistantReply || parsedForApply.assistantReply || "已识别出行约束，正在请求真实路线与沿线补能站……");
       await recomputePlan({ manageButton: false, silent: true });
@@ -8008,6 +8042,7 @@
         return;
       }
       const preRouteOutcome = await applyPreRouteActions(actions);
+      if (requestMode === "new_trip") previewDestinationComputation();
       setAiStatus("规则解析完成", "rules");
       setAiReply("模型连接暂时不可用，已按本地规则保留核心规划能力。");
       setAiStatus("正在请求路线与沿线补能站", "loading");
