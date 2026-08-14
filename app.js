@@ -4808,14 +4808,18 @@
   function simulationDriveDurationMs(record) {
     const duration = Number(record?.duration);
     const distance = Number(record?.distance);
-    // The walkthrough compresses a real trip into a reviewable timeline, but it
-    // must still leave enough time for the marker and AMap camera to keep up.
-    // Route geometry and route metrics remain untouched; only playback time is
-    // changed for the prototype experience.
-    const estimate = Number.isFinite(duration) && duration > 0
-      ? duration * 1600
-      : Number.isFinite(distance) && distance > 0 ? distance * 210 : 30000;
-    return Math.max(30000, Math.min(180000, Math.round(estimate)));
+    // The walkthrough compresses a real trip into a reviewable timeline. Use
+    // route distance as the primary playback signal so a 200 km trip does not
+    // look almost the same as a 1,200 km trip just because both real-time
+    // estimates hit the old 30–180 s clamp. The real route metrics stay intact;
+    // this only controls the visual playback clock.
+    const distanceEstimate = Number.isFinite(distance) && distance > 0
+      ? 22000 + distance * 90
+      : null;
+    const estimate = Number.isFinite(distanceEstimate)
+      ? distanceEstimate
+      : Number.isFinite(duration) && duration > 0 ? duration * 1600 : 30000;
+    return Math.max(24000, Math.min(120000, Math.round(estimate)));
   }
 
   function simulationStopTarget(stop, path, fallbackProgress) {
