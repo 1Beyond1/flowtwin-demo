@@ -24,7 +24,7 @@ import threading
 import tempfile
 import time
 from io import BytesIO
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -808,7 +808,12 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     host = os.environ.get("CV_HOST", "127.0.0.1")
     port = int(os.environ.get("CV_PORT", "5099"))
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    # PaddleOCR's CPU engine is kept strictly single-flight.  A threaded HTTP
+    # server can still let multiple request threads touch Paddle's lazy
+    # runtime state around the semaphore, which has caused intermittent C++
+    # ``std::...`` failures on small VPS instances.  Serialise the whole
+    # request lifecycle at the HTTP boundary; OCR_CONCURRENCY remains 1.
+    HTTPServer((host, port), Handler).serve_forever()
 
 
 if __name__ == "__main__":

@@ -801,6 +801,21 @@ async function cvHealthApi(response) {
   }
 }
 
+export function isCompletedVisionInference(result) {
+  return validateVisionResult(result)
+    && (result.inferenceStatus === "executed" || result.inferenceStatus === "synthetic");
+}
+
+export function isTransientVisionResult(result) {
+  if (!validateVisionResult(result)) return false;
+  if (!["not-run", "error"].includes(String(result.inferenceStatus || ""))) return false;
+  return ["local-ocr-unavailable", "local-ocr-error"].includes(String(result.mode || ""));
+}
+
+export function isRetryableVisionStatus(status) {
+  return [408, 429, 502, 503, 504].includes(Number(status));
+}
+
 async function cvAnalyzeApi(request, response) {
   // A 24 MB video becomes roughly 32 MB after base64 encoding. Keep the
   // envelope bounded so one request cannot exhaust the small VPS heap.
@@ -813,29 +828,50 @@ async function cvAnalyzeApi(request, response) {
     ? { ...body, mode: "upload" }
     : body;
   if (config.cvServiceUrl && ["upload", "video"].includes(String(upstreamBody?.mode || "").toLowerCase())) {
-    const controller = new AbortController();
     // PaddleOCR may load local weights on the first request. Video sampling
     // also needs more time than a single image, but must remain bounded.
-    const timeout = setTimeout(() => controller.abort(), upstreamBody.mode === "video" ? 120000 : 60000);
-    try {
-      const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(upstreamBody),
-        signal: controller.signal
-      });
-      const result = await upstream.json().catch(() => null);
-      if (upstream.ok && validateVisionResult(result)) {
-        return json(response, 200, result);
+    const maxAttempts = 3;
+    const retryDelayMs = 2000;
+    let lastStatus = null;
+    let lastResult = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), upstreamBody.mode === "video" ? 120000 : 60000);
+      try {
+        const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(upstreamBody),
+          signal: controller.signal
+        });
+        const result = await upstream.json().catch(() => null);
+        lastStatus = upstream.status;
+        lastResult = result;
+        if (upstream.ok && isCompletedVisionInference(result)) {
+          return json(response, 200, result);
+        }
+        const retryable = isRetryableVisionStatus(upstream.status) || isTransientVisionResult(result);
+        if (!retryable || attempt >= maxAttempts - 1) break;
+      } catch {
+        // Do not retry an aborted request blindly: the CV process may still be
+        // working on the original image and a retry would duplicate work.
+        break;
+      } finally {
+        clearTimeout(timeout);
       }
-      if (upstream.status === 429 && result && typeof result === "object") {
-        return json(response, 429, result);
-      }
-    } catch {
-      // The fallback below is intentional; do not turn optional CV into a
-      // blocker for the rest of the Demo.
-    } finally {
-      clearTimeout(timeout);
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+    if (lastResult && typeof lastResult === "object" && validateVisionResult(lastResult)) {
+      // Preserve an honest local not-run/error response after bounded retries;
+      // do not replace it with a synthetic success or mislabel every failure
+      // as HTTP 429.
+      return json(response, lastStatus === 429 ? 429 : 200, lastResult);
+    }
+    if (lastStatus === 429 && lastResult && typeof lastResult === "object") {
+      return json(response, 429, lastResult);
+    }
+    if (lastStatus && lastStatus >= 400 && lastStatus < 500) {
+      return json(response, lastStatus, lastResult && typeof lastResult === "object" ? lastResult : { error: "CV_REQUEST_REJECTED" });
     }
   }
   const fallback = localVisionFallback(upstreamBody);
