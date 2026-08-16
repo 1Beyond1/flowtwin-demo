@@ -1,4 +1,6 @@
 window.FLOWTWIN_CONFIG = {
+  // Set true for a public read-only demo: external Feishu/Webhook writes are disabled.
+  publicDemo: false,
   amapKey: "YOUR_AMAP_WEB_JS_KEY",
   securityJsCode: "YOUR_AMAP_SECURITY_JS_CODE",
   webServiceKey: "YOUR_AMAP_WEB_SERVICE_KEY_PRIMARY",

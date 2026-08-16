@@ -33,6 +33,8 @@ let enterprisePrior = null;
 const executionCache = new Map();
 const EXECUTION_CACHE_TTL_MS = 15 * 60 * 1000;
 const EXECUTION_CACHE_MAX = 1_000;
+let cvInFlight = 0;
+const MAX_CV_IN_FLIGHT = 1;
 const longTripPlanCache = createLongTripPlanCache();
 const rateLimiter = createRateLimiter({
   ...readRateLimitConfig(),
@@ -47,6 +49,8 @@ export function rateLimitScopeForRequest(method, pathname) {
     if (normalizedPath === "/api/stt") return "stt";
     if (normalizedPath === "/api/forecast" || normalizedPath === "/api/longtrip") return "map";
     if (normalizedPath === "/api/cv/analyze") return "cv";
+    if (normalizedPath === "/api/operator/simulate") return "operator";
+    if (normalizedPath === "/api/validate") return "validate";
     if (normalizedPath === "/api/feishu/sync") return "feishu-sync";
     if (normalizedPath.startsWith("/api/feishu/strategy/") && normalizedPath.endsWith("/approve")) return "approve";
     if (normalizedPath === "/api/execution") return "execution";
@@ -54,6 +58,7 @@ export function rateLimitScopeForRequest(method, pathname) {
   }
   if (normalizedMethod === "GET" && ["/api/route", "/api/poi", "/api/weather"].includes(normalizedPath)) return "map";
   if (normalizedMethod === "GET" && normalizedPath === "/api/version/check") return "version-check";
+  if (normalizedMethod === "GET" && normalizedPath.startsWith("/api/feishu/sync/")) return "feishu-status";
   return null;
 }
 
@@ -69,7 +74,7 @@ export function applyRateLimit(request, response, limiter = rateLimiter, request
   response.writeHead(429, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff",
+    ...SECURITY_HEADERS,
     "Retry-After": String(retryAfterSeconds)
   });
   response.end(JSON.stringify({ error: "RATE_LIMITED", scope, retryAfterSeconds }));
@@ -99,13 +104,29 @@ const mimeTypes = {
   ".svg": "image/svg+xml"
 };
 
-function json(response, status, body) {
+const SECURITY_HEADERS = Object.freeze({
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Frame-Options": "SAMEORIGIN",
+  "Permissions-Policy": "camera=(self), microphone=(self), geolocation=()"
+});
+
+function json(response, status, body, headers = {}) {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff"
+    ...SECURITY_HEADERS,
+    ...headers
   });
   response.end(JSON.stringify(body));
+}
+
+function methodNotAllowed(response, allowedMethods) {
+  const allowed = Array.isArray(allowedMethods) ? allowedMethods : [allowedMethods];
+  return json(response, 405, {
+    error: "METHOD_NOT_ALLOWED",
+    allowed: allowed.join(", ")
+  }, { Allow: allowed.join(", ") });
 }
 
 function parseCoordinate(value) {
@@ -138,6 +159,25 @@ function normalizePath(path, key, station) {
     policy: path.strategy || key,
     source: "高德 Web 路线 2.0"
   };
+}
+
+export function isPublicDemoMode(source = {}) {
+  return source?.publicDemo === true
+    || ["1", "true", "yes", "on"].includes(String(source?.FLOWTWIN_PUBLIC_DEMO || "").trim().toLowerCase());
+}
+
+function remoteWriteDisabled() {
+  return isPublicDemoMode(config || {}) || isPublicDemoMode(process.env);
+}
+
+function publicWriteDisabledResponse(response, code, message) {
+  return json(response, 200, {
+    used: false,
+    mode: "local-demo",
+    status: "disabled",
+    code,
+    message
+  });
 }
 
 export function routeSourceLabel(cacheState) {
@@ -387,7 +427,7 @@ async function runtimeConfig(response) {
   response.writeHead(200, {
     "Content-Type": "text/javascript; charset=utf-8",
     "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff"
+    ...SECURITY_HEADERS
   });
   response.end(body);
 }
@@ -825,68 +865,82 @@ export function isRetryableVisionStatus(status) {
 }
 
 async function cvAnalyzeApi(request, response) {
-  // A 24 MB video becomes roughly 32 MB after base64 encoding. Keep the
-  // envelope bounded so one request cannot exhaust the small VPS heap.
-  const body = await readJsonBody(request, 36 * 1024 * 1024);
-  // A built-in sample is still an image input. Normalize it to the same upload
-  // path so the local OCR model, rather than a synthetic result generator,
-  // decides whether a plate is actually present.
-  const requestedMode = String(body?.mode || "").trim().toLowerCase();
-  const upstreamBody = requestedMode === "sample" && body?.imageData
-    ? { ...body, mode: "upload" }
-    : body;
-  if (config.cvServiceUrl && ["upload", "video"].includes(String(upstreamBody?.mode || "").toLowerCase())) {
-    // PaddleOCR may load local weights on the first request. Video sampling
-    // also needs more time than a single image, but must remain bounded.
-    const maxAttempts = 3;
-    const retryDelayMs = 2000;
-    let lastStatus = null;
-    let lastResult = null;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), upstreamBody.mode === "video" ? 120000 : 60000);
-      try {
-        const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify(upstreamBody),
-          signal: controller.signal
-        });
-        const result = await upstream.json().catch(() => null);
-        lastStatus = upstream.status;
-        lastResult = result;
-        if (upstream.ok && isCompletedVisionInference(result)) {
-          return json(response, 200, result);
-        }
-        const retryable = isRetryableVisionStatus(upstream.status) || isTransientVisionResult(result);
-        if (!retryable || attempt >= maxAttempts - 1) break;
-      } catch {
-        // Do not retry an aborted request blindly: the CV process may still be
-        // working on the original image and a retry would duplicate work.
-        break;
-      } finally {
-        clearTimeout(timeout);
-      }
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-    }
-    if (lastResult && typeof lastResult === "object" && validateVisionResult(lastResult)) {
-      // Preserve an honest local not-run/error response after bounded retries;
-      // do not replace it with a synthetic success or mislabel every failure
-      // as HTTP 429.
-      return json(response, lastStatus === 429 ? 429 : 200, lastResult);
-    }
-    if (lastStatus === 429 && lastResult && typeof lastResult === "object") {
-      return json(response, 429, lastResult);
-    }
-    if (lastStatus && lastStatus >= 400 && lastStatus < 500) {
-      return json(response, lastStatus, lastResult && typeof lastResult === "object" ? lastResult : { error: "CV_REQUEST_REJECTED" });
-    }
+  if (cvInFlight >= MAX_CV_IN_FLIGHT) {
+    return json(response, 503, {
+      error: "CV_BUSY",
+      message: "本地视觉服务正在处理上一份请求，请稍后重试。"
+    }, { "Retry-After": "3" });
   }
-  const fallback = localVisionFallback(upstreamBody);
-  return json(response, fallback.ok === false ? 400 : 200, fallback);
+  cvInFlight += 1;
+  try {
+    // A 24 MB video becomes roughly 32 MB after base64 encoding. Keep the
+    // envelope bounded so one request cannot exhaust the small VPS heap.
+    const body = await readJsonBody(request, 36 * 1024 * 1024);
+    // A built-in sample is still an image input. Normalize it to the same upload
+    // path so the local OCR model, rather than a synthetic result generator,
+    // decides whether a plate is actually present.
+    const requestedMode = String(body?.mode || "").trim().toLowerCase();
+    const upstreamBody = requestedMode === "sample" && body?.imageData
+      ? { ...body, mode: "upload" }
+      : body;
+    if (config.cvServiceUrl && ["upload", "video"].includes(String(upstreamBody?.mode || "").toLowerCase())) {
+      // PaddleOCR may load local weights on the first request. Video sampling
+      // also needs more time than a single image, but must remain bounded.
+      const maxAttempts = 3;
+      const retryDelayMs = 2000;
+      let lastStatus = null;
+      let lastResult = null;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), upstreamBody.mode === "video" ? 120000 : 60000);
+        try {
+          const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(upstreamBody),
+            signal: controller.signal
+          });
+          const result = await upstream.json().catch(() => null);
+          lastStatus = upstream.status;
+          lastResult = result;
+          if (upstream.ok && isCompletedVisionInference(result)) {
+            return json(response, 200, result);
+          }
+          const retryable = isRetryableVisionStatus(upstream.status) || isTransientVisionResult(result);
+          if (!retryable || attempt >= maxAttempts - 1) break;
+        } catch {
+          // Do not retry an aborted request blindly: the CV process may still be
+          // working on the original image and a retry would duplicate work.
+          break;
+        } finally {
+          clearTimeout(timeout);
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+      if (lastResult && typeof lastResult === "object" && validateVisionResult(lastResult)) {
+        // Preserve an honest local not-run/error response after bounded retries;
+        // do not replace it with a synthetic success or mislabel every failure
+        // as HTTP 429.
+        return json(response, lastStatus === 429 ? 429 : 200, lastResult);
+      }
+      if (lastStatus === 429 && lastResult && typeof lastResult === "object") {
+        return json(response, 429, lastResult);
+      }
+      if (lastStatus && lastStatus >= 400 && lastStatus < 500) {
+        return json(response, lastStatus, lastResult && typeof lastResult === "object" ? lastResult : { error: "CV_REQUEST_REJECTED" });
+      }
+    }
+    const fallback = localVisionFallback(upstreamBody);
+    return json(response, fallback.ok === false ? 400 : 200, fallback);
+  } finally {
+    cvInFlight = Math.max(0, cvInFlight - 1);
+  }
 }
 
 async function executionApi(request, response) {
+  if (remoteWriteDisabled()) {
+    return publicWriteDisabledResponse(response, "PUBLIC_DEMO_EXECUTION_DISABLED", "公开 Demo 已关闭飞书执行通知，当前保留本地执行演示。");
+  }
   const body = await readJsonBody(request, 16000);
   const rawKey = body?.runId ?? body?.executionId ?? body?.idempotencyKey;
   const key = typeof rawKey === "string" && /^[A-Za-z0-9._:-]{1,160}$/.test(rawKey.trim())
@@ -909,17 +963,26 @@ async function executionApi(request, response) {
 }
 
 async function feishuSyncApi(request, response) {
+  if (remoteWriteDisabled()) {
+    return publicWriteDisabledResponse(response, "PUBLIC_DEMO_FEISHU_SYNC_DISABLED", "公开 Demo 已关闭飞书写入，当前保留本地运营策略演示。");
+  }
   const body = await readJsonBody(request, 128000);
   const result = await startFeishuSync({ payload: body, config });
   return json(response, 200, result);
 }
 
 async function feishuStatusApi(syncId, response) {
+  if (remoteWriteDisabled()) {
+    return publicWriteDisabledResponse(response, "PUBLIC_DEMO_FEISHU_STATUS_DISABLED", "公开 Demo 已关闭飞书结果读取，当前保留本地运营策略演示。");
+  }
   const result = await getFeishuSyncStatus({ syncId, config });
   return json(response, result.mode === "error" && result.code !== "FEISHU_SYNC_NOT_FOUND" ? 502 : 200, result);
 }
 
 async function feishuApproveApi(request, response, strategyRecordId) {
+  if (remoteWriteDisabled()) {
+    return publicWriteDisabledResponse(response, "PUBLIC_DEMO_FEISHU_APPROVE_DISABLED", "公开 Demo 已关闭飞书策略写回，当前保留本地审批演示。");
+  }
   const body = await readJsonBody(request, 8192);
   const result = await approveFeishuStrategy({
     strategyRecordId,
@@ -972,7 +1035,7 @@ async function staticFile(pathname, response) {
     response.writeHead(200, {
       "Content-Type": mimeTypes[extension] || "application/octet-stream",
       "Cache-Control": extension === ".html" || extension === ".js" ? "no-cache" : "public, max-age=300",
-      "X-Content-Type-Options": "nosniff"
+      ...SECURITY_HEADERS
     });
     response.end(content);
   } catch {
@@ -993,34 +1056,69 @@ async function requestHandler(request, response) {
       checkVersion: () => versionChecker.check()
     });
     if (versionRoute) return json(response, versionRoute.status, versionRoute.body);
-    if (requestUrl.pathname === "/api/health") return json(response, 200, {
-      ok: true,
-      service: "FlowTwin",
-      dependencies: {
-        amapConfigured: hasAmapServiceKey(config),
-        ai: buildAiHealthSummary(config),
-        feishu: feishuConfigSummary(config),
-        cv: visionHealthSummary(config),
-        enterprisePrior: enterprisePriorHealth(enterprisePrior)
-      },
-      amapCache: config.amapCache?.getStats?.() || null,
-      longTripPlanCache: longTripPlanCache.getStats()
-    });
-    if (request.method === "GET" && requestUrl.pathname === "/api/contracts") return json(response, 200, API_CONTRACTS);
-    if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
-    if (requestUrl.pathname === "/api/poi") return await poiApi(requestUrl, response);
-    if (requestUrl.pathname === "/api/weather") return await weatherApi(requestUrl, response);
-  if (request.method === "POST" && requestUrl.pathname === "/api/plan") return await planApi(request, response);
+    if (requestUrl.pathname === "/api/health") {
+      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+      return json(response, 200, {
+        ok: true,
+        service: "FlowTwin",
+        dependencies: {
+          amapConfigured: hasAmapServiceKey(config),
+          ai: buildAiHealthSummary(config),
+          feishu: { ...feishuConfigSummary(config), publicWriteEnabled: !remoteWriteDisabled() },
+          cv: visionHealthSummary(config),
+          enterprisePrior: enterprisePriorHealth(enterprisePrior)
+        },
+        amapCache: config.amapCache?.getStats?.() || null,
+        longTripPlanCache: longTripPlanCache.getStats()
+      });
+    }
+    if (requestUrl.pathname === "/api/contracts") {
+      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+      return json(response, 200, API_CONTRACTS);
+    }
+    if (["/api/route", "/api/poi", "/api/weather"].includes(requestUrl.pathname)) {
+      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+      if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
+      if (requestUrl.pathname === "/api/poi") return await poiApi(requestUrl, response);
+      return await weatherApi(requestUrl, response);
+    }
+    const postOnlyPaths = new Set([
+      "/api/plan",
+      "/api/forecast",
+      "/api/longtrip",
+      "/api/operator/simulate",
+      "/api/validate",
+      "/api/cv/analyze",
+      "/api/execution",
+      "/api/feishu/sync",
+      "/api/stt"
+    ]);
+    if (postOnlyPaths.has(requestUrl.pathname) && request.method !== "POST") {
+      return methodNotAllowed(response, ["POST"]);
+    }
+    if (requestUrl.pathname.startsWith("/api/feishu/strategy/")
+      && requestUrl.pathname.endsWith("/approve")
+      && request.method !== "POST") {
+      return methodNotAllowed(response, ["POST"]);
+    }
+    if (request.method === "POST" && requestUrl.pathname === "/api/plan") return await planApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/forecast") return await forecastApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/longtrip") return await longTripApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/operator/simulate") return await operatorApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/validate") return await validateApi(request, response);
-    if (request.method === "GET" && requestUrl.pathname === "/api/cv/health") return await cvHealthApi(response);
+    if (requestUrl.pathname === "/api/cv/health") {
+      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+      return await cvHealthApi(response);
+    }
     if (request.method === "POST" && requestUrl.pathname === "/api/cv/analyze") return await cvAnalyzeApi(request, response);
     if (request.method === "POST" && requestUrl.pathname === "/api/execution") return await executionApi(request, response);
-    if (request.method === "GET" && requestUrl.pathname === "/api/feishu/health") return json(response, 200, { ok: true, ...feishuConfigSummary(config) });
+    if (requestUrl.pathname === "/api/feishu/health") {
+      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+      return json(response, 200, { ok: true, ...feishuConfigSummary(config), publicWriteEnabled: !remoteWriteDisabled() });
+    }
     if (request.method === "POST" && requestUrl.pathname === "/api/feishu/sync") return await feishuSyncApi(request, response);
-    if (request.method === "GET" && requestUrl.pathname.startsWith("/api/feishu/sync/")) {
+    if (requestUrl.pathname.startsWith("/api/feishu/sync/")) {
+      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
       return await feishuStatusApi(decodeURIComponent(requestUrl.pathname.slice("/api/feishu/sync/".length)), response);
     }
     if (request.method === "POST" && requestUrl.pathname.startsWith("/api/feishu/strategy/") && requestUrl.pathname.endsWith("/approve")) {
@@ -1028,7 +1126,10 @@ async function requestHandler(request, response) {
       return await feishuApproveApi(request, response, decodeURIComponent(strategyRecordId));
     }
     if (request.method === "POST" && requestUrl.pathname === "/api/stt") return await sttApi(request, response);
-    if (requestUrl.pathname === "/runtime-config.js") return await runtimeConfig(response);
+    if (requestUrl.pathname === "/runtime-config.js") {
+      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+      return await runtimeConfig(response);
+    }
     return await staticFile(requestUrl.pathname, response);
   } catch (error) {
     const status = Number(error?.statusCode) || 500;

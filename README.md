@@ -108,6 +108,8 @@ PORT=4182
 
 `config.local.js` 中对应字段为 `aiBaseUrl` / `aiApiKey` / `aiModel`、可选的 `aiBackupBaseUrl` / `aiBackupApiKey` / `aiBackupModel`、`sttApiKey` / `sttBaseUrl` / `sttModel`、可选的 `cvServiceUrl`、`feishuAppId` / `feishuAppSecret` / `feishuAppToken` 等，含义相同，仍用你自己的值覆盖示例。备用 AI 只有在主接口失败时才会请求，主接口成功时不会额外消耗备用额度；两套 Key 都只在服务端读取。
 
+公开 Demo 建议设置 `FLOWTWIN_PUBLIC_DEMO=1`：路线、预测、运营仿真和视觉验证仍可使用，但飞书多维表格写入、飞书结果读取、策略写回和 Webhook 执行通知会降级为本地演示，避免匿名访问触发外部写操作。若需要在线展示飞书 AI，应在 VPS 侧先放到 Cloudflare Access 或其他后台鉴权之后，再关闭这个开关。`/api/cv/analyze`、运营仿真、1,000 次验证和飞书状态轮询均有独立的按客户端 IP 限流；可通过 `FLOWTWIN_RATE_LIMIT_*` 调整，默认十分钟窗口。
+
 ### 可选视觉服务
 
 Node 主服务不依赖 Python、OpenCV 或 Paddle。进入“视觉”页后，内置样例和上传的车牌图片/短视频都只有在本地 CV 服务可用时才会进入 PaddleOCR；可按 [`cv-service/README.md`](cv-service/README.md) 启动 `127.0.0.1:5099`，再在私密配置中设置 `CV_SERVICE_URL`。公开 GitHub 仓库不包含模型权重；私有部署包可以预置本地 OCR 模型，但模型文件不得提交到公开仓库。上传图片只在请求内存中处理，并校验 PNG/JPEG/WebP 文件头；未启用推理或识别失败时会显示“未执行/未识别”，不会伪造车牌、车位或支付结论。

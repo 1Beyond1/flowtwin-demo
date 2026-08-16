@@ -6,7 +6,7 @@ import {
   normalizeClientIp,
   readRateLimitConfig
 } from "../lib/rate-limit.mjs";
-import { applyRateLimit, rateLimitScopeForRequest } from "../server.mjs";
+import { applyRateLimit, isPublicDemoMode, rateLimitScopeForRequest } from "../server.mjs";
 
 function makeRequest({ method = "POST", path = "/api/plan", ip = "::ffff:192.0.2.10", headers = {} } = {}) {
   return {
@@ -38,7 +38,11 @@ test("rate-limit defaults and environment overrides stay bounded", () => {
     plan: 30,
     stt: 10,
     map: 180,
+    cv: 6,
+    operator: 12,
+    validate: 4,
     "feishu-sync": 10,
+    "feishu-status": 60,
     approve: 20,
     "version-check": 12,
     execution: 6
@@ -50,7 +54,11 @@ test("rate-limit defaults and environment overrides stay bounded", () => {
     FLOWTWIN_RATE_LIMIT_PLAN: "4",
     FLOWTWIN_RATE_LIMIT_STT: "3",
     FLOWTWIN_RATE_LIMIT_MAP: "12",
+    FLOWTWIN_RATE_LIMIT_CV: "2",
+    FLOWTWIN_RATE_LIMIT_OPERATOR: "5",
+    FLOWTWIN_RATE_LIMIT_VALIDATE: "3",
     FLOWTWIN_RATE_LIMIT_FEISHU_SYNC: "2",
+    FLOWTWIN_RATE_LIMIT_FEISHU_STATUS: "8",
     FLOWTWIN_RATE_LIMIT_APPROVE: "5",
     FLOWTWIN_RATE_LIMIT_VERSION_CHECK: "4",
     FLOWTWIN_RATE_LIMIT_EXECUTION: "3",
@@ -58,7 +66,7 @@ test("rate-limit defaults and environment overrides stay bounded", () => {
     FLOWTWIN_RATE_LIMIT_MAX_CLIENTS: "7"
   });
   assert.deepEqual(overridden, {
-    limits: { plan: 4, stt: 3, map: 12, "feishu-sync": 2, approve: 5, "version-check": 4, execution: 3 },
+    limits: { plan: 4, stt: 3, map: 12, cv: 2, operator: 5, validate: 3, "feishu-sync": 2, "feishu-status": 8, approve: 5, "version-check": 4, execution: 3 },
     windowMs: 5000,
     maxEntries: 7
   });
@@ -159,6 +167,10 @@ test("route gate limits expensive routes, leaves health alone, and skips OPTIONS
   assert.equal(rateLimitScopeForRequest("POST", "/api/plan"), "plan");
   assert.equal(rateLimitScopeForRequest("GET", "/api/route"), "map");
   assert.equal(rateLimitScopeForRequest("POST", "/api/feishu/strategy/rec-1/approve"), "approve");
+  assert.equal(rateLimitScopeForRequest("POST", "/api/cv/analyze"), "cv");
+  assert.equal(rateLimitScopeForRequest("POST", "/api/operator/simulate"), "operator");
+  assert.equal(rateLimitScopeForRequest("POST", "/api/validate"), "validate");
+  assert.equal(rateLimitScopeForRequest("GET", "/api/feishu/sync/sync-1"), "feishu-status");
   assert.equal(rateLimitScopeForRequest("GET", "/api/version/check"), "version-check");
   assert.equal(rateLimitScopeForRequest("POST", "/api/execution"), "execution");
   assert.equal(rateLimitScopeForRequest("GET", "/api/health"), null);
@@ -188,4 +200,32 @@ test("route gate limits expensive routes, leaves health alone, and skips OPTIONS
   for (let index = 0; index < 20; index += 1) {
     assert.equal(applyRateLimit(makeRequest({ method: "GET", path: "/api/health" }), makeResponse(), healthLimiter), true);
   }
+});
+
+test("newly protected demo routes are actually charged to their own scopes", () => {
+  const cases = [
+    ["cv", "POST", "/api/cv/analyze"],
+    ["operator", "POST", "/api/operator/simulate"],
+    ["validate", "POST", "/api/validate"],
+    ["feishu-status", "GET", "/api/feishu/sync/sync-1"]
+  ];
+  for (const [scope, method, path] of cases) {
+    const limiter = createRateLimiter({
+      limits: { [scope]: { limit: 1, windowMs: 60_000 } },
+      trustProxy: false
+    });
+    assert.equal(applyRateLimit(makeRequest({ method, path }), makeResponse(), limiter), true, `${scope} first request`);
+    const blockedResponse = makeResponse();
+    assert.equal(applyRateLimit(makeRequest({ method, path }), blockedResponse, limiter), false, `${scope} second request`);
+    assert.equal(blockedResponse.statusCode, 429, `${scope} status`);
+    assert.equal(JSON.parse(blockedResponse.body).scope, scope, `${scope} response scope`);
+  }
+});
+
+test("public demo mode is explicit and does not depend on secret values", () => {
+  assert.equal(isPublicDemoMode({ FLOWTWIN_PUBLIC_DEMO: "1" }), true);
+  assert.equal(isPublicDemoMode({ FLOWTWIN_PUBLIC_DEMO: "true" }), true);
+  assert.equal(isPublicDemoMode({ FLOWTWIN_PUBLIC_DEMO: "0" }), false);
+  assert.equal(isPublicDemoMode({ publicDemo: true }), true);
+  assert.equal(isPublicDemoMode({ publicDemo: false }), false);
 });
