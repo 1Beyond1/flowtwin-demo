@@ -251,3 +251,44 @@ test("Feishu AI input stays compact when route stations carry large raw metadata
   assert.equal(strategyBody.fields["策略输入"].includes("routeGeometry"), false);
   assert.equal(strategyBody.fields["策略输入"].includes("estimatedReleaseMinutes"), false);
 });
+
+test("Feishu sync reuses the top-level station snapshot when strategy omits duplicate stations", async () => {
+  clearFeishuCaches();
+  const config = {
+    feishuBaseUrl: "https://open.feishu.cn",
+    feishuAppId: "app-top-level-stations",
+    feishuAppSecret: "fake-top-level-secret",
+    feishuAppToken: "base-top-level",
+    feishuSnapshotTableId: "tbl-top-level-snapshot",
+    feishuStrategyTableId: "tbl-top-level-strategy",
+    feishuAiStrategyField: "AI策略"
+  };
+  const calls = [];
+  const response = (payload) => ({ ok: true, status: 200, json: async () => payload });
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).includes("tenant_access_token")) return response({ code: 0, tenant_access_token: "tenant-top-level", expire: 7200 });
+    if (String(url).includes("batch_create")) return response({ code: 0, data: { records: [{ record_id: "snapshot-top-level" }] } });
+    return response({ code: 0, data: { record: { record_id: "strategy-top-level" } } });
+  };
+  const stations = [
+    { id: "source", name: "拥堵站", p50: 22, p90: 42, type: "充电站" },
+    { id: "target", name: "承接站", p50: 4, p90: 8, type: "充电站" }
+  ];
+  const started = await startFeishuSync({
+    config,
+    fetchImpl,
+    payload: {
+      runId: "run-top-level-stations",
+      stations,
+      strategy: { sourceStation: stations[0], targetStation: stations[1], impact: { roi: 1.3 } }
+    }
+  });
+  assert.equal(started.used, true);
+  const strategyCall = calls.find((call) => call.url.includes("tbl-top-level-strategy") && call.options.method === "POST");
+  assert.ok(strategyCall);
+  const fields = JSON.parse(strategyCall.options.body).fields;
+  assert.equal(fields["拥堵站"], "拥堵站");
+  assert.equal(fields["承接站"], "承接站");
+  assert.ok(Buffer.byteLength(fields["策略输入"], "utf8") <= 1000);
+});

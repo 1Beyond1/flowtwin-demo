@@ -7439,7 +7439,6 @@
       forecastDataAsOf: textOrUndefined(station.forecastDataAsOf || station.forecastAsOf, 80),
       forecastSimulation: station.forecastSimulation !== false,
       forecastFreshnessSeconds: numberOrUndefined(station.forecastFreshnessSeconds),
-      forecastEnterprisePrior: station.forecastEnterprisePrior || station.enterprisePrior || null,
       forecastArrivalWaitP50: numberOrUndefined(station.forecastArrivalWaitP50 ?? station.p50),
       forecastArrivalWaitP90: numberOrUndefined(station.forecastArrivalWaitP90 ?? station.p90)
     };
@@ -7520,7 +7519,7 @@
     };
   }
 
-  function compactFeishuStrategy(strategy = {}, stations = []) {
+  function compactFeishuStrategy(strategy = {}) {
     const textOrUndefined = (value, max = 120) => {
       const valueText = String(value ?? "").trim();
       return valueText ? valueText.slice(0, max) : undefined;
@@ -7551,9 +7550,48 @@
       capacityBound: strategy.capacityBound === true,
       unservedPressure: numberOrUndefined(strategy.unservedPressure),
       sourceStation: compactFeishuStation(strategy.sourceStation),
-      targetStation: compactFeishuStation(strategy.targetStation),
-      stations
+      targetStation: compactFeishuStation(strategy.targetStation)
     };
+  }
+
+  const MAX_FEISHU_SNAPSHOT_STATIONS = 12;
+  const MAX_FEISHU_SYNC_BYTES = 24 * 1024;
+
+  function buildFeishuSnapshotStations(stations = [], strategy = {}) {
+    const preferred = [strategy.sourceStation, strategy.targetStation]
+      .map(compactFeishuStation)
+      .filter(Boolean);
+    const ranked = stations
+      .map(compactFeishuStation)
+      .filter(Boolean)
+      .sort((left, right) => Number(right.p90 || right.wait || 0) - Number(left.p90 || left.wait || 0));
+    const seen = new Set();
+    return [...preferred, ...ranked].filter((station) => {
+      const key = String(station.id || station.name || "");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, MAX_FEISHU_SNAPSHOT_STATIONS);
+  }
+
+  function buildFeishuSyncPayload(strategy = {}) {
+    const base = {
+      strategy: compactFeishuStrategy(strategy),
+      source: "FlowTwin 演示仿真",
+      dataAsOf: new Date().toISOString()
+    };
+    const candidates = buildFeishuSnapshotStations(state.stations, strategy);
+    const stations = [];
+    const byteLength = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
+    for (const station of candidates) {
+      const next = [...stations, station];
+      if (byteLength({ ...base, stations: next }) > MAX_FEISHU_SYNC_BYTES) break;
+      stations.push(station);
+    }
+    // Compact records are intentionally tiny, but keep one station if an
+    // unusual upstream text field made the byte guard stop at the first item.
+    if (!stations.length && candidates.length) stations.push(candidates[0]);
+    return { ...base, stations };
   }
 
   async function pollFeishuSync(syncId, pollVersion) {
@@ -7599,8 +7637,7 @@
     // Feishu. The Bitable adapter only needs the operational fields below;
     // keeping this boundary compact also prevents the AI field from receiving
     // a request that exceeds its context limit.
-    const feishuStations = state.stations.map(compactFeishuStation).filter(Boolean);
-    const feishuStrategy = compactFeishuStrategy(strategy, feishuStations);
+    const feishuPayload = buildFeishuSyncPayload(strategy);
     const runId = `operator-${stableHash(JSON.stringify({
       destination: state.destinationName,
       energyType: state.energyType,
@@ -7611,16 +7648,10 @@
     state.feishuPollVersion += 1;
     const pollVersion = state.feishuPollVersion;
     if (button) button.disabled = true;
-    state.feishuSync = { status: "syncing", mode: "feishu-bitable", stationCount: state.stations.length };
+    state.feishuSync = { status: "syncing", mode: "feishu-bitable", stationCount: feishuPayload.stations.length };
     renderFeishuSyncStatus(state.feishuSync);
     try {
-      const result = await postJson("/api/feishu/sync", {
-        runId,
-        stations: feishuStations,
-        strategy: feishuStrategy,
-        source: "FlowTwin 演示仿真",
-        dataAsOf: new Date().toISOString()
-      }, 30000);
+      const result = await postJson("/api/feishu/sync", { runId, ...feishuPayload }, 30000);
       state.feishuSync = result;
       renderFeishuSyncStatus(result);
       if (result.status === "not-configured") {
