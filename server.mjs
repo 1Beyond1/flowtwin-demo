@@ -9,6 +9,7 @@ import { simulateOperator } from "./lib/operator.mjs";
 import { validateStrategies } from "./lib/validate.mjs";
 import { executeFeishu } from "./lib/feishu.mjs";
 import { buildLongTripPlans } from "./lib/longtrip.mjs";
+import { createLongTripPlanCache } from "./lib/longtrip-cache.mjs";
 import { API_CONTRACTS } from "./lib/contracts.mjs";
 import { cleanTranscriptText, polishTranscriptText } from "./lib/stt.mjs";
 import { hasAmapServiceKey, requestAmapJson } from "./lib/amap.mjs";
@@ -32,6 +33,7 @@ let enterprisePrior = null;
 const executionCache = new Map();
 const EXECUTION_CACHE_TTL_MS = 15 * 60 * 1000;
 const EXECUTION_CACHE_MAX = 1_000;
+const longTripPlanCache = createLongTripPlanCache();
 const rateLimiter = createRateLimiter({
   ...readRateLimitConfig(),
   trustProxy: process.env.FLOWTWIN_TRUST_PROXY === "1"
@@ -733,7 +735,13 @@ async function longTripApi(request, response) {
   if (!Number.isFinite(input.distanceKm)) {
     return json(response, 400, { error: "INVALID_DISTANCE" });
   }
-  return json(response, 200, buildLongTripPlans(input));
+  // Reuse only an equivalent decision snapshot. Station pressure, forecast
+  // values, price, vehicle state and route constraints are all part of the
+  // key; changing any of them triggers a fresh calculation. Display timestamps
+  // and one-minute clock ticks are collapsed to the forecast's five-minute
+  // sampling cadence, so they cannot defeat an otherwise unchanged plan.
+  const cached = await longTripPlanCache.getOrLoad(input, () => buildLongTripPlans(input));
+  return json(response, 200, { ...cached.value, cache: cached.cache });
 }
 
 async function operatorApi(request, response) {
@@ -995,7 +1003,8 @@ async function requestHandler(request, response) {
         cv: visionHealthSummary(config),
         enterprisePrior: enterprisePriorHealth(enterprisePrior)
       },
-      amapCache: config.amapCache?.getStats?.() || null
+      amapCache: config.amapCache?.getStats?.() || null,
+      longTripPlanCache: longTripPlanCache.getStats()
     });
     if (request.method === "GET" && requestUrl.pathname === "/api/contracts") return json(response, 200, API_CONTRACTS);
     if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
