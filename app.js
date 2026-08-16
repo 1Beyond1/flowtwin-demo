@@ -2606,6 +2606,15 @@
     campaignBudget: 240
   });
 
+  function hasCompleteOperatorDemoMetadata(station) {
+    const meta = station?.operatorMeta;
+    if (!meta || meta.metadataVersion !== 1) return false;
+    const requiredFlags = ["partner", "controllable", "couponEligible", "merchantAccepted"];
+    if (!requiredFlags.every((field) => Object.prototype.hasOwnProperty.call(meta, field))) return false;
+    const windowCapacity = Number(meta.windowCapacity);
+    return Number.isFinite(windowCapacity) && windowCapacity > 0;
+  }
+
   function decorateOperatorDemoStations(stations) {
     const source = Array.isArray(stations) ? stations : [];
     if (!source.length) return source;
@@ -2630,7 +2639,7 @@
       selected.slice(0, 3).forEach(({ station }) => eligibleIds.add(String(station.id)));
     });
     return source.map((station, index) => {
-      if (station.operatorMeta?.metadataVersion === 1) return station;
+      if (hasCompleteOperatorDemoMetadata(station)) return station;
       const seed = stableHash(`operator-economics:${station.id || station.name}`);
       const eligible = eligibleIds.has(String(station.id));
       const capacity = Math.max(1, Number(station.capacity) || 18);
@@ -2657,7 +2666,7 @@
 
   function ensureOperatorDemoMetadata() {
     if (!Array.isArray(state.stations) || !state.stations.length) return [];
-    if (state.stations.every((station) => station.operatorMeta?.metadataVersion === 1)) return state.stations;
+    if (state.stations.every(hasCompleteOperatorDemoMetadata)) return state.stations;
     state.stations = decorateOperatorDemoStations(state.stations);
     return state.stations;
   }
@@ -8498,7 +8507,11 @@
         controllable: meta.controllable === true,
         couponEligible: meta.couponEligible === true,
         merchantAccepted: meta.merchantAccepted === true,
-        windowCapacity: Number(meta.windowCapacity || 0),
+        // 缓存/旧版本站点可能没有运营窗口容量；不要把“缺失”编码成显式 0，
+        // 否则后端会把 0 当成真实承接能力，导致分流、ROI 和等待变化全部为 0。
+        windowCapacity: Number.isFinite(Number(meta.windowCapacity)) && Number(meta.windowCapacity) > 0
+          ? Number(meta.windowCapacity)
+          : undefined,
         platformCoupon: Number(meta.platformCoupon ?? OPERATOR_DEMO_DEFAULTS.platformCoupon),
         merchantCouponShare: Number(meta.merchantCouponShare ?? OPERATOR_DEMO_DEFAULTS.merchantCouponShare),
         platformTakeRate: Number(meta.platformTakeRate ?? OPERATOR_DEMO_DEFAULTS.platformTakeRate),
