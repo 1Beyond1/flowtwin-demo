@@ -61,6 +61,10 @@ PADDLEOCR_TEXT_REC_MODEL_NAME=PP-OCRv4_mobile_rec
 
 `PADDLEOCR_LOCAL_ONLY=1` 会阻止没有本地模型目录时启动推理，避免运行时偷偷联网下载模型。
 
+### Windows 本地启动说明
+
+项目目录含中文时，Paddle 的底层推理组件在少数 Windows 环境中可能无法稳定读取模型文件。推荐把已预置的模型副本同步到 `%TEMP%\flowtwin-cv-models`（ASCII 路径），再将上述两个 `*_MODEL_DIR` 指向该目录；完整的可直接执行脚本见项目根目录的 `本地启动说明.md`。这不会下载模型，也不会把模型权重提交到 Git。
+
 ## 启动与测试
 
 ```powershell
