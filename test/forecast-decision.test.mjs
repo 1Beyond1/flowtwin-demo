@@ -205,6 +205,34 @@ test("port forecast is deterministic and demand/weather factors are monotonic", 
   assert.ok(stressed.forecast.at(-1).p90 >= calm.forecast.at(-1).p90);
 });
 
+test("synthetic demo ports keep availability, occupancy, and long-horizon wait coherent", () => {
+  const result = forecastStations([{
+    id: "synthetic-demo-port",
+    name: "演示充电站",
+    capacity: 12,
+    totalPorts: 12,
+    idlePorts: 4,
+    chargingPorts: 7,
+    faultPorts: 1,
+    queueVehicles: 0,
+    reservationQueueAhead: 0,
+    estimatedReleaseMinutes: [2, 5, 8, 11, 14, 17, 20],
+    averageSessionMinutes: 35,
+    arrivalRate: 8,
+    serviceRate: 1,
+    occupancy: 0.6,
+    wait: 12,
+    dataSource: "FlowTwin 演示仿真 · 端口状态 + 预约队列推演",
+    arrivalOffsetMinutes: 240
+  }], { departureMinutes: 480, horizonMinutes: 240, demandFactor: 1.5, weatherFactor: 1.5 }).stations[0];
+
+  assert.equal(result.method, "port-discrete-event");
+  assert.ok(result.prediction.p90 < 240, `synthetic queue hit the hard cap: ${result.prediction.p90}`);
+  assert.ok(result.prediction.occupancy < 0.99, "free capacity was reported as saturated");
+  assert.equal(result.prediction.availablePorts, 0);
+  assert.match(result.explanation, /105% 封顶/);
+});
+
 test("forecast selection interpolates the queue wait at an ETA offset", () => {
   const points = [
     { minute: 0, wait: 4, p50: 3, p90: 8 },

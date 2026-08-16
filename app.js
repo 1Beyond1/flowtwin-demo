@@ -1829,7 +1829,7 @@
       const text = meta.querySelector("span") || meta;
       const snapshot = entry.inputSnapshot;
       const portSummary = entry.method === "port-discrete-event" && snapshot
-        ? `总枪位 ${snapshot.totalPorts ?? "—"} · 可用 ${snapshot.availablePorts ?? snapshot.idlePorts ?? "—"} · 已预约 ${snapshot.reservedPorts ?? "—"} · 等待 ${snapshot.waitingVehicles ?? snapshot.queueVehicles ?? "—"}`
+        ? `总枪位 ${snapshot.totalPorts ?? "—"} · 可用 ${snapshot.availablePorts ?? snapshot.idlePorts ?? "—"} · 已预约 ${snapshot.reservedPorts ?? "—"} · 当前等待 ${snapshot.waitingVehicles ?? snapshot.queueVehicles ?? "—"}`
         : "";
       const confidenceText = Number.isFinite(Number(entry.confidenceScore))
         ? ` · 置信度 ${entry.confidenceLabel || `${Math.round(Number(entry.confidenceScore))}/100`}`
@@ -1851,7 +1851,9 @@
     const lines = [
       ["预测方法", method],
       ["补能位状态", `总枪位 ${snapshot.totalPorts ?? "—"} · 可用 ${snapshot.availablePorts ?? snapshot.idlePorts ?? "—"} · 已预约 ${snapshot.reservedPorts ?? "—"} · 充电中 ${snapshot.chargingPorts ?? "—"}`],
-      ["预约队列", `已到站等待 ${snapshot.waitingVehicles ?? snapshot.queueVehicles ?? "—"} 辆 · 预计在前 ${snapshot.reservationQueueAhead ?? "—"} 辆 · ${snapshot.queueSource || "未标明来源"}`],
+      ["预约队列", Number(snapshot.availablePorts) > 0
+        ? `当前有 ${snapshot.availablePorts} 个可用补能位 · 已到站等待 0 辆；未来预约队列 ${snapshot.reservationQueueAhead ?? 0} 辆 · ${snapshot.queueSource || "未标明来源"}`
+        : `已到站等待 ${snapshot.waitingVehicles ?? snapshot.queueVehicles ?? 0} 辆 · 预计在前 ${snapshot.reservationQueueAhead ?? 0} 辆 · ${snapshot.queueSource || "未标明来源"}`],
       ["服务参数", `平均服务 ${snapshot.averageSessionMinutes ?? "—"} 分钟 · 预计释放 ${Array.isArray(snapshot.estimatedReleaseMinutes) ? snapshot.estimatedReleaseMinutes.slice(0, 4).join(" / ") : "—"} 分钟`],
       ["情景输入", `到站偏移 ${scenario.arrivalOffsetMinutes ?? scenario.etaMinutes ?? 0} 分钟 · 天气因子 ${scenario.weatherFactor ?? 1} · 需求因子 ${scenario.demandFactor ?? 1}`],
       ["当前输出", `排队 P50 ${Number(current.p50 ?? current.wait ?? 0).toFixed(1)} 分钟 · 排队 P90 ${Number(current.p90 ?? current.wait ?? 0).toFixed(1)} 分钟`],
@@ -1984,12 +1986,25 @@
     // 当前有可用端口时，不再凭等待分钟倒推“此刻正在排队”的车辆；否则
     // 页面会同时出现“空闲 3/12”和“排队 2 辆”的误导性组合。未来到站的
     // 预约需求仍单列为 reservationQueueAhead，并由预测模型在 ETA 时刻重排。
+    const averageSessionMinutes = station?.type === "加油站" ? 8 : 35;
+    // The old demo used the aggregate `wait` value as the release time for
+    // every occupied port, while the default arrival rate was much larger
+    // than the physical port throughput. Long routes then accumulated
+    // hundreds of phantom vehicles and showed six-hour P90 waits. Keep the
+    // visible station signal, but derive a coherent demo snapshot: current
+    // sessions release within one service window and demand is a conservative
+    // fraction of usable-port throughput. Real station feeds can replace it.
+    const usablePorts = Math.max(1, totalPorts - faultPorts);
+    const serviceRate = usablePorts / Math.max(1, averageSessionMinutes);
+    const arrivalRate = Number((serviceRate * (0.55 + occupancy * 0.25)).toFixed(3));
+    const waitSignal = Math.min(45, wait);
     const queueVehicles = availablePorts > 0
       ? 0
-      : Math.max(0, Math.min(24, Math.round(Math.max(0, wait - 4) / 6)));
-    const reservationQueueAhead = Math.max(0, Math.min(6, Math.floor(Math.max(0, wait - 24) / 18)));
-    const averageSessionMinutes = station?.type === "加油站" ? 8 : 35;
-    const estimatedReleaseMinutes = Array.from({ length: chargingPorts }, (_, index) => Number(Math.max(0, wait * (0.8 + (index % 4) * 0.1)).toFixed(1)));
+      : Math.max(0, Math.min(8, Math.round(Math.max(0, waitSignal - averageSessionMinutes * 0.25) / Math.max(1, averageSessionMinutes))));
+    const reservationQueueAhead = Math.max(0, Math.min(3, Math.floor(Math.max(0, waitSignal - averageSessionMinutes) / Math.max(6, averageSessionMinutes))));
+    const releaseSpan = Math.max(2, Math.round(averageSessionMinutes - 3));
+    const releaseSeed = stableHash(`port-release:${station?.id || station?.name || "station"}`);
+    const estimatedReleaseMinutes = Array.from({ length: chargingPorts }, (_, index) => Number((2 + ((releaseSeed + index * 17) % releaseSpan)).toFixed(1)));
     return {
       totalPorts,
       idlePorts,
@@ -2002,6 +2017,9 @@
       reservationQueueAhead,
       estimatedReleaseMinutes,
       averageSessionMinutes,
+      arrivalRate,
+      serviceRate: Number(serviceRate.toFixed(3)),
+      arrivalRateUnit: "vehicles/minute",
       snapshotTime: `simulation@${formatClock(state.departureMinutes)}`,
       dataSource: "FlowTwin 演示仿真 · 端口状态 + 预约队列推演",
       availabilitySource: "FlowTwin 演示补能位状态",
@@ -2298,6 +2316,18 @@
     const hours = String(Math.floor(normalized / 60)).padStart(2, "0");
     const minutes = String(normalized % 60).padStart(2, "0");
     return `${hours}:${minutes}`;
+  }
+
+  // Route arrivals are stored as elapsed minutes from the selected departure
+  // day. Showing only HH:MM made a next-day 01:17 look earlier than a same-day
+  // 22:03, which is misleading on long-trip comparisons.
+  function formatJourneyClock(totalMinutes) {
+    const numeric = Number(totalMinutes);
+    if (!Number.isFinite(numeric)) return "—";
+    const dayOffset = Math.max(0, Math.floor(numeric / 1440));
+    const clock = formatClock(numeric);
+    if (dayOffset === 0) return clock;
+    return dayOffset === 1 ? `次日 ${clock}` : `+${dayOffset}天 ${clock}`;
   }
 
   function formatDuration(minutes) {
@@ -4689,7 +4719,7 @@
     const name = button.querySelector(".option-name-text");
     button.classList.toggle("infeasible", !record.feasible);
     if (name) name.textContent = displayCopy(record.displayName || { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }[record.key]);
-    if (strong) strong.textContent = formatClock(record.arrival);
+    if (strong) strong.textContent = formatJourneyClock(record.arrival);
     const serviceName = record.servicePlan?.name || "";
     if (metrics) {
       metrics.innerHTML = displayCopy(record.directTrip
@@ -6440,16 +6470,16 @@
     const record = state.routeRecords[state.selectedRoute];
     if (!summary || !record) return;
     if (record.directTrip) {
-      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>直达 · 无需补能</strong><small>${formatClock(record.arrival)} 到达 · 余量 ${record.arrivalSoc}%</small>`;
+      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>直达 · 无需补能</strong><small>${formatJourneyClock(record.arrival)} 到达 · 余量 ${record.arrivalSoc}%</small>`;
       return;
     }
     if (record.serviceOnly) {
-      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>已加入 · ${escapeHtml(record.servicePlan?.name || "沿线服务")}</strong><small>${formatClock(record.arrival)} 到达 · 额外 ${record.servicePlan?.extraMinutes || 0} 分钟</small>`;
+      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>已加入 · ${escapeHtml(record.servicePlan?.name || "沿线服务")}</strong><small>${formatJourneyClock(record.arrival)} 到达 · 额外 ${record.servicePlan?.extraMinutes || 0} 分钟</small>`;
       return;
     }
     if (record.multiStop) {
       const serviceNote = record.servicePlan?.name ? ` · 含 ${escapeHtml(record.servicePlan.name)}` : "";
-      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>连续补能 ${record.stopCount} 次${serviceNote}</strong><small>${formatClock(record.arrival)} 到达 · 余量 ${record.arrivalSoc}%</small>`;
+      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>连续补能 ${record.stopCount} 次${serviceNote}</strong><small>${formatJourneyClock(record.arrival)} 到达 · 余量 ${record.arrivalSoc}%</small>`;
       return;
     }
     if (!record.station) {
@@ -6459,7 +6489,7 @@
       return;
     }
     const serviceNote = record.servicePlan?.name ? ` · 含 ${escapeHtml(record.servicePlan.name)}` : "";
-    summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>途经 · ${record.station.name}${serviceNote}</strong><small>${formatClock(record.arrival)} ${record.feasible ? "到达" : `· 超时 ${record.lateMinutes} 分`}</small>`;
+    summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>途经 · ${record.station.name}${serviceNote}</strong><small>${formatJourneyClock(record.arrival)} ${record.feasible ? "到达" : `· 超时 ${record.lateMinutes} 分`}</small>`;
   }
 
   function renderStopTimeline(record) {
@@ -6516,12 +6546,12 @@
         ? `高德主路线已核验；按沿线候选分配 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`
         : `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`;
       if (evidence[1]) evidence[1].textContent = `建议累计${isFuelActive() ? "加油" : "补能"} ${record.energyAmount} ${record.energyUnit}；补能停靠总耗时 P50 ${record.totalStopMinutesP50} 分 / P90 ${record.totalStopMinutesP90} 分（排队 P50 ${record.p50Wait} + 服务 ${record.serviceMinutes} + 支付驶离缓冲 ${record.paymentExitMinutes}）。`;
-      if (evidence[2]) evidence[2].textContent = `总绕行 ${Number(record.detour || 0).toFixed(1)} km · ${formatClock(record.arrival)} 抵达 · ${arrivalReserveDescription(record)}。`;
+      if (evidence[2]) evidence[2].textContent = `总绕行 ${Number(record.detour || 0).toFixed(1)} km · ${formatJourneyClock(record.arrival)} 抵达 · ${arrivalReserveDescription(record)}。`;
       renderServiceRecommendations(record);
       updateServiceNudge(record);
       return;
     }
-    if (evidence[0]) evidence[0].textContent = `首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到站余量 ${record.arrivalAtStationSoc ?? "—"}% · 绕行 ${record.station.detour} km，预计 ${formatClock(record.arrival)} 抵达${state.destinationName}`;
+    if (evidence[0]) evidence[0].textContent = `首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到站余量 ${record.arrivalAtStationSoc ?? "—"}% · 绕行 ${record.station.detour} km，预计 ${formatJourneyClock(record.arrival)} 抵达${state.destinationName}`;
     if (evidence[1]) evidence[1].textContent = record.targetSocMet
       ? `建议补能 ${record.energyAmount} ${record.energyUnit}，预计到达剩余 ${record.arrivalSoc}%（${arrivalReserveDescription(record)}）`
       : `当前单次补能无法满足${arrivalReserveDescription(record)}，建议增加补能站`;
@@ -6531,7 +6561,7 @@
       else if (record.isActualStable) evidence[2].textContent = `该方案 P90 排队 ${record.station.p90} 分钟，在可行方案中尾部排队风险最低`;
       else if (record.isActualFastest) evidence[2].textContent = `相较低风险方案，预计提前 ${Math.max(0, Math.abs(difference))} 分钟`;
       else if (record.isActualCheapest) evidence[2].textContent = `该方案总成本最低，仍满足当前到达约束`;
-      else evidence[2].textContent = `这是成本与风险的可解释备选方案，预计 ${formatClock(record.arrival)} 抵达`;
+      else evidence[2].textContent = `这是成本与风险的可解释备选方案，预计 ${formatJourneyClock(record.arrival)} 抵达`;
     }
     renderServiceRecommendations(record);
     updateServiceNudge(record);
@@ -6594,7 +6624,7 @@
     const evidence = $$(".evidence-row span");
     if (evidence[0]) evidence[0].textContent = `已将 ${record.servicePlan?.name || "沿线服务"} 作为独立停靠点加入高德路线。`;
     if (evidence[1]) evidence[1].textContent = `服务预计 ${record.servicePlan?.durationMinutes || 0} 分钟，额外增加 ${record.servicePlan?.extraMinutes || 0} 分钟。`;
-    if (evidence[2]) evidence[2].textContent = `重新计算后预计 ${formatClock(record.arrival)} 抵达，到达余量 ${record.arrivalSoc}%（${arrivalReserveDescription(record)}）。`;
+    if (evidence[2]) evidence[2].textContent = `重新计算后预计 ${formatJourneyClock(record.arrival)} 抵达，到达余量 ${record.arrivalSoc}%（${arrivalReserveDescription(record)}）。`;
     renderServiceRecommendations(record);
     refreshIcons();
   }
@@ -6667,7 +6697,7 @@
     const nearest = landmarks
       .map((item) => ({ item, delta: Math.abs(Number(item.routeProgress) - target) }))
       .sort((a, b) => a.delta - b.delta)[0];
-    if (nearest && nearest.delta <= 0.14) return `${nearest.item.name}附近`;
+    if (nearest && nearest.delta <= 0.14) return `${nearest.item.name}`;
     return `高德路线约 ${Math.round(target * 100)}% 处`;
   }
 
@@ -6730,8 +6760,8 @@
         return {
           kind: "meal",
           icon: "utensils",
-          title: `预计 ${formatClock(primary.targetMinute)} 在${locationLabel}进入用餐时段`,
-          text: `主路线纯驾驶约 ${driveLabel}。预计在${locationLabel}可以进行就餐或短暂休息，是否需要？确认后会在该位置附近检索服务并重算 ETA。${secondaryCopy}${weatherSuffix}`,
+          title: `预计 ${formatJourneyClock(primary.targetMinute)} 在${locationLabel}附近进入用餐时段`,
+          text: `主路线纯驾驶约 ${driveLabel}。预计在${locationLabel}附近可以进行就餐或短暂休息，是否需要？确认后会在该位置附近检索服务并重算 ETA。${secondaryCopy}${weatherSuffix}`,
           targetMinute: primary.targetMinute,
           progress,
           locationLabel
@@ -6740,7 +6770,7 @@
       return {
         kind: "rest",
         icon: "armchair",
-        title: `连续驾驶约 2 小时 · ${formatClock(primary.targetMinute)} 在${locationLabel}休息`,
+        title: `连续驾驶约 2 小时 · ${formatJourneyClock(primary.targetMinute)} 在${locationLabel}附近休息`,
         text: `高德主路线纯驾驶约 ${driveLabel}。预计在${locationLabel}附近短暂休息或喝咖啡，是否需要？这是疲劳驾驶提醒，确认后会按该位置检索顺路服务。${secondaryCopy}${weatherSuffix}`,
         targetMinute: primary.targetMinute,
         progress,
@@ -6755,7 +6785,7 @@
       return {
         kind: "coffee",
         icon: "coffee",
-        title: `全程约 ${driveLabel} · ${formatClock(targetMinute)} 在${locationLabel}短暂停靠`,
+        title: `全程约 ${driveLabel} · ${formatJourneyClock(targetMinute)} 在${locationLabel}附近短暂停靠`,
         text: `主路线纯驾驶约 ${driveLabel}。预计在${locationLabel}附近可以短暂停靠，是否需要？确认后会在该位置附近查看咖啡或休息建议。${weatherSuffix}`,
         targetMinute,
         progress,
@@ -6989,7 +7019,7 @@
     }
     if (suggestion.loading) {
       flow?.classList.add("is-recommended");
-      if (dwellLabel) dwellLabel.textContent = `正在检索 ${formatClock(suggestion.targetMinute)} 附近服务`;
+      if (dwellLabel) dwellLabel.textContent = `正在检索 ${formatJourneyClock(suggestion.targetMinute)} 附近服务`;
       container.innerHTML = '<div class="service-card"><i data-lucide="loader-circle"></i><span><strong>正在检索沿线真实 POI</strong><small>仅展示高德返回的餐饮、咖啡和休息候选。</small></span></div>';
       refreshIcons();
       return;
@@ -6997,7 +7027,7 @@
     const options = suggestion.options || [];
     flow?.classList.toggle("is-recommended", options.length > 0);
     const excludedByDeadline = Number(suggestion.filteredOutCount || 0);
-    if (dwellLabel) dwellLabel.textContent = `预计 ${formatClock(suggestion.targetMinute)} 在${suggestion.locationLabel || serviceLocationLabel(record, suggestion.progress)}附近经过 · 高德真实 POI`;
+    if (dwellLabel) dwellLabel.textContent = `预计 ${formatJourneyClock(suggestion.targetMinute)} 在${suggestion.locationLabel || serviceLocationLabel(record, suggestion.progress)}附近经过 · 高德真实 POI`;
     const requestedName = String(suggestion.requestedServiceName || "").trim();
     const hasExact = Boolean(suggestion.exactMatchFound);
     container.innerHTML = options.length
@@ -9425,7 +9455,7 @@
       baseDistance: Number(record.baseDistance?.toFixed ? record.baseDistance.toFixed(2) : record.baseDistance),
       detour: record.station?.detour || null,
       closestPathToStationKm: record.station?.location && record.path ? Number(nearestPointDistance(record.station.location, record.path).toFixed(3)) : null,
-      arrival: Number.isFinite(record.arrival) ? formatClock(record.arrival) : null,
+      arrival: Number.isFinite(record.arrival) ? formatJourneyClock(record.arrival) : null,
       totalMinutes: Number.isFinite(record.total) ? Number(record.total.toFixed(2)) : null,
       cost: Number.isFinite(record.cost) ? Number(record.cost.toFixed(2)) : null,
       p90: record.station?.p90 || null,
