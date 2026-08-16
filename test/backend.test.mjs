@@ -404,6 +404,33 @@ test("ambiguous 东方明珠 is canonicalized to the Shanghai landmark before ge
   assert.deepEqual(result.locations.destination.coordinate, [121.4997, 31.2397]);
 });
 
+test("the stock 东方明珠 prompt resolves an exact landmark instead of opening a redundant picker", async () => {
+  const result = await parseTripIntent({
+    message: "从能链北京总部前往上海东方明珠广播电视塔，优先准时",
+    config: { webServiceKey: "geo-key" },
+    fetchImpl: async (url) => {
+      if (String(url).includes("place/text")) {
+        return new Response(JSON.stringify({
+          status: "1",
+          pois: [
+            { name: "东方明珠广播电视塔", location: "121.499718,31.239703", type: "风景名胜", typecode: "110200", pname: "上海市", cityname: "上海市", adname: "浦东新区" },
+            { name: "上海东方明珠广播电视塔有限公司", location: "121.499764,31.239910", type: "公司企业", typecode: "120000", pname: "上海市", cityname: "上海市", adname: "浦东新区" }
+          ]
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        status: "1",
+        geocodes: [{ formatted_address: "东方明珠广播电视塔", province: "上海市", city: "上海市", district: "浦东新区", location: "121.499718,31.239703", level: "兴趣点" }]
+      }), { status: 200 });
+    }
+  });
+  assert.equal(result.locations.destination.needsPick, false);
+  assert.deepEqual(result.locations.destination.coordinate, [121.499718, 31.239703]);
+  const publicResult = formatPlanResponse(result);
+  assert.deepEqual(publicResult.destinationLocation, [121.499718, 31.239703]);
+  assert.equal(publicResult.destinationNeedsPick, false);
+});
+
 test("华山 is canonicalized to 西岳华山风景区 (not the same-named Jinan park) and prefers scenic POI", async () => {
   const requestedUrls = [];
   const result = await parseTripIntent({
