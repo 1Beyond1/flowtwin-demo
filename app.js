@@ -8461,7 +8461,11 @@
         occupancy: Number(station.occupancy || 0),
         capacity: Number(station.capacity || 0) || undefined,
         demand: Number(station.demand || 0) || undefined,
-        serviceRate: Number(station.serviceRate || 0) || undefined,
+        // 路线预测中的 serviceRate 是“端口/分钟”，与运营沙盘的“窗口服务能力”
+        // 不是同一量纲；直接传入会把承接窗口错误压缩为 10%，造成全零分流。
+        // 仅在后续接入显式运营字段时才传 windowServiceRate，否则由后端用
+        // capacity 与 windowCapacity 的同口径基线计算。
+        serviceRate: Number(meta.windowServiceRate || 0) || undefined,
         detour: Number(station.detourKm ?? station.detour ?? 0),
         partner: meta.partner === true,
         controllable: meta.controllable === true,

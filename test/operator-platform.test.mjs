@@ -118,8 +118,37 @@ test("non-partner or non-accepted stations are navigation-only and cannot be sel
     ["blocked", "unaccepted"]
   );
   assert.equal(result.execution.targetStationId, "target");
-  assert.equal(result.stations.find((station) => station.id === "blocked").changedDemand, 0);
-  assert.equal(result.stations.find((station) => station.id === "unaccepted").changedDemand, 0);
+  assert.equal(result.stations.find((station) => station.id === "blocked").executionEligible, false);
+  assert.equal(result.stations.find((station) => station.id === "unaccepted").executionEligible, false);
+});
+
+test("an observable non-partner peak station can be a diversion source without becoming an execution target", () => {
+  const result = simulateOperator({
+    ...economics,
+    platformCoupon: 8,
+    targetStationId: "target",
+    stations: [
+      {
+        ...stations[0],
+        id: "external-peak",
+        name: "站外高峰站",
+        partner: false,
+        controllable: false,
+        couponEligible: false,
+        merchantAccepted: false,
+        occupancy: 0.92,
+        wait: 28,
+        demand: 16
+      },
+      stations[1]
+    ]
+  });
+
+  assert.equal(result.targetStation.id, "target");
+  assert.equal(result.execution.executable, true);
+  assert.ok(result.impact.divertedVehicles > 0);
+  assert.ok(result.stations.find((station) => station.id === "external-peak").changedDemand < 0);
+  assert.equal(result.stations.find((station) => station.id === "external-peak").executionEligible, false);
 });
 
 test("legacy calls remain usable but economic output is explicitly labelled as scenario data", () => {
