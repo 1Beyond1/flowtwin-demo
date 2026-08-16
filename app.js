@@ -5015,6 +5015,7 @@
     const reserved = firstFinite(input.reservedPorts, canonical?.reservedPorts, state.selectedStation?.reservedPorts, stop?.reservedPorts, fallback.reservedPorts);
     const idle = firstFinite(input.idlePorts, canonical?.idlePorts, state.selectedStation?.idlePorts, stop?.idlePorts, fallback.idlePorts);
     const available = firstFinite(input.availablePorts, Number.isFinite(idle) && Number.isFinite(reserved) ? idle - reserved : undefined, canonical?.availablePorts, state.selectedStation?.availablePorts, stop?.availablePorts, fallback.availablePorts, fallback.idlePorts);
+    const arrivalAvailable = firstFinite(canonical?.prediction?.availablePorts, canonical?.arrivalForecast?.availablePorts, stop?.prediction?.availablePorts, stop?.arrivalForecast?.availablePorts, available);
     const reservationQueueAhead = firstFinite(input.reservationQueueAhead, canonical?.reservationQueueAhead, state.selectedStation?.reservationQueueAhead, stop?.reservationQueueAhead, fallback.reservationQueueAhead);
     const charging = firstFinite(input.chargingPorts, canonical?.chargingPorts, state.selectedStation?.chargingPorts, stop?.chargingPorts, fallback.chargingPorts);
     const fault = firstFinite(input.faultPorts, canonical?.faultPorts, state.selectedStation?.faultPorts, stop?.faultPorts, fallback.faultPorts);
@@ -5027,6 +5028,7 @@
       queue,
       idle,
       available,
+      arrivalAvailable,
       total,
       reserved,
       reservationQueueAhead,
@@ -5241,17 +5243,18 @@
     const after = simulation.reservationAfterSnapshot || before;
     const snapshot = after || before;
     const numberText = (value, suffix = "") => Number.isFinite(Number(value)) ? `${Number(value)}${suffix}` : "—";
-    const available = Number.isFinite(Number(snapshot.available)) ? `${snapshot.available}/${numberText(snapshot.total)}` : "—";
+     const available = Number.isFinite(Number(snapshot.available)) ? `${snapshot.available}/${numberText(snapshot.total)}` : "—";
+     const arrivalAvailable = Number.isFinite(Number(snapshot.arrivalAvailable)) ? `${snapshot.arrivalAvailable}/${numberText(snapshot.total)}` : "—";
     const queue = numberText(snapshot.queue, " 辆");
     const reservationAhead = numberText(snapshot.reservationQueueAhead, " 辆");
     const beforeAfter = Number.isFinite(Number(before.waitP50)) && Number.isFinite(Number(after.waitP50))
       ? `P50 ${before.waitP50} → ${after.waitP50} 分钟；P90 ${numberText(before.waitP90, " 分钟")} → ${numberText(after.waitP90, " 分钟")}`
       : "预约前后等待预测将在可用输入完整时对比";
-    const eta = formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes));
+    const eta = formatJourneyClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes));
     const station = escapeHtml(phase.stop?.name || "下一补能站");
     panel.innerHTML = [
       `<div class="simulation-reservation-evidence-row"><strong>触发条件</strong><span>车辆预计 ${eta} 到达「${station}」，系统在接近站点前预先写入预约状态。</span></div>`,
-      `<div class="simulation-reservation-evidence-row"><strong>输入快照</strong><span>可用补能位 ${available} · 充电中 ${numberText(snapshot.charging, " 个")} · 已预约 ${numberText(snapshot.reserved, " 个")} · 已到站等待 ${queue} · 预约队列前方 ${reservationAhead}。</span></div>`,
+       `<div class="simulation-reservation-evidence-row"><strong>输入快照</strong><span>当前可用补能位 ${available} · 预计到站可用 ${arrivalAvailable} · 充电中 ${numberText(snapshot.charging, " 个")} · 已预约 ${numberText(snapshot.reserved, " 个")} · 已到站等待 ${queue} · 预约队列前方 ${reservationAhead}。</span></div>`,
       `<div class="simulation-reservation-evidence-row"><strong>计算过程</strong><span>把本车预计到站时刻加入端口离散事件队列，按端口释放时间、平均服务时长和预约队列前方车辆重新排程，再输出等待 P50/P90。</span></div>`,
       `<div class="simulation-reservation-evidence-row"><strong>本次结果</strong><span>${beforeAfter}</span></div>`,
       `<div class="simulation-reservation-evidence-row"><strong>数据边界</strong><span>${escapeHtml(String(snapshot.source || "FlowTwin 演示仿真"))}；这是本地演示/企业需求先验推演，不是实时站点经营数据。</span></div>`
@@ -5329,7 +5332,7 @@
     }
     const snapshot = simulationSnapshotFor(phase.stop);
     if (text) text.textContent = phase.type === "reservation"
-      ? `预约已自动触发。车辆继续沿高德路线行驶，预计 ${formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))} 到达${phase.stop?.name || "下一补能站"}。`
+       ? `预约已自动触发。车辆继续沿高德路线行驶，预计 ${formatJourneyClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))} 到达${phase.stop?.name || "下一补能站"}。`
       : simulationSceneText(phase);
     let dataGrid = byId("simulationDataGrid");
     if (!dataGrid) {
@@ -5343,11 +5346,11 @@
       : "待执行本地 OCR";
     const paymentPlate = state.simulation.recognizedPlate || (state.simulation.ocrFallbackUsed ? "预置样例车牌" : "已识别车牌");
     const stageItems = phase.type === "reservation"
-      ? [["预约状态", state.simulation.reservationPending ? "计算中" : "已自动预约"], ["预计到站", formatClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))]]
+      ? [["预约状态", state.simulation.reservationPending ? "计算中" : "已自动预约"], ["预计到站", formatJourneyClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes))]]
         : phase.type === "recognition"
           ? [["车牌链路", recognitionValue], ["到站状态", "已进入识别区"]]
         : phase.type === "queue"
-          ? [["到站预计排队 P50", simulationMetricValue(snapshot.waitP50, " 分钟")], ["到站尾部排队 P90", simulationMetricValue(snapshot.waitP90, " 分钟")], ["当前可用补能位", Number.isFinite(snapshot.available) ? `${snapshot.available}/${snapshot.total}` : "—"], ["当前等待/预约", simulationMetricValue((Number(snapshot.queue) || 0) + (Number(snapshot.reservationQueueAhead) || 0), " 辆")]]
+      ? [["到站预计排队 P50", simulationMetricValue(snapshot.waitP50, " 分钟")], ["到站尾部排队 P90", simulationMetricValue(snapshot.waitP90, " 分钟")], ["当前 / 到站可用", `${Number.isFinite(snapshot.available) ? `${snapshot.available}/${snapshot.total}` : "—"} / ${Number.isFinite(snapshot.arrivalAvailable) ? `${snapshot.arrivalAvailable}/${snapshot.total}` : "—"}`], ["当前等待/预约", simulationMetricValue((Number(snapshot.queue) || 0) + (Number(snapshot.reservationQueueAhead) || 0), " 辆")]]
           : phase.type === "service"
             ? [[isFuelActive() ? "加油服务" : "充电服务", simulationMetricValue(snapshot.service, " 分钟")], ["预约占用", simulationMetricValue(snapshot.reserved, " 个")]]
           : phase.type === "payment"
