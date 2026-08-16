@@ -1944,7 +1944,10 @@
           energyType: state.energyType,
           weatherFactor: state.weather?.weatherFactor
         }
-      }, 20000);
+      // 首次全国规划会在本地完成候选压缩、预测和有界序列搜索；20 秒在
+      // 冷缓存或浏览器刚完成地图初始化时过短，会由客户端主动中止一个仍在
+      // 正常计算的本地接口。沿用通用请求的 45 秒上限，仍保持明确边界。
+      }, 45000);
       if (requestId === state.forecastRequestVersion && state.selectedStation?.id === station.id) renderForecast(station, payload);
     } catch (error) {
       if (status) status.textContent = "本地演示预测";
@@ -4724,6 +4727,17 @@
     const tag = button.querySelector(".option-tag");
     const name = button.querySelector(".option-name-text");
     button.classList.toggle("infeasible", !record.feasible);
+    // 规划服务失败时，不能再借用基础路线的到达时间渲染成“最快/最低成本”
+    // 卡片。那会让用户以为系统给出了备用路线，实际却没有通过多站安全核验。
+    if (record.planningFailure) {
+      if (name) name.textContent = "长途规划未完成";
+      if (strong) strong.textContent = "—";
+      if (metrics) metrics.innerHTML = displayCopy("<span>安全全程方案 <b>未生成</b></span><span>请重新规划</span>");
+      if (tag) tag.textContent = "可重试";
+      if (stationLine) stationLine.textContent = displayCopy(record.planningFailure);
+      if (reason) reason.textContent = "本次不展示未经逐段安全核验的备用路线；请重新提交行程后重试。";
+      return;
+    }
     if (name) name.textContent = displayCopy(record.displayName || { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }[record.key]);
     if (strong) strong.textContent = formatJourneyClock(record.arrival);
     const serviceName = record.servicePlan?.name || "";
@@ -6066,7 +6080,14 @@
 
   function renderRouteCards() {
     calculateRouteRecords();
-    const displayGroups = buildRouteDisplayGroups(state.routeRecords);
+    const candidateGroups = buildRouteDisplayGroups(state.routeRecords);
+    // 所有记录都处于同一轮长途规划失败时，只保留一张明确的失败卡。不能把
+    // 多个未核验的基础路线称作“备用方案”，更不能显示它们的旧 ETA。
+    const allPlanningFailed = candidateGroups.length > 0
+      && candidateGroups.every((group) => Boolean(state.routeRecords[group.representative]?.planningFailure));
+    const displayGroups = allPlanningFailed
+      ? [candidateGroups.find((group) => group.keys.includes("reliable")) || candidateGroups[0]]
+      : candidateGroups;
     state.routeDisplayGroups = displayGroups;
     state.routeDisplayKeys = displayGroups.map((group) => group.representative);
     const selectedGroup = displayGroups.find((group) => group.keys.includes(state.selectedRoute));
@@ -6114,17 +6135,23 @@
     $$(".route-option").forEach((button) => button.classList.toggle("selected", button.dataset.route === state.selectedRoute));
     const feasibleCount = displayGroups.filter((group) => state.routeRecords[group.representative]?.feasible).length;
     const heading = $(".sheet-heading h2");
-    if (heading) heading.textContent = allSameRoute
+    if (heading) heading.textContent = allPlanningFailed
+      ? "本次长途规划未完成"
+      : allSameRoute
       ? (state.routeRecords[displayGroups[0].representative]?.feasible ? "最佳方案" : "当前方案不可执行")
       : feasibleCount === displayGroups.length
         ? `${displayGroups.length} 条可行方案`
         : `${feasibleCount} 条可行 · ${displayGroups.length - feasibleCount} 条备用`;
     const headingNote = $(".sheet-heading span");
-    if (headingNote) headingNote.textContent = allSameRoute
+    if (headingNote) headingNote.textContent = allPlanningFailed
+      ? "未展示未通过逐段安全核验的路线，请重新提交后重试"
+      : allSameRoute
       ? "时间、风险与成本均落在同一条可执行路线上"
       : "按最终时间、风险和成本生成可解释对比";
     const expandLabel = byId("expandRoutes")?.querySelector("span");
-    if (expandLabel) expandLabel.textContent = allSameRoute
+    if (expandLabel) expandLabel.textContent = allPlanningFailed
+      ? "长途规划未完成"
+      : allSameRoute
       ? "最佳方案"
       : `${displayGroups.length} 条补能方案`;
     renderActiveRouteSummary();
