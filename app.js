@@ -22,6 +22,7 @@
   const Z90 = 1.2816;
   const DEFAULT_LONG_TRIP_MAX_STOPS = 6;
   const ADAPTIVE_LONG_TRIP_MAX_STOPS = 12;
+  const COMPLETED_ROUTE_PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
   const DEFAULT_VISION_SAMPLE_URL = "/assets/vision/default-camera-scene.png";
   // 地图/演示输入没有支付与驶离事件时间。单独保留一个透明的缓冲项，
   // 避免把这段时间偷偷塞进“排队”等字段；后续企业适配器可以按站点覆盖。
@@ -140,6 +141,11 @@
     origin: FALLBACK.origin,
     destination: FALLBACK.destination,
     routeRecords: {},
+    // Reuses a completed *demo-simulation* plan during the same short forecast
+    // slot. Raw AMap responses are cached server-side independently; this
+    // layer avoids repeating the browser's POI collection and leg validation
+    // when a reviewer submits the exact same trip again.
+    completedRoutePlanCache: new Map(),
     routeDisplayKeys: [],
     routeDisplayGroups: [],
     routeCandidates: {},
@@ -9114,6 +9120,82 @@
     }
   }
 
+  function clonePlanCacheValue(value) {
+    // Cached records are data-only route/station objects. JSON cloning keeps
+    // future reservation or simulation interactions from mutating the cache.
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function completedPlanCacheKey(baseRoutes = {}) {
+    const routeSignature = Object.entries(baseRoutes)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, route]) => `${key}:${routeDisplayIdentity(route)}`)
+      .join("|");
+    const departureBucket = Math.floor(Number(state.departureMinutes || 0) / 5) * 5;
+    return [
+      "demo-route-v1",
+      state.origin.map((value) => Number(value).toFixed(5)).join(","),
+      state.destination.map((value) => Number(value).toFixed(5)).join(","),
+      routeSignature,
+      state.energyType,
+      state.hybridBranch,
+      Number(state.energyPercent).toFixed(1),
+      Number(state.hybridLevels?.electric || 0).toFixed(1),
+      Number(state.hybridLevels?.fuel || 0).toFixed(1),
+      Number(effectiveArrivalReserveSoc(getEnergyProfile(isFuelActive()))).toFixed(1),
+      Number(effectiveLongTripDetourLimit(baseRoutes.reliable || state.routeRecords.reliable)).toFixed(1),
+      state.priority,
+      state.deadlineEnabled ? Number(state.deadlineMinutes || 0) : "none",
+      departureBucket,
+      state.selectedService?.id || "none"
+    ].join("::");
+  }
+
+  function readCompletedRoutePlan(key) {
+    const entry = state.completedRoutePlanCache.get(key);
+    if (!entry || entry.expiresAt <= Date.now()) {
+      state.completedRoutePlanCache.delete(key);
+      return null;
+    }
+    return clonePlanCacheValue(entry.value);
+  }
+
+  function writeCompletedRoutePlan(key) {
+    const value = {
+      stations: state.stations,
+      routeRecords: state.routeRecords,
+      routeCandidates: state.routeCandidates,
+      multiStopRouteRecords: state.multiStopRouteRecords,
+      multiStopPlanningMeta: state.multiStopPlanningMeta,
+      recommendedRoute: state.recommendedRoute,
+      provisionalCorridorActive: state.provisionalCorridorActive
+    };
+    state.completedRoutePlanCache.set(key, {
+      value: clonePlanCacheValue(value),
+      expiresAt: Date.now() + COMPLETED_ROUTE_PLAN_CACHE_TTL_MS
+    });
+    // This is a UI responsiveness cache, not an unbounded trip history.
+    while (state.completedRoutePlanCache.size > 12) {
+      state.completedRoutePlanCache.delete(state.completedRoutePlanCache.keys().next().value);
+    }
+  }
+
+  function restoreCompletedRoutePlan(cached) {
+    state.stations = cached.stations || [];
+    state.routeRecords = cached.routeRecords || {};
+    state.routeCandidates = cached.routeCandidates || {};
+    state.multiStopRouteRecords = cached.multiStopRouteRecords || null;
+    state.multiStopPlanningMeta = cached.multiStopPlanningMeta || null;
+    state.recommendedRoute = cached.recommendedRoute || "reliable";
+    state.provisionalCorridorActive = cached.provisionalCorridorActive || false;
+    state.selectedStation = null;
+    state.stationForecastScenarioKey = `completed-cache:${Math.floor(Number(state.departureMinutes || 0) / 5)}`;
+    renderStationSummary();
+    clearStationOverlays();
+    addAmapEndpoints();
+    renderLiveStationMarkers();
+  }
+
   async function recomputePlan(options = {}) {
     const manageButton = options.manageButton !== false;
     if (manageButton) setComposerSubmitting(true);
@@ -9158,8 +9240,16 @@
       }
       state.routeRecords = fillMissingObjectivesWithRealRoutes(liveRecords, Object.keys(policies));
       state.baseRouteRecords = Object.assign({}, state.routeRecords);
-      await queryStations();
-      await replanRoutesViaStations();
+      const completedKey = completedPlanCacheKey(state.baseRouteRecords);
+      const cachedPlan = readCompletedRoutePlan(completedKey);
+      if (cachedPlan) {
+        restoreCompletedRoutePlan(cachedPlan);
+        showToast("已复用同一补能状态下的路线与补能方案", 2200);
+      } else {
+        await queryStations();
+        await replanRoutesViaStations();
+        writeCompletedRoutePlan(completedKey);
+      }
       drawAmapRoutes();
       fitAmapView();
       setMapStatus("高德地图已连接 · 真实路线与 POI 已更新", "ready");
