@@ -921,12 +921,28 @@ async function feishuApproveApi(request, response, strategyRecordId) {
   return json(response, 200, result);
 }
 
+export function isBlockedStaticRequest(requestedPath) {
+  const requested = String(requestedPath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  const basename = requested.split("/").at(-1) || "";
+  const protectedNames = new Set(["server.mjs", "package.json", "package-lock.json"]);
+  const protectedDirectories = [".git", "runtime", "data", "cv-service", "lib", "test", "docs", "node_modules"];
+  return !requested
+    || requested.includes("..")
+    || protectedNames.has(requested)
+    || /^\.env(?:[.-]|$)/i.test(basename)
+    || /^config\.local\.js(?:[.-]|$)/i.test(basename)
+    || protectedDirectories.some((directory) => requested === directory || requested.startsWith(`${directory}/`));
+}
+
 async function staticFile(pathname, response) {
-  const requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
-  const protectedNames = new Set([".env", ".env.example", "config.local.js", "server.mjs", "package.json", "package-lock.json"]);
-  if (protectedNames.has(requested) || requested.startsWith(".git") || requested.includes("..")
-    || requested === "runtime" || requested.startsWith("runtime/")
-    || requested === "data" || requested.startsWith("data/")) {
+  let requested;
+  try {
+    requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
+  } catch {
+    response.writeHead(404).end();
+    return;
+  }
+  if (isBlockedStaticRequest(requested)) {
     response.writeHead(404).end();
     return;
   }
