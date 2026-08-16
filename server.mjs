@@ -926,12 +926,17 @@ export function isBlockedStaticRequest(requestedPath) {
   const basename = requested.split("/").at(-1) || "";
   const protectedNames = new Set(["server.mjs", "package.json", "package-lock.json"]);
   const protectedDirectories = [".git", "runtime", "data", "cv-service", "lib", "test", "docs", "node_modules"];
+  const publicRootFiles = new Set(["index.html", "app.js", "service-intent.js", "favicon.ico", "manifest.webmanifest"]);
   return !requested
     || requested.includes("..")
     || protectedNames.has(requested)
     || /^\.env(?:[.-]|$)/i.test(basename)
     || /^config\.local\.js(?:[.-]|$)/i.test(basename)
-    || protectedDirectories.some((directory) => requested === directory || requested.startsWith(`${directory}/`));
+    || protectedDirectories.some((directory) => requested === directory || requested.startsWith(`${directory}/`))
+    // The browser only needs the entry HTML, its two scripts, and public image
+    // assets. Treat every other local file as private by default so a newly
+    // created log, handoff note, or deployment artifact cannot become public.
+    || !(publicRootFiles.has(requested) || requested.startsWith("assets/"));
 }
 
 async function staticFile(pathname, response) {
