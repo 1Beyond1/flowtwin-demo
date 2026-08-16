@@ -2612,7 +2612,9 @@
     const requiredFlags = ["partner", "controllable", "couponEligible", "merchantAccepted"];
     if (!requiredFlags.every((field) => Object.prototype.hasOwnProperty.call(meta, field))) return false;
     const windowCapacity = Number(meta.windowCapacity);
-    return Number.isFinite(windowCapacity) && windowCapacity > 0;
+    const operatorCapacity = Number(meta.operatorCapacity);
+    return Number.isFinite(windowCapacity) && windowCapacity > 0
+      && Number.isFinite(operatorCapacity) && operatorCapacity > 0;
   }
 
   function decorateOperatorDemoStations(stations) {
@@ -2649,6 +2651,9 @@
         controllable: eligible,
         couponEligible: eligible,
         merchantAccepted: eligible,
+        // 运营沙盘和窗口容量必须共享同一个容量基线；否则后端会按 station.id
+        // 重新猜一个容量，可能让 demand 大于 windowCapacity，表现为全零分流。
+        operatorCapacity: Number(capacity.toFixed(2)),
         windowCapacity: Number((capacity * (eligible ? 0.82 : 0.68)).toFixed(2)),
         platformCoupon: OPERATOR_DEMO_DEFAULTS.platformCoupon,
         merchantCouponShare: OPERATOR_DEMO_DEFAULTS.merchantCouponShare,
@@ -8495,7 +8500,9 @@
         p90: Number(station.p90 || station.wait || 0),
         wait: Number(station.wait || station.p50 || 0),
         occupancy: Number(station.occupancy || 0),
-        capacity: Number(station.capacity || 0) || undefined,
+        // 高德 POI 通常没有充电口数量。缺失时使用前端演示元数据里的同一容量
+        // 基线，不能让后端重新按站点哈希生成另一套 capacity/demand。
+        capacity: Number(station.capacity || 0) || Number(meta.operatorCapacity) || undefined,
         demand: Number(station.demand || 0) || undefined,
         // 路线预测中的 serviceRate 是“端口/分钟”，与运营沙盘的“窗口服务能力”
         // 不是同一量纲；直接传入会把承接窗口错误压缩为 10%，造成全零分流。
