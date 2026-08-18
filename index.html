@@ -2587,6 +2587,78 @@
         background: #e6f5f0;
         color: #16725f;
       }
+
+      .planning-decision-chain {
+        margin: 10px 0;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--surface-soft);
+      }
+
+      .planning-decision-chain-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 7px;
+      }
+
+      .planning-decision-chain-head strong {
+        color: var(--text);
+        font-size: 11px;
+      }
+
+      .planning-decision-chain-head span {
+        color: var(--quiet);
+        font-size: 8px;
+        text-align: right;
+      }
+
+      .planning-decision-chain-list {
+        display: grid;
+        gap: 5px;
+      }
+
+      .planning-decision-step {
+        display: grid;
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 8px;
+        padding: 7px 8px;
+        border-left: 2px solid var(--line);
+        background: var(--surface-solid);
+      }
+
+      .planning-decision-step[data-state="pass"] { border-left-color: var(--teal); }
+      .planning-decision-step[data-state="warn"] { border-left-color: var(--amber); }
+
+      .planning-decision-step > span {
+        color: var(--quiet);
+        font-family: var(--mono);
+        font-size: 8px;
+        line-height: 1.45;
+      }
+
+      .planning-decision-step strong,
+      .planning-decision-step small {
+        display: block;
+      }
+
+      .planning-decision-step strong {
+        overflow: hidden;
+        color: var(--text);
+        font-size: 10px;
+        line-height: 1.35;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .planning-decision-step small {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 8px;
+        line-height: 1.4;
+      }
       @media (max-width: 720px) {
         .parsed-intent-comparison-grid { grid-template-columns: 1fr; }
         .parsed-intent-comparison-status { max-width: 58%; }
@@ -5443,6 +5515,15 @@
           <div class="destination-candidates" id="destinationCandidates" hidden></div>
           <div class="ai-thinking" id="aiThinking" hidden>正在理解约束并调用规划工具</div>
         </div>
+        <section class="planning-decision-chain" id="planningDecisionChain" aria-label="本轮规划决策链" hidden data-reviewer-only>
+          <div class="planning-decision-chain-head"><strong>本轮决策链</strong><span>每层只处理其可验证职责</span></div>
+          <div class="planning-decision-chain-list">
+            <article class="planning-decision-step" id="decisionIntentStep" data-state="idle"><span>01 · 语义入口</span><div><strong id="decisionIntentValue">等待解析</strong><small id="decisionIntentNote">复杂语义按需调用 AI，硬约束由规则复核</small></div></article>
+            <article class="planning-decision-step" id="decisionMapStep" data-state="idle"><span>02 · 地图事实</span><div><strong id="decisionMapValue">等待路线</strong><small id="decisionMapNote">坐标、道路、里程与 POI 不由大模型生成</small></div></article>
+            <article class="planning-decision-step" id="decisionPriorStep" data-state="idle"><span>03 · 需求预测</span><div><strong id="decisionPriorValue">等待站点预测</strong><small id="decisionPriorNote">企业先验与演示站态分开标记</small></div></article>
+            <article class="planning-decision-step" id="decisionOptimizerStep" data-state="idle"><span>04 · 安全规划</span><div><strong id="decisionOptimizerValue">等待方案</strong><small id="decisionOptimizerNote">统一核算行驶、等待、服务与驶离时间</small></div></article>
+          </div>
+        </section>
         <section class="service-nudge" id="serviceNudge" aria-live="polite" hidden>
           <i id="serviceNudgeIcon" data-lucide="utensils"></i>
           <div>

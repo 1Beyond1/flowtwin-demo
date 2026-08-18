@@ -206,6 +206,7 @@
     aiContext: null,
     parseAnalysis: null,
     aiHealth: { state: "checking", configured: null },
+    lastPlanAiStatus: { state: "idle", label: "等待出行需求", meta: "" },
     aiActive: false,
     voiceAutoPlan: true,
     lastIntentSignature: null,
@@ -1058,6 +1059,61 @@
     if (!message) clearDestinationCandidates();
   }
 
+  function setPlanningDecisionStep(id, status, value, note) {
+    const step = byId(`${id}Step`);
+    if (step) step.dataset.state = status || "idle";
+    setText(`${id}Value`, value);
+    setText(`${id}Note`, note);
+  }
+
+  function renderPlanningDecisionChain(hasPlan = state.hasPlannedRoute) {
+    const chain = byId("planningDecisionChain");
+    if (!chain) return;
+    chain.hidden = !hasPlan;
+    if (!hasPlan) return;
+
+    const aiState = state.lastPlanAiStatus?.state || "rules";
+    if (aiState === "ready") {
+      setPlanningDecisionStep("decisionIntent", "pass", "AI + 规则协同完成", "模型处理语义，最终字段逐项通过本地规则校验");
+    } else if (aiState === "fallback") {
+      setPlanningDecisionStep("decisionIntent", "warn", "AI 降级 · 规则完成", "模型不可用时保留可复现的核心规划能力");
+    } else if (aiState === "loading") {
+      setPlanningDecisionStep("decisionIntent", "idle", "正在理解需求", "等待解析链路返回本轮实际状态");
+    } else {
+      setPlanningDecisionStep("decisionIntent", "pass", "规则已覆盖 · 未调用 AI", "明确请求命中成本门，省去没有业务增量的 Token");
+    }
+
+    setPlanningDecisionStep(
+      "decisionMap",
+      state.live ? "pass" : "warn",
+      state.live ? "高德真实路线与 POI" : "固定场景回退",
+      state.live ? "经纬度、道路、里程和 ETA 来自地图服务" : "地图能力不可用时不冒充实时道路结果"
+    );
+
+    const priorMatches = state.stations.filter((station) => station.forecastEnterprisePrior?.matched === true).length;
+    const forecastCount = state.stations.filter((station) => station.forecastMethod).length;
+    setPlanningDecisionStep(
+      "decisionPrior",
+      priorMatches > 0 ? "pass" : forecastCount > 0 ? "warn" : "idle",
+      priorMatches > 0 ? `企业需求先验匹配 ${priorMatches} 个站` : forecastCount > 0 ? "演示站态仿真" : "等待站点预测",
+      priorMatches > 0
+        ? "城市 × 动力类型 × 小时先验叠加预计到站时刻"
+        : forecastCount > 0
+          ? "未命中企业先验时明确保留仿真标签"
+          : "预测返回后会同步本轮来源"
+    );
+
+    const groups = state.routeDisplayGroups || [];
+    const feasibleCount = groups.filter((group) => state.routeRecords[group.representative]?.feasible).length;
+    const planningFailed = groups.length > 0 && groups.every((group) => state.routeRecords[group.representative]?.planningFailure);
+    setPlanningDecisionStep(
+      "decisionOptimizer",
+      planningFailed || feasibleCount === 0 ? "warn" : "pass",
+      planningFailed ? "逐段安全核验未完成" : `${feasibleCount} 条可行 · ${groups.length} 条去重方案`,
+      "能源可达性 + 绕行 + 排队 + 补能服务 + 驶离缓冲统一比较"
+    );
+  }
+
   function setPlanningVisibility(hasPlan) {
     byId("app")?.classList.toggle("has-plan", Boolean(hasPlan));
     if (hasPlan) byId("intentInput")?.blur();
@@ -1100,6 +1156,7 @@
       const healthState = state.aiHealth?.state || "unknown";
       setAiStatus(aiHealthLabel(healthState), healthState);
     }
+    renderPlanningDecisionChain(Boolean(hasPlan));
     updateComposerActionLabel();
   }
 
@@ -2170,6 +2227,7 @@
         });
       });
       state.stationForecastScenarioKey = scenarioKey;
+      renderPlanningDecisionChain();
       if (state.operatorOriginalStations.length) {
         state.operatorOriginalStations = state.stations.map((station) => Object.assign({}, station));
         state.operatorBefore = computeOperatorSnapshot(state.stations);
@@ -6169,6 +6227,7 @@
       ? "最佳方案"
       : `${displayGroups.length} 条补能方案`;
     renderActiveRouteSummary();
+    renderPlanningDecisionChain();
     renderHybridCompare();
     updateInsight(state.routeRecords[state.selectedRoute]);
     syncArrivalPayment();
@@ -8049,6 +8108,7 @@
     clearDestinationCandidates();
     state.hybridFailedBranches = new Set();
     state.aiActive = true;
+    state.lastPlanAiStatus = { state: "loading", label: "正在理解需求", meta: "" };
     renderParseAnalysis(null);
     setComposerSubmitting(true);
     setAiStatus("AI 正在理解", "loading");
@@ -8079,6 +8139,8 @@
       setAiReply("已收到出行要求，正在确认目的地、补充停靠与路线偏好……");
       const parsed = payload.parsed || payload.intent || payload.plan || localIntentFallback(value);
       renderParseAnalysis(payload.analysis || payload.parsed?.analysis || payload.intent?.analysis || payload.plan?.analysis);
+      const aiPlanStatus = resolvePlanAiStatus(payload);
+      state.lastPlanAiStatus = aiPlanStatus;
       if (options.explicitDestination) parsed.destination = options.explicitDestination;
       if (options.destinationLocation) {
         payload.destinationLocation = options.destinationLocation;
@@ -8152,13 +8214,18 @@
         ? `${actionModeLabel(actions, requestMode)}：${actions.filter((action) => !failedActions.includes(action)).map(actionSummary).join("、") || "未完成"}${failedActions.length ? `；${failedActions.map(actionSummary).join("、")}未完成` : ""}`
         : requestMode === "supplement" ? "已保留当前行程并重新计算" : "";
       recordActionJournal(actions, { failed: failedActions, summary: actionText });
-      const aiPlanStatus = resolvePlanAiStatus(payload);
       setAiStatus(aiPlanStatus.label, aiPlanStatus.state);
       setAiReply([actionText, planningCompletionMessage()].filter(Boolean).join("。"));
       setText("aiReplyMeta", aiPlanStatus.meta);
       showToast(aiPlanStatus.label || actionText || planningCompletionMessage());
       state.lastIntentSignature = signature;
     } catch (error) {
+      // Keep a real AI result if the later map/route phase fails. Only label the
+      // chain as an AI fallback when the request failed before the plan payload
+      // established an actual parser status.
+      if (state.lastPlanAiStatus?.state === "loading") {
+        state.lastPlanAiStatus = { state: "fallback", label: "AI 暂不可用，已使用规则完成", meta: "规则校验已完成" };
+      }
       const parsed = localIntentFallback(value);
       if (options.explicitDestination) parsed.destination = options.explicitDestination;
       if (options.destinationLocation) parsed.destinationLocation = options.destinationLocation;
