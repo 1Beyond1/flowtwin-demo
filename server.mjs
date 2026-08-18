@@ -1034,7 +1034,11 @@ async function staticFile(pathname, response) {
     const extension = extname(target).toLowerCase();
     response.writeHead(200, {
       "Content-Type": mimeTypes[extension] || "application/octet-stream",
-      "Cache-Control": extension === ".html" || extension === ".js" ? "no-cache" : "public, max-age=300",
+      // Demo 发布以正确版本优先：入口和脚本禁止复用旧响应，避免服务器已经
+      // 切换 release、评委浏览器却仍执行上一版 app.js。
+      "Cache-Control": extension === ".html" || extension === ".js"
+        ? "no-store, max-age=0"
+        : "public, max-age=300",
       ...SECURITY_HEADERS
     });
     response.end(content);
