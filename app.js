@@ -1114,6 +1114,41 @@
     );
   }
 
+  function renderRouteDecisionSummary() {
+    const summary = byId("routeDecisionSummary");
+    if (!summary) return;
+    const record = state.routeRecords[state.selectedRoute];
+    if (!state.hasPlannedRoute || !record) {
+      summary.hidden = true;
+      return;
+    }
+    summary.hidden = false;
+    let title = "当前方案已完成约束校验";
+    let text = "系统将行驶、排队、补能服务、绕行和到达余量放在同一套时间账本中比较。";
+    const fastest = Object.values(state.routeRecords).find((candidate) => candidate.isActualFastest);
+    const stable = Object.values(state.routeRecords).find((candidate) => candidate.isActualStable);
+    if (record.directTrip) {
+      title = "无需补能：系统主动取消不必要停靠";
+      text = `当前${isFuelActive() ? "油量" : "电量"}可覆盖全程，预计到达余量 ${record.arrivalSoc}%，不为了展示补能而增加站点。`;
+    } else if (record.planningFailure || !record.feasible) {
+      title = "当前方案未通过安全或到达约束";
+      text = record.planningFailure || "系统没有把不可行路线包装成可执行推荐，请提高能源余量或调整约束后重试。";
+    } else if (record.isActualStable && fastest && fastest !== record) {
+      const delay = Math.max(0, Math.round(record.arrival - fastest.arrival));
+      title = "推荐稳妥方案：用少量 ETA 换取更低尾部排队风险";
+      text = `相较最快方案预计晚 ${delay} 分钟；P90 排队 ${record.station?.p90 ?? record.p90Wait ?? "—"} 分钟，优先降低到站后的不确定性。`;
+    } else if (record.isActualFastest && stable && stable !== record) {
+      const riskDelta = Number(record.station?.p90 ?? record.p90Wait ?? 0) - Number(stable.station?.p90 ?? stable.p90Wait ?? 0);
+      title = "最快方案：适合时间优先，但需接受更高排队风险";
+      text = `预计 ${formatJourneyClock(record.arrival)} 到达；相较稳妥方案 P90 排队${riskDelta >= 0 ? "增加" : "减少"}约 ${Math.abs(riskDelta).toFixed(1)} 分钟。`;
+    } else if (record.isActualCheapest) {
+      title = "最低成本方案：在到达约束内压低综合费用";
+      text = `预计 ${formatJourneyClock(record.arrival)} 到达，系统同时检查能源安全余量与补能停靠可行性。`;
+    }
+    setText("routeDecisionTitle", title);
+    setText("routeDecisionText", text);
+  }
+
   function setPlanningVisibility(hasPlan) {
     byId("app")?.classList.toggle("has-plan", Boolean(hasPlan));
     if (hasPlan) byId("intentInput")?.blur();
@@ -1157,6 +1192,7 @@
       setAiStatus(aiHealthLabel(healthState), healthState);
     }
     renderPlanningDecisionChain(Boolean(hasPlan));
+    renderRouteDecisionSummary();
     updateComposerActionLabel();
   }
 
@@ -6228,6 +6264,7 @@
       : `${displayGroups.length} 条补能方案`;
     renderActiveRouteSummary();
     renderPlanningDecisionChain();
+    renderRouteDecisionSummary();
     renderHybridCompare();
     updateInsight(state.routeRecords[state.selectedRoute]);
     syncArrivalPayment();

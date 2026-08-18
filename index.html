@@ -1217,9 +1217,44 @@
         grid-template-columns: minmax(0, 1fr);
       }
 
-      .route-options.two-routes {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
+       .route-options.two-routes {
+         grid-template-columns: repeat(2, minmax(0, 1fr));
+       }
+
+       .route-decision-summary {
+         display: grid;
+         grid-template-columns: auto minmax(0, 1fr);
+         gap: 2px 9px;
+         margin: 0 0 10px;
+         padding: 8px 10px;
+         border-left: 2px solid var(--teal);
+         background: var(--surface-soft);
+       }
+
+       .route-decision-summary[hidden] { display: none; }
+
+       .route-decision-summary > span {
+         grid-row: span 2;
+         color: var(--quiet);
+         font-family: var(--mono);
+         font-size: 8px;
+         line-height: 1.45;
+       }
+
+       .route-decision-summary strong {
+         overflow: hidden;
+         color: var(--text);
+         font-size: 10px;
+         line-height: 1.35;
+         text-overflow: ellipsis;
+         white-space: nowrap;
+       }
+
+       .route-decision-summary small {
+         color: var(--muted);
+         font-size: 9px;
+         line-height: 1.45;
+       }
 
       .hybrid-compare {
         margin-bottom: 12px;
@@ -5826,6 +5861,7 @@
           <div class="sheet-actions"><button class="sheet-action" id="resetView"><i data-lucide="scan-line"></i>回到全程</button><button class="sheet-action" id="collapseRoutes" aria-label="收起路线方案"><i data-lucide="chevron-down"></i>收起</button></div>
         </div>
         <div class="hybrid-compare" id="hybridCompare" hidden></div>
+        <div class="route-decision-summary" id="routeDecisionSummary" hidden data-reviewer-only><span>推荐依据</span><strong id="routeDecisionTitle">等待方案结果</strong><small id="routeDecisionText">系统会在路线、排队、补能、绕行和安全余量完成比较后给出说明。</small></div>
         <div class="route-options" id="routeOptions">
           <div class="route-card-shell" data-route-shell="fastest"><button class="route-option" data-route="fastest">
             <div class="option-top"><span class="option-name"><i data-lucide="zap"></i><span class="option-name-text">最快到达</span></span><span class="option-tag">少 8 分钟</span></div>
