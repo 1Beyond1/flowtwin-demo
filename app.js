@@ -8299,7 +8299,11 @@
         ? "仅导航 · 未生成策略"
         : payload.insufficientData
           ? "数据不足 · 未生成策略"
-          : `平台券 ¥${Number(payload.platformCoupon ?? payload.discountAmount ?? 0).toFixed(0)} · 仿真预计可引导 ${Math.round(payload.impact?.divertedVehicles || 0)} 人`;
+          : payload.recommendation === "recommended"
+            ? `候选平台券 ¥${Number(payload.platformCoupon ?? payload.discountAmount ?? 0).toFixed(0)} · 仿真预计可引导 ${Math.round(payload.impact?.divertedVehicles || 0)} 人`
+            : payload.recommendation === "operationally-effective"
+              ? `未通过 ROI 门槛 · 仿真预计可引导 ${Math.round(payload.impact?.divertedVehicles || 0)} 人`
+              : "未通过排队风险门槛 · 不建议执行";
     setText("operatorFlowLabel", flowLabel);
     const logic = !payload
       ? "全网站点用于观察与导航；仅对演示平台配置站点计算承接策略"
@@ -8359,9 +8363,14 @@
             : "沙盘应用后峰值基本持平";
       }
     }
-    if (roiNote) roiNote.textContent = strategyAvailable
-      ? "场景仿真结果 · 待真实 A/B 实验验证"
-      : "当前没有可执行策略，不生成场景 ROI 或优惠结论";
+    if (roiNote) {
+      const scenarioRoi = Number(snapshot.roi);
+      roiNote.textContent = strategyAvailable && Number.isFinite(scenarioRoi)
+        ? scenarioRoi >= 1
+          ? "已达到沙盘执行门槛（≥1.00x）· 待真实 A/B 验证"
+          : "未达到沙盘执行门槛（≥1.00x）· 系统建议不发券"
+        : "当前没有可执行策略，不生成场景 ROI 或优惠结论";
+    }
     if (action && executed && strategyAvailable) {
       const improved = snapshot.p90 <= state.operatorBefore.p90;
       const p90Message = snapshot.p90 < state.operatorBefore.p90
@@ -8431,9 +8440,16 @@
     setText("afterP90Value", delta(before.p90Wait, after.p90Wait, "m", 1));
     const strategyAvailable = payload.execution?.executable === true && payload.insufficientData !== true;
     setText("divertedUsersValue", `${strategyAvailable ? Math.round(impact.divertedVehicles || 0) : 0} 人`);
-    setText("strategyRoiValue", strategyAvailable && Number.isFinite(Number(impact.scenarioRoi ?? impact.roi))
-      ? `${Number(impact.scenarioRoi ?? impact.roi).toFixed(2)}x`
-      : "—");
+    const scenarioRoi = Number(impact.scenarioRoi ?? impact.roi);
+    const scenarioRoiAvailable = strategyAvailable && Number.isFinite(scenarioRoi);
+    const strategyRoiValue = byId("strategyRoiValue");
+    if (strategyRoiValue) {
+      strategyRoiValue.textContent = scenarioRoiAvailable
+        ? `${scenarioRoi >= 1 ? "通过" : "未达标"} · ${scenarioRoi.toFixed(2)}x`
+        : "—";
+      strategyRoiValue.classList.toggle("roi-pass", scenarioRoiAvailable && scenarioRoi >= 1);
+      strategyRoiValue.classList.toggle("roi-reject", scenarioRoiAvailable && scenarioRoi < 1);
+    }
     const afterLabel = document.querySelector("#operatorAfterCompare > span");
     if (afterLabel) afterLabel.textContent = strategyAvailable ? "沙盘预测" : "未应用沙盘策略";
     const snapshot = {
@@ -8465,14 +8481,17 @@
       } else {
         const risk = payload.recommendation === "risk";
         const unprofitable = payload.recommendation === "operationally-effective";
-        const headline = unprofitable ? `<strong>场景有效但场景 ROI 未达标：</strong>` : `<strong>本次沙盘建议：</strong>`;
         const platformContribution = Number(payload.platformContribution ?? impact.platformContribution ?? 0);
         const merchantContribution = Number(payload.merchantContribution ?? impact.merchantContribution ?? 0);
         action.innerHTML = risk
-          ? `<strong>策略风险：</strong>当前平台券会增加承接站尾部等待，建议降低券档或更换承接站。场景 ROI ${Number(impact.scenarioRoi ?? impact.roi).toFixed(2)}x。`
-          : `${headline}向${payload.targetUser || "目标用户"}提供 ¥${payload.platformCoupon ?? payload.discountAmount} 平台券，仿真预计可引导 ${Math.round(impact.divertedVehicles || 0)} 人（挽回 ${impact.retainedOrders?.toFixed?.(1) ?? "—"} 单，新增 ${Math.round(impact.incrementalOrders || 0)} 单），场景 ROI ${Number(impact.scenarioRoi ?? impact.roi).toFixed(2)}x；仿真收益假设：平台贡献 ¥${platformContribution.toFixed(2)}，商户贡献 ¥${merchantContribution.toFixed(2)}。${payload.recommendedPlatformCoupon != null
-            ? `仿真建议 ¥${payload.recommendedPlatformCoupon}（在场景 ROI ≥ 1 的券档中仿真预计可引导最多）。`
-            : "当前负载与成本假设下没有满足场景 ROI 约束的券档，建议改用推荐引导或调度。"}${payload.capacityBound
+          ? `<strong>系统否决当前方案：</strong>当前平台券会增加承接站尾部等待，不建议执行；请降低券档或更换承接站。场景 ROI ${scenarioRoi.toFixed(2)}x。`
+          : unprofitable
+            ? `<strong>系统否决当前发券方案：</strong>虽然仿真预计可引导 ${Math.round(impact.divertedVehicles || 0)} 人并改善排队，但场景 ROI ${scenarioRoi.toFixed(2)}x 未达到 1.00x 执行门槛，因此不建议下发。可改用低成本推荐引导或调度。${payload.capacityBound
+              ? `<br><span class="strategy-note">承接站窗口容量已是瓶颈：仍有约 ${payload.unservedPressure} 人的需求压力无法承接，继续加码平台券不能解决。</span>`
+              : ""}`
+            : `<strong>本次沙盘建议可进入人工复核：</strong>向${payload.targetUser || "目标用户"}提供 ¥${payload.platformCoupon ?? payload.discountAmount} 平台券，仿真预计可引导 ${Math.round(impact.divertedVehicles || 0)} 人（挽回 ${impact.retainedOrders?.toFixed?.(1) ?? "—"} 单，新增 ${Math.round(impact.incrementalOrders || 0)} 单），场景 ROI ${scenarioRoi.toFixed(2)}x；仿真收益假设：平台贡献 ¥${platformContribution.toFixed(2)}，商户贡献 ¥${merchantContribution.toFixed(2)}。${payload.recommendedPlatformCoupon != null
+              ? `仿真建议 ¥${payload.recommendedPlatformCoupon}（在场景 ROI ≥ 1 的券档中仿真预计可引导最多）。`
+              : "当前负载与成本假设下没有满足场景 ROI 约束的券档，建议改用推荐引导或调度。"}${payload.capacityBound
               ? `<br><span class="strategy-note">承接站窗口容量已是瓶颈：仍有约 ${payload.unservedPressure} 人的需求压力无法承接，继续加码平台券不能解决。</span>`
               : ""}`;
         action.classList.toggle("strategy-risk", risk);
