@@ -1199,6 +1199,15 @@
     setText("planningLoopNote", note);
   }
 
+  function routeSourceEvidence() {
+    const sources = Object.values(state.routeRecords || {})
+      .map((record) => String(record?.routeSource || "").trim())
+      .filter(Boolean);
+    const cacheHit = sources.some((source) => source.includes("本地路线缓存") && !source.includes("上游暂不可用"));
+    const cacheStale = sources.some((source) => source.includes("上游暂不可用"));
+    return { sources, cacheHit, cacheStale };
+  }
+
   function renderPlanningDecisionChain(hasPlan = state.hasPlannedRoute) {
     const chain = byId("planningDecisionChain");
     if (!chain) return;
@@ -1220,12 +1229,27 @@
       setPlanningDecisionStep("decisionIntent", "pass", "规则已覆盖 · 未调用 AI", "明确请求命中成本门，省去没有业务增量的 Token");
     }
 
-    setPlanningDecisionStep(
-      "decisionMap",
-      state.live ? "pass" : "warn",
-      state.live ? "高德真实路线与 POI" : "固定场景回退",
-      state.live ? "经纬度、道路、里程和 ETA 来自地图服务" : "地图能力不可用时不冒充实时道路结果"
-    );
+    const routeEvidence = routeSourceEvidence();
+    const cacheLabel = routeEvidence.cacheHit && routeEvidence.cacheStale
+      ? "高德路线 + 缓存命中（含旧缓存）"
+      : routeEvidence.cacheHit
+        ? "高德路线 + 本地缓存命中"
+        : routeEvidence.cacheStale
+          ? "高德路线 + 旧缓存标记"
+          : "高德真实路线与 POI";
+    const mapValue = !state.live
+      ? "固定场景回退"
+      : cacheLabel;
+    const mapNote = !state.live
+      ? "地图能力不可用时不冒充实时道路结果"
+      : routeEvidence.cacheHit && routeEvidence.cacheStale
+        ? "部分策略命中本地缓存，部分策略使用带标记的短期旧缓存；缓存内容仍来自高德结果"
+        : routeEvidence.cacheHit
+          ? "相同路线条件优先复用本地缓存；缓存内容仍来自高德结果"
+          : routeEvidence.cacheStale
+            ? "上游暂不可用时使用带标记的短期旧缓存，不把旧结果当作实时结果"
+            : "经纬度、道路、里程和 ETA 来自地图服务；本轮未记录缓存命中";
+    setPlanningDecisionStep("decisionMap", state.live ? "pass" : "warn", mapValue, mapNote);
 
     const priorMatches = state.stations.filter((station) => station.forecastEnterprisePrior?.matched === true).length;
     const forecastCount = state.stations.filter((station) => station.forecastMethod).length;
@@ -1262,6 +1286,19 @@
       return;
     }
     summary.hidden = false;
+    const routeEvidence = routeSourceEvidence();
+    const label = summary.querySelector("span");
+    if (label) {
+      label.textContent = !state.live
+        ? "推荐依据 · 固定场景"
+        : routeEvidence.cacheHit && routeEvidence.cacheStale
+          ? "推荐依据 · 缓存命中（含旧缓存）"
+          : routeEvidence.cacheHit
+            ? "推荐依据 · 缓存命中"
+            : routeEvidence.cacheStale
+              ? "推荐依据 · 旧缓存标记"
+              : "推荐依据 · 高德结果";
+    }
     let title = "当前方案已完成约束校验";
     let text = "系统将行驶、排队、补能服务、绕行和到达余量放在同一套时间账本中比较。";
     const fastest = Object.values(state.routeRecords).find((candidate) => candidate.isActualFastest);
