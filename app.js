@@ -1066,11 +1066,148 @@
     setText(`${id}Note`, note);
   }
 
+  function planningAiIncrementCopy() {
+    const status = state.lastPlanAiStatus?.state || "rules";
+    const analysis = state.parseAnalysis || {};
+    const comparison = analysis.comparison || null;
+    const reason = analysis.ai?.reason || null;
+    const reasonLabels = {
+      not_configured: "当前没有可用模型配置",
+      network: "模型网络请求未完成",
+      quota: "模型额度或频控未通过",
+      invalid_response: "模型返回未通过结构校验"
+    };
+
+    if (status === "ready") {
+      const acceptedActions = Number(comparison?.actions?.acceptedActionCount || 0);
+      const differences = Array.isArray(comparison?.agreement?.differences)
+        ? comparison.agreement.differences.length
+        : 0;
+      if (acceptedActions > 0) {
+        return {
+          title: `AI 提取了 ${acceptedActions} 个本轮动作`,
+          note: "模型负责理解多轮/模糊表达；明确约束仍由本地规则锁定，并在进入路线前完成安全校验。"
+        };
+      }
+      if (differences > 0) {
+        return {
+          title: "AI 参与语义复核，不直接决定路线",
+          note: `模型与规则已逐字段对比（${differences} 个字段存在差异），最终规划输入只保留通过校验的结果。`
+        };
+      }
+      return {
+        title: "AI 完成语义复核，规则负责落地",
+        note: "模型只处理自然语言理解；地点、能源、时间与路线数值仍由地图和确定性计算完成。"
+      };
+    }
+
+    if (status === "fallback") {
+      return {
+        title: "AI 未完成，本地规则保留核心规划",
+        note: `${reasonLabels[reason] || state.lastPlanAiStatus?.meta || "模型未返回"}；系统没有把失败伪装成 AI 成功。`
+      };
+    }
+
+    return {
+      title: "本轮规则已足够，未调用 AI",
+      note: "请求字段明确且没有额外语义增量，主动省去无必要的 Token；复杂多轮需求仍会按需升级到 AI。"
+    };
+  }
+
+  function renderPlanningAiValue(hasPlan = state.hasPlannedRoute) {
+    const panel = byId("planningAiValue");
+    if (!panel) return;
+    panel.hidden = !hasPlan;
+    if (!hasPlan) return;
+    const copy = planningAiIncrementCopy();
+    setText("planningAiValueTitle", copy.title);
+    setText("planningAiValueNote", copy.note);
+  }
+
+  function renderPlanningExecutionLoop(hasPlan = state.hasPlannedRoute) {
+    const loop = byId("planningExecutionLoop");
+    if (!loop) return;
+    loop.hidden = !hasPlan;
+    if (!hasPlan) return;
+
+    const forecastAvailable = Array.isArray(state.stations)
+      && state.stations.some((station) => station && (station.forecastMethod || station.forecast || station.prediction));
+    const liveRoute = state.live === true;
+    const statuses = {
+      // A fixed fallback route is useful for local smoke testing, but it must
+      // not look identical to a route returned by the live map service.
+      plan: liveRoute ? "pass" : "available",
+      forecast: forecastAvailable ? "pass" : "available",
+      reservation: "idle",
+      ocr: "idle",
+      payment: "idle",
+      operator: "idle"
+    };
+    let current = liveRoute ? "下一步：开始模拟驾驶" : "演示路线已生成 · 地图/预测能力待接入";
+    let note = liveRoute
+      ? "路线结果已完成；开始模拟后，站内动作会逐步暂停，方便查看每个真实执行边界。"
+      : "当前使用固定场景回退，未把它包装成真实地图或企业实时预测结果。";
+    const simulation = state.simulation || {};
+    const phase = simulation.active ? simulation.phase : null;
+
+    if (phase) {
+      const type = String(phase.type || "");
+      if (type === "drive") {
+        current = "车辆行驶中 · 预约将在下一补能站触发";
+        note = "路线自动推进；进入补能站后会切换为手动查看，不把后续业务流程一闪而过。";
+      } else if (type === "reservation") {
+        statuses.reservation = simulation.reservationPending ? "active" : "pass";
+        current = simulation.reservationPending ? "预约计算中" : "预约已完成 · 请展开依据后继续";
+        note = simulation.reservationPending
+          ? "系统按预计到站时间把本车加入演示预约队列，并重新计算 P50 / P90。"
+          : "预约状态已写入本轮演示；站点排队变化仍明确标为演示/企业先验推演。";
+      } else if (type === "recognition") {
+        statuses.reservation = "pass";
+        statuses.ocr = simulation.recognitionResolved ? "pass" : "active";
+        current = simulation.recognitionResolved ? "本地 OCR 已完成 · 可继续查看扣款链路" : "下一步：执行本地 OCR";
+        note = simulation.recognitionResolved
+          ? (simulation.ocrFallbackUsed
+            ? "本轮使用了明确标注的预置样例继续，不把预置文字冒充本地推理结果。"
+            : "车牌识别结果来自本地 OCR 服务；识别失败时不会伪造成功。")
+          : "中央卡片会暂停在识别阶段，评委可以先看到本地调用结果再继续。";
+      } else if (type === "queue" || type === "service") {
+        statuses.reservation = "pass";
+        statuses.ocr = simulation.recognitionResolved ? "pass" : "active";
+        current = type === "queue" ? "到站排队已重算 · 下一步查看补能服务" : "补能服务进行中 · 完成后生成演示扣款";
+        note = "当前阶段展示预计到站时刻、端口/队列口径与服务耗时；这些状态仍按页面标注的演示输入计算。";
+      } else if (type === "payment") {
+        statuses.reservation = "pass";
+        statuses.ocr = simulation.recognitionResolved ? "pass" : "active";
+        statuses.payment = "active";
+        current = "演示扣款已生成 · 请查看电子收据后继续";
+        note = "程序根据车牌识别结果关联本次演示订单并生成电子收据；当前不连接真实支付。";
+      } else if (type === "leave" || type === "arrived") {
+        statuses.reservation = "pass";
+        statuses.ocr = simulation.recognitionResolved ? "pass" : "active";
+        statuses.payment = "pass";
+        statuses.operator = "available";
+        current = "站内流程完成 · 下一步进入运营复盘";
+        note = "路线、预约、OCR 与扣款演示已串成一条可检查链路；运营分流与飞书 AI 仍需在运营页手动触发。";
+      }
+    }
+
+    Object.entries(statuses).forEach(([stage, status]) => {
+      const node = loop.querySelector(`[data-loop-stage="${stage}"]`);
+      if (node) node.dataset.state = status;
+    });
+    setText("planningLoopCurrent", current);
+    setText("planningLoopNote", note);
+  }
+
   function renderPlanningDecisionChain(hasPlan = state.hasPlannedRoute) {
     const chain = byId("planningDecisionChain");
     if (!chain) return;
     chain.hidden = !hasPlan;
-    if (!hasPlan) return;
+    if (!hasPlan) {
+      renderPlanningAiValue(false);
+      renderPlanningExecutionLoop(false);
+      return;
+    }
 
     const aiState = state.lastPlanAiStatus?.state || "rules";
     if (aiState === "ready") {
@@ -1112,6 +1249,8 @@
       planningFailed ? "逐段安全核验未完成" : `${feasibleCount} 条可行 · ${groups.length} 条去重方案`,
       "能源可达性 + 绕行 + 排队 + 补能服务 + 驶离缓冲统一比较"
     );
+    renderPlanningAiValue(true);
+    renderPlanningExecutionLoop(true);
   }
 
   function renderRouteDecisionSummary() {
@@ -5623,6 +5762,7 @@
     const navMeta = byId("simulationNavMeta");
     if (navMeta) navMeta.textContent = `${state.simulation.phaseIndex + 1}/${total} 阶段 · ${group.label} · ${state.simulation.record?.displayName || "已选方案"}`;
     renderSimulationScene(phase);
+    renderPlanningExecutionLoop(state.hasPlannedRoute);
     refreshIcons();
   }
 

@@ -2694,6 +2694,136 @@
         font-size: 8px;
         line-height: 1.4;
       }
+
+      .planning-ai-value,
+      .planning-execution-loop {
+        margin-top: 7px;
+        padding: 8px 9px;
+        border: 1px solid #d8e3f3;
+        border-radius: 7px;
+        background: #f7f9ff;
+      }
+
+      .planning-ai-value[hidden],
+      .planning-execution-loop[hidden] { display: none; }
+
+      .planning-ai-value > span,
+      .planning-execution-loop-head > span {
+        display: block;
+        color: #53637e;
+        font-family: var(--mono);
+        font-size: 8px;
+        letter-spacing: .02em;
+      }
+
+      .planning-ai-value strong,
+      .planning-ai-value small,
+      .planning-execution-loop-head strong,
+      .planning-execution-loop small {
+        display: block;
+      }
+
+      .planning-ai-value strong {
+        margin-top: 3px;
+        color: #315bb8;
+        font-size: 10px;
+        line-height: 1.35;
+      }
+
+      .planning-ai-value small,
+      .planning-execution-loop small {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 8px;
+        line-height: 1.45;
+      }
+
+      .planning-execution-loop {
+        border-color: #d8e6df;
+        background: #f8fbf9;
+      }
+
+      .planning-execution-loop-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .planning-execution-loop-head strong {
+        color: var(--text);
+        font-size: 10px;
+      }
+
+      .planning-execution-loop-head > span {
+        overflow: hidden;
+        color: #16725f;
+        font-family: inherit;
+        font-size: 8px;
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .planning-execution-loop-list {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 4px;
+        margin-top: 7px;
+      }
+
+      .planning-loop-stage {
+        position: relative;
+        min-width: 0;
+        padding: 5px 3px;
+        border: 1px solid #dfe7e2;
+        border-radius: 5px;
+        background: #fff;
+        color: var(--quiet);
+        font-size: 8px;
+        line-height: 1.2;
+        text-align: center;
+        white-space: nowrap;
+      }
+
+      .planning-loop-stage:not(:last-child)::after {
+        position: absolute;
+        top: 50%;
+        right: -6px;
+        z-index: 1;
+        color: #aab8b0;
+        content: "›";
+        font-size: 11px;
+        transform: translateY(-50%);
+      }
+
+      .planning-loop-stage[data-state="pass"] {
+        border-color: #a9d6c8;
+        background: #eaf7f2;
+        color: #16725f;
+        font-weight: 750;
+      }
+
+      .planning-loop-stage[data-state="active"] {
+        border-color: #a9bff5;
+        background: #eef3ff;
+        color: #315bb8;
+        font-weight: 800;
+        box-shadow: 0 0 0 2px rgba(74, 125, 240, .08);
+      }
+
+      .planning-loop-stage[data-state="available"] {
+        border-color: #e5d09e;
+        background: #fff9ee;
+        color: #976717;
+        font-weight: 700;
+      }
+
+      @media (max-width: 540px) {
+        .planning-execution-loop-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .planning-loop-stage:nth-child(3)::after,
+        .planning-loop-stage:nth-child(6)::after { display: none; }
+      }
       @media (max-width: 720px) {
         .parsed-intent-comparison-grid { grid-template-columns: 1fr; }
         .parsed-intent-comparison-status { max-width: 58%; }
@@ -5557,6 +5687,23 @@
             <article class="planning-decision-step" id="decisionMapStep" data-state="idle"><span>02 · 地图事实</span><div><strong id="decisionMapValue">等待路线</strong><small id="decisionMapNote">坐标、道路、里程与 POI 不由大模型生成</small></div></article>
             <article class="planning-decision-step" id="decisionPriorStep" data-state="idle"><span>03 · 需求预测</span><div><strong id="decisionPriorValue">等待站点预测</strong><small id="decisionPriorNote">企业先验与演示站态分开标记</small></div></article>
             <article class="planning-decision-step" id="decisionOptimizerStep" data-state="idle"><span>04 · 安全规划</span><div><strong id="decisionOptimizerValue">等待方案</strong><small id="decisionOptimizerNote">统一核算行驶、等待、服务与驶离时间</small></div></article>
+          </div>
+          <div class="planning-ai-value" id="planningAiValue" hidden>
+            <span>本轮 AI 增量</span>
+            <strong id="planningAiValueTitle">等待解析</strong>
+            <small id="planningAiValueNote">系统会在需要时调用模型，并让规则校验最终输入。</small>
+          </div>
+          <div class="planning-execution-loop" id="planningExecutionLoop" hidden>
+            <div class="planning-execution-loop-head"><strong>从规划到执行</strong><span id="planningLoopCurrent">下一步：开始模拟驾驶</span></div>
+            <div class="planning-execution-loop-list" aria-label="业务闭环阶段">
+              <span class="planning-loop-stage" data-loop-stage="plan">规划</span>
+              <span class="planning-loop-stage" data-loop-stage="forecast">预测</span>
+              <span class="planning-loop-stage" data-loop-stage="reservation">预约</span>
+              <span class="planning-loop-stage" data-loop-stage="ocr">本地 OCR</span>
+              <span class="planning-loop-stage" data-loop-stage="payment">演示扣款</span>
+              <span class="planning-loop-stage" data-loop-stage="operator">运营复盘</span>
+            </div>
+            <small id="planningLoopNote">路线结果已完成；开始模拟后，站内动作会逐步暂停，方便查看每个真实执行边界。</small>
           </div>
         </section>
         <section class="service-nudge" id="serviceNudge" aria-live="polite" hidden>
