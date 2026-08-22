@@ -1467,7 +1467,7 @@
     if (serviceNudge && !hasPlan) serviceNudge.hidden = true;
     $$('[data-mode]').filter((button) => !["driver", "vision"].includes(button.dataset.mode)).forEach((button) => {
       button.disabled = !hasPlan;
-      button.title = hasPlan ? "" : "完成一次 AI 规划后可用";
+      button.title = hasPlan ? "" : "完成一次路线规划后可用";
     });
     if (!hasPlan) {
       setAiReply("");
@@ -8713,7 +8713,7 @@
     state.lastPlanAiStatus = { state: "loading", label: "正在理解需求", meta: "" };
     renderParseAnalysis(null);
     setComposerSubmitting(true);
-    setAiStatus("AI 正在理解", "loading");
+    setAiStatus("正在理解需求", "loading");
     setAiReply("正在把你的自然语言要求拆解为路线约束……");
     try {
       const payload = await postJson("/api/plan", {
@@ -10211,7 +10211,7 @@
     state.stations = [];
     addAmapEndpoints();
     fitAmapView();
-    setMapStatus("高德地图已连接 · 输入需求后开始 AI 规划", "ready");
+    setMapStatus("高德地图已连接 · 输入需求后开始规划", "ready");
     byId("mapAttribution").textContent = "高德地图 · 待规划";
     let resizeTimer;
     window.addEventListener("resize", () => {
@@ -10368,7 +10368,7 @@
     [byId("topEnergyPercentInput"), byId("departureTimeInput"), byId("deadlineInput"), byId("minArrivalSocInput")].filter(Boolean).forEach((input) => input.addEventListener("change", () => {
       state.lastIntentSignature = null;
       readManualControls({ markArrivalOverrides: input.id === "deadlineInput" || input.id === "minArrivalSocInput" });
-      showToast("出行状态已更新，点击 AI 智能规划后重新计算", 2200);
+      showToast("出行状态已更新，点击规划按钮后重新计算", 2200);
     }));
     [byId("deadlineInput"), byId("minArrivalSocInput")].filter(Boolean).forEach((input) => input.addEventListener("input", () => {
       state.lastIntentSignature = null;
@@ -10384,7 +10384,7 @@
         syncHybridLevels();
         updateEnergyControls();
         renderHybridCompare();
-        showToast("混动能量状态已更新，点击 AI 智能规划后重新计算", 2200);
+        showToast("混动能量状态已更新，点击规划按钮后重新计算", 2200);
       });
     });
     byId("collapseTrip").addEventListener("click", () => byId("tripPanel").classList.add("collapsed"));
