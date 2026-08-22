@@ -8838,8 +8838,10 @@
     setText("validationStatusMeta", "进入验证流程后，以当前站点输入计算 1,000 次合成行程");
     setText("validationFootText", "尚未运行。结果将在固定种子下由当前站点输入生成。");
     setText("validationSourceBadge", "可复现实验 / 非企业真实经营结论");
+    const decision = byId("validationDecision");
+    if (decision) decision.hidden = true;
     const body = byId("validationTableBody");
-    if (body) body.innerHTML = '<tr id="validationEmptyRow"><td colspan="6">尚未运行仿真；点击“验证”后将以当前站点输入计算。</td></tr>';
+    if (body) body.innerHTML = '<tr id="validationEmptyRow"><td colspan="8">尚未运行仿真；点击“验证”后将以当前站点输入计算。</td></tr>';
     const progress = byId("validationProgress");
     if (progress) progress.style.width = "0%";
     const evidenceButton = byId("validationEvidenceButton");
@@ -9057,6 +9059,10 @@
     const averageImprovement = baseline.averageWait ? (1 - flowtwin.averageWait / baseline.averageWait) * 100 : 0;
     const p90Improvement = baseline.p90Wait ? (1 - flowtwin.p90Wait / baseline.p90Wait) * 100 : 0;
     const onTimeImprovement = Number(flowtwin.onTimeRate || 0) - Number(baseline.onTimeRate || 0);
+    const roi = Number(flowtwin.roi);
+    const hasRoi = Number.isFinite(roi);
+    const serviceImproved = averageImprovement >= 0 && p90Improvement >= 0 && onTimeImprovement >= 0;
+    const economicPassed = hasRoi && roi >= 1;
     const setKpi = (id, text, isGood) => {
       const element = byId(id);
       if (!element) return;
@@ -9067,6 +9073,23 @@
     setKpi("validationAverage", `${averageImprovement >= 0 ? "−" : "+"}${Math.abs(averageImprovement).toFixed(1)}%`, averageImprovement >= 0);
     setKpi("validationP90", `${p90Improvement >= 0 ? "−" : "+"}${Math.abs(p90Improvement).toFixed(1)}%`, p90Improvement >= 0);
     setKpi("validationOnTime", `${onTimeImprovement >= 0 ? "+" : ""}${onTimeImprovement.toFixed(1)}pp`, onTimeImprovement >= 0);
+    const decision = byId("validationDecision");
+    if (decision) {
+      decision.hidden = false;
+      decision.dataset.state = serviceImproved && economicPassed ? "pass" : "warn";
+    }
+    if (serviceImproved && economicPassed) {
+      setText("validationDecisionTitle", "服务指标与场景经济门槛同时通过");
+      setText("validationDecisionNote", `同一批合成行程下，排队与准时指标改善，场景 ROI ${roi.toFixed(2)}x 达到 1.00x 门槛；仍需真实 A/B 实验后再形成企业结论。`);
+    } else if (serviceImproved && hasRoi) {
+      setText("validationDecisionTitle", "服务指标改善，但场景经济门槛未通过");
+      setText("validationDecisionNote", `同一批合成行程下排队与准时指标改善，但场景 ROI ${roi.toFixed(2)}x 低于 1.00x；本次参数组合不建议执行。`);
+    } else {
+      setText("validationDecisionTitle", "本次综合指标未全部通过");
+      setText("validationDecisionNote", hasRoi
+        ? `至少一项服务指标未改善，场景 ROI 为 ${roi.toFixed(2)}x；系统不把局部改善包装成可执行策略。`
+        : "至少一项服务指标未改善，且当前没有可验证的场景 ROI；系统不生成上线建议。");
+    }
     setText("validationStatusText", "本次仿真计算完成");
     const modeLabel = payload.inputMode === "current-stations" ? "当前站点输入" : "合成站点输入";
     setText("validationStatusMeta", `${payload.trips?.toLocaleString?.() || payload.trips} 次合成行程 · ${payload.stationCount || 0} 个节点 · 种子 ${payload.seed} · ${modeLabel}`);

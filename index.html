@@ -3459,6 +3459,35 @@
         color: var(--danger);
       }
 
+      .validation-decision {
+        display: grid;
+        gap: 3px;
+        margin: -5px 0 14px;
+        padding: 10px 12px;
+        border: 1px solid #d9e6df;
+        border-left: 3px solid var(--teal);
+        border-radius: 6px;
+        background: #f7fbf9;
+      }
+
+      .validation-decision[hidden] { display: none; }
+      .validation-decision[data-state="warn"] {
+        border-color: #ecd9b8;
+        border-left-color: var(--amber);
+        background: #fffaf1;
+      }
+
+      .validation-decision strong {
+        color: var(--text);
+        font-size: 11px;
+      }
+
+      .validation-decision span {
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.45;
+      }
+
       .validation-table-wrap {
         overflow-x: auto;
         border: 1px solid var(--line);
@@ -6017,6 +6046,7 @@
           <div class="validation-kpi"><div class="stat-label">P90 排队变化 <small>相较仅实时状态</small></div><strong id="validationP90">—</strong></div>
           <div class="validation-kpi"><div class="stat-label">准时率变化 <small>相较仅实时状态</small></div><strong id="validationOnTime">—</strong></div>
         </div>
+        <div class="validation-decision" id="validationDecision" data-state="warn" hidden><strong id="validationDecisionTitle">等待验证结论</strong><span id="validationDecisionNote">系统会同时检查服务指标与场景经济门槛。</span></div>
         <div class="validation-table-wrap">
           <table class="validation-table">
             <thead><tr><th>策略</th><th>平均排队</th><th>P90 排队</th><th>平均停靠</th><th>P90 停靠</th><th>准时率</th><th>利用率离散度</th><th>场景 ROI</th></tr></thead>
