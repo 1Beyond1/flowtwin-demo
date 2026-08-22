@@ -146,6 +146,7 @@
     // layer avoids repeating the browser's POI collection and leg validation
     // when a reviewer submits the exact same trip again.
     completedRoutePlanCache: new Map(),
+    lastPlanTimings: null,
     routeDisplayKeys: [],
     routeDisplayGroups: [],
     routeCandidates: {},
@@ -1311,8 +1312,12 @@
       text = record.planningFailure || "系统没有把不可行路线包装成可执行推荐，请提高能源余量或调整约束后重试。";
     } else if (record.isActualStable && fastest && fastest !== record) {
       const delay = Math.max(0, Math.round(record.arrival - fastest.arrival));
-      title = "推荐稳妥方案：用少量 ETA 换取更低尾部排队风险";
-      text = `相较最快方案预计晚 ${delay} 分钟；P90 排队 ${record.station?.p90 ?? record.p90Wait ?? "—"} 分钟，优先降低到站后的不确定性。`;
+      title = delay > 0
+        ? "推荐稳妥方案：用少量 ETA 换取更低尾部排队风险"
+        : "推荐稳妥方案：同等 ETA 下优先更低尾部排队风险";
+      text = delay > 0
+        ? `相较最快方案预计晚 ${delay} 分钟；P90 排队 ${record.station?.p90 ?? record.p90Wait ?? "—"} 分钟，优先降低到站后的不确定性。`
+        : `与最快方案预计到达时间基本一致；P90 排队 ${record.station?.p90 ?? record.p90Wait ?? "—"} 分钟，因此优先选择尾部风险更低的方案。`;
     } else if (record.isActualFastest && stable && stable !== record) {
       const riskDelta = Number(record.station?.p90 ?? record.p90Wait ?? 0) - Number(stable.station?.p90 ?? stable.p90Wait ?? 0);
       title = "最快方案：适合时间优先，但需接受更高排队风险";
@@ -3702,8 +3707,10 @@
     // never converts a failed request into a route; only a complete, valid
     // response is accepted, and a terminal infocode stops the retries at once.
     try {
-      const { route } = await fetchRouteWithRetry(params);
-      return route;
+      const { route, payload } = await fetchRouteWithRetry(params);
+      return Object.assign({}, route, {
+        routeSource: payload.source || route.source || "高德 Web 服务路线规划 2.0"
+      });
     } catch (error) {
       recordRouteError(`${key}:long-trip`, error);
       return null;
@@ -3858,6 +3865,9 @@
       legs.push(...batch);
     }
     if (legs.some((leg) => !leg)) return null;
+    const legSources = legs.map((leg) => String(leg?.routeSource || "")).filter(Boolean);
+    const hasStaleCache = legSources.some((source) => source.includes("上游暂不可用"));
+    const hasFreshCache = legSources.some((source) => source.includes("本地路线缓存") && !source.includes("上游暂不可用"));
     const path = legs.flatMap((leg, index) => index ? leg.path.slice(1) : leg.path);
     return {
       key,
@@ -3871,7 +3881,12 @@
       highway: legs.some((leg) => leg?.highway === true),
       routeClass: legs.some((leg) => leg?.highway === true) ? "highway" : "unknown",
       roadNames: Array.from(new Set(legs.flatMap((leg) => Array.isArray(leg?.roadNames) ? leg.roadNames : []))).slice(0, 80),
-      source: "高德逐段路线核验"
+      source: "高德逐段路线核验",
+      routeSource: hasStaleCache
+        ? (hasFreshCache ? "本地路线缓存 · 高德结果（部分上游暂不可用）" : "本地路线缓存 · 高德结果（上游暂不可用）")
+        : hasFreshCache
+          ? "本地路线缓存 · 高德结果"
+          : "高德 Web 服务路线规划 2.0"
     };
   }
 
@@ -9548,6 +9563,8 @@
   }
 
   async function recomputePlan(options = {}) {
+    const timingStartedAt = Date.now();
+    const timingMarks = {};
     const manageButton = options.manageButton !== false;
     if (manageButton) setComposerSubmitting(true);
     state.routeSelectionTouched = false;
@@ -9591,14 +9608,38 @@
       }
       state.routeRecords = fillMissingObjectivesWithRealRoutes(liveRecords, Object.keys(policies));
       state.baseRouteRecords = Object.assign({}, state.routeRecords);
+      timingMarks.baseRoutesMs = Date.now() - timingStartedAt;
+      setMapStatus("真实路线骨架已完成 · 正在整理沿线补能候选");
+      if (state.aiActive) {
+        setAiStatus("路线骨架已完成 · 正在检索补能点", "loading");
+        setAiReply("已获得真实道路、里程与 ETA，正在沿预计行程抽取补能候选。");
+      }
       const completedKey = completedPlanCacheKey(state.baseRouteRecords);
       const cachedPlan = readCompletedRoutePlan(completedKey);
       if (cachedPlan) {
         restoreCompletedRoutePlan(cachedPlan);
+        timingMarks.stationSearchMs = 0;
+        timingMarks.routeValidationMs = 0;
+        timingMarks.completedPlanCacheHit = true;
+        setMapStatus("完整补能方案缓存命中 · 正在整理可解释结果");
+        if (state.aiActive) {
+          setAiStatus("完整方案缓存命中 · 正在整理结果", "loading");
+          setAiReply("出行条件与站点压力快照未变化，已复用完成核验的补能方案，正在整理路线对比。");
+        }
         showToast("已复用同一补能状态下的路线与补能方案", 2200);
       } else {
+        const stationSearchStartedAt = Date.now();
         await queryStations();
+        timingMarks.stationSearchMs = Date.now() - stationSearchStartedAt;
+        setMapStatus("沿线补能候选已提取 · 正在逐段核验安全与 ETA");
+        if (state.aiActive) {
+          setAiStatus("补能候选已提取 · 正在逐段核验", "loading");
+          setAiReply("沿线候选站已完成提取，正在核验每一段能源可达性、绕行、排队与最终到达时间。");
+        }
+        const routeValidationStartedAt = Date.now();
         await replanRoutesViaStations();
+        timingMarks.routeValidationMs = Date.now() - routeValidationStartedAt;
+        timingMarks.completedPlanCacheHit = false;
         writeCompletedRoutePlan(completedKey);
       }
       drawAmapRoutes();
@@ -9614,6 +9655,7 @@
       renderFallbackRouteVisuals();
     }
     state.hasPlannedRoute = true;
+    state.lastPlanTimings = Object.assign(timingMarks, { totalMs: Date.now() - timingStartedAt });
     renderRouteCards();
     if (manageButton) setComposerSubmitting(false);
     if (!options.silent) showToast("补能方案已根据当前约束重新计算");
@@ -9914,7 +9956,8 @@
     energyPercent: state.energyPercent,
     energyProfile: getEnergyProfile(isFuelActive()),
     executionState: state.executionState,
-    routeErrors: state.routeErrors,
+      routeErrors: state.routeErrors,
+      lastPlanTimings: state.lastPlanTimings,
     routes: Object.fromEntries(Object.entries(state.routeRecords).map(([key, record]) => [key, {
       station: record.station?.name || null,
       stationId: record.station?.id || null,
@@ -9926,6 +9969,7 @@
       pathStartOffsetKm: record.path?.length ? Number(distanceKm(record.path[0], state.origin).toFixed(2)) : null,
       pathEndOffsetKm: record.path?.length ? Number(distanceKm(record.path[record.path.length - 1], state.destination).toFixed(2)) : null,
       policyFallbackFrom: record.policyFallbackFrom || null,
+      routeSource: record.routeSource || record.source || null,
       distance: Number(record.distance?.toFixed ? record.distance.toFixed(2) : record.distance),
       baseDistance: Number(record.baseDistance?.toFixed ? record.baseDistance.toFixed(2) : record.baseDistance),
       detour: record.station?.detour || null,
