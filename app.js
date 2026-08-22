@@ -1193,8 +1193,17 @@
       const ocrFallbackUsed = Number.isInteger(stopIndex) && simulation.ocrFallbackStopIndexes?.has(stopIndex);
       const resolvedOcrState = localOcrExecuted ? "pass" : ocrFallbackUsed ? "available" : "active";
       if (type === "drive") {
-        current = "车辆行驶中 · 预约将在下一补能站触发";
-        note = "路线自动推进；进入补能站后会切换为手动查看，不把后续业务流程一闪而过。";
+        const plannedStopCount = simulationStopsFor(simulation.record).length;
+        current = plannedStopCount === 0
+          ? "直达行驶中 · 本次无需触发补能站流程"
+          : isFuelActive()
+            ? "车辆行驶中 · 到站后进入手动加油演示"
+            : "车辆行驶中 · 预约将在下一补能站触发";
+        note = plannedStopCount === 0
+          ? "当前能源余量可覆盖全程；系统不会为了展示而插入预约、OCR 或扣款节点。"
+          : isFuelActive()
+            ? "燃油路线不执行充电站提前预约；到站后的识别、排队、服务与演示扣款仍由评委手动查看。"
+            : "路线自动推进；进入补能站后会切换为手动查看，不把后续业务流程一闪而过。";
       } else if (type === "reservation") {
         statuses.reservation = simulation.reservationPending ? "active" : "pass";
         current = simulation.reservationPending ? "预约计算中" : "预约已完成 · 请展开依据后继续";
@@ -1202,7 +1211,7 @@
           ? "系统按预计到站时间把本车加入演示预约队列，并重新计算 P50 / P90。"
           : "预约状态已写入本轮演示；站点排队变化仍明确标为演示/企业先验推演。";
       } else if (type === "recognition") {
-        statuses.reservation = "pass";
+        statuses.reservation = simulation.reservedStops?.size > 0 ? "pass" : "idle";
         statuses.ocr = simulation.recognitionResolved ? resolvedOcrState : "active";
         current = localOcrExecuted
           ? "本地 OCR 已完成 · 可继续查看扣款链路"
@@ -1215,37 +1224,50 @@
             : "车牌识别结果来自本地 OCR 服务；识别失败时不会伪造成功。")
           : "中央卡片会暂停在识别阶段，评委可以先看到本地调用结果再继续。";
       } else if (type === "queue" || type === "service") {
-        statuses.reservation = "pass";
+        statuses.reservation = simulation.reservedStops?.size > 0 ? "pass" : "idle";
         statuses.ocr = simulation.recognitionResolved ? resolvedOcrState : "active";
         current = type === "queue" ? "到站排队已重算 · 下一步查看补能服务" : "补能服务进行中 · 完成后生成演示扣款";
         note = `${ocrFallbackUsed ? "本节点使用预置样例托底，未计作本地 OCR 成功；" : ""}当前阶段展示预计到站时刻、端口/队列口径与服务耗时；这些状态仍按页面标注的演示输入计算。`;
       } else if (type === "payment") {
-        statuses.reservation = "pass";
+        statuses.reservation = simulation.reservedStops?.size > 0 ? "pass" : "idle";
         statuses.ocr = simulation.recognitionResolved ? resolvedOcrState : "active";
         statuses.payment = "active";
         current = "演示扣款已生成 · 请查看电子收据后继续";
         note = ocrFallbackUsed
           ? "程序使用明确标注的预置演示身份串联电子收据；本节点没有本地 OCR 成功结果，也不连接真实支付。"
           : "程序根据本地车牌识别结果关联本次演示订单并生成电子收据；当前不连接真实支付。";
-      } else if (type === "leave" || type === "arrived") {
+      } else if (type === "leave") {
+        const paymentCompleted = Number.isInteger(stopIndex) && simulation.paymentCompletedStopIndexes?.has(stopIndex);
+        statuses.reservation = simulation.reservedStops?.size > 0 ? "pass" : "idle";
+        statuses.ocr = resolvedOcrState;
+        statuses.payment = paymentCompleted ? "pass" : "idle";
+        current = `第 ${Number(stopIndex || 0) + 1} 个补能节点流程完成 · 继续沿路线行驶`;
+        note = `${localOcrExecuted ? "本地 OCR 已执行" : ocrFallbackUsed ? "本节点使用预置样例托底（非本地推理）" : "本地 OCR 未执行"}；${paymentCompleted ? "演示电子收据已生成" : "未生成演示扣款"}。尚未到达终点，不提前开放运营复盘。`;
+      } else if (type === "arrived") {
         const actualOcrCount = simulation.ocrExecutedStopIndexes?.size || 0;
         const fallbackOcrCount = simulation.ocrFallbackStopIndexes?.size || 0;
         const paymentCount = simulation.paymentCompletedStopIndexes?.size || 0;
         const skippedCount = simulation.skippedStopIndexes?.size || 0;
+        const reservationCount = simulation.reservedStops?.size || 0;
+        const plannedStopCount = simulationStopsFor(simulation.record).length;
         const ocrParts = [];
         if (actualOcrCount > 0) ocrParts.push(`本地 OCR ${actualOcrCount} 次`);
         if (fallbackOcrCount > 0) ocrParts.push(`预置样例继续 ${fallbackOcrCount} 次（非本地推理）`);
         const ocrSummary = ocrParts.length ? ocrParts.join("、") : "本地 OCR 未执行";
-        statuses.reservation = "pass";
+        statuses.reservation = reservationCount > 0 ? "pass" : "idle";
         statuses.ocr = actualOcrCount > 0 ? "pass" : fallbackOcrCount > 0 ? "available" : "idle";
         statuses.payment = paymentCount > 0 ? "pass" : "idle";
         statuses.operator = "available";
-        current = skippedCount > 0
-          ? `路线已完成 · 已跳过 ${skippedCount} 个补能节点演示`
-          : "站内流程完成 · 下一步进入运营复盘";
-        note = skippedCount > 0
-          ? `路线与预约已完成；跳过的节点没有被计作 OCR 或扣款成功。本轮${ocrSummary}。`
-          : `路线、预约、${ocrSummary}与演示扣款 ${paymentCount} 次已串成可检查链路；运营分流与飞书 AI 仍需在运营页手动触发。`;
+        if (plannedStopCount === 0) {
+          current = "直达路线完成 · 本次无需进入补能站";
+          note = "车辆能源余量可覆盖全程，因此没有触发预约、OCR 或扣款演示；这是规划主动取消不必要停靠，不是执行链路缺失。";
+        } else if (skippedCount > 0) {
+          current = `路线已完成 · 已跳过 ${skippedCount} 个补能节点演示`;
+          note = `${reservationCount > 0 ? `提前预约 ${reservationCount} 次；` : "本方案未执行提前预约；"}跳过的节点没有被计作 OCR 或扣款成功。本轮${ocrSummary}。`;
+        } else {
+          current = "站内流程完成 · 下一步进入运营复盘";
+          note = `路线${reservationCount > 0 ? `、提前预约 ${reservationCount} 次` : ""}、${ocrSummary}与演示扣款 ${paymentCount} 次已串成可检查链路；运营分流与飞书 AI 仍需在运营页手动触发。`;
+        }
       }
     }
 
@@ -5567,6 +5589,7 @@
 
   const SIMULATION_STATION_PHASES = new Set(["reservation", "recognition", "queue", "service", "payment", "leave"]);
   const SIMULATION_FLOW_STAGES = ["reservation", "recognition", "queue", "service", "payment"];
+  const SIMULATION_SKIPPABLE_PHASES = new Set(["recognition", "queue", "service"]);
 
   function isSimulationStationPhase(phase) {
     return Boolean(phase && SIMULATION_STATION_PHASES.has(phase.type) && phase.stop);
@@ -5601,7 +5624,7 @@
     // the reviewer has explicitly entered the station workflow. Keeping the
     // control disabled on drive/reservation phases prevents bypassing the
     // automatic reservation evidence for a later stop.
-    if (!simulation.active || !simulation.phases.length || !isSimulationStationPhase(simulation.phase) || simulation.phase.type === "reservation") return false;
+    if (!simulation.active || !simulation.phases.length || !isSimulationStationPhase(simulation.phase) || !SIMULATION_SKIPPABLE_PHASES.has(simulation.phase.type)) return false;
     return simulationSkipTargetIndex(simulationStopIndexToSkip()) !== null;
   }
 
@@ -5712,6 +5735,13 @@
   }
 
   function renderSimulationCompletion(phase, card, image, title, badge, text) {
+    const simulation = state.simulation;
+    const plannedStopCount = simulationStopsFor(simulation.record).length;
+    const reservationCount = simulation.reservedStops?.size || 0;
+    const actualOcrCount = simulation.ocrExecutedStopIndexes?.size || 0;
+    const fallbackOcrCount = simulation.ocrFallbackStopIndexes?.size || 0;
+    const paymentCount = simulation.paymentCompletedStopIndexes?.size || 0;
+    const skippedCount = simulation.skippedStopIndexes?.size || 0;
     card.classList.add("is-complete");
     card.hidden = false;
     const media = card.querySelector(".simulation-scene-media");
@@ -5729,25 +5759,31 @@
     if (badge) badge.textContent = "流程回顾";
     if (text) {
       text.hidden = false;
-      text.textContent = `车辆已沿${state.simulation.record?.displayName || "已选路线"}到达${state.destinationName || "目的地"}，站内关键链路已按当前演示数据完成一轮回放。`;
+      text.textContent = plannedStopCount === 0
+        ? `车辆已沿${simulation.record?.displayName || "已选路线"}到达${state.destinationName || "目的地"}。本次路线可直达，没有触发站内预约、OCR、补能或扣款演示。`
+        : `车辆已沿${simulation.record?.displayName || "已选路线"}到达${state.destinationName || "目的地"}；完整站内流程回放 ${paymentCount} 个节点${skippedCount > 0 ? `，另跳过 ${skippedCount} 个节点` : ""}。`;
     }
     const body = byId("simulationCompletionBody");
     const list = byId("simulationCompletionList");
     if (body) body.hidden = false;
     if (list) {
-      const ocrCopy = state.simulation.ocrFallbackUsed
-        ? "车牌识别：预置样例托底"
-        : state.simulation.recognizedPlate
-          ? `本地 PaddleOCR：${state.simulation.recognizedPlate}`
-          : "本地 PaddleOCR：已执行";
-      const items = [
-        ["map", "高德真实路线与车辆追踪"],
-        ["calendar-clock", `提前预约演示：${state.simulation.reservedStops?.size || 0} 个节点`],
-        ["scan-line", ocrCopy],
-        ["bar-chart-3", "P50 / P90 排队预测"],
-        [isFuelActive() ? "fuel" : "battery-charging", "补能服务时长推演"],
-        ["receipt", "车牌关联与演示电子收据"]
-      ];
+      const items = [["map", state.live ? "高德真实路线与车辆追踪" : "固定场景路线回放（非高德实时结果）"]];
+      if (plannedStopCount === 0) {
+        items.push(["route", "补能停靠：规划判定无需执行"]);
+        items.push(["scan-line", "站内 OCR / 扣款：未触发"]);
+      } else {
+        items.push(["calendar-clock", reservationCount > 0 ? `提前预约演示：${reservationCount} 个节点` : "提前预约演示：未执行"]);
+        if (actualOcrCount > 0) items.push(["scan-line", `本地 PaddleOCR：实际执行 ${actualOcrCount} 次`]);
+        else items.push(["scan-line", "本地 PaddleOCR：未执行"]);
+        if (fallbackOcrCount > 0) items.push(["scan-line", `预置样例托底：${fallbackOcrCount} 次（非本地推理）`]);
+        if (paymentCount > 0) {
+          items.push([isFuelActive() ? "fuel" : "battery-charging", `排队 / 补能完整回放：${paymentCount} 个节点`]);
+          items.push(["receipt", `演示电子收据：${paymentCount} 份`]);
+        } else {
+          items.push(["receipt", "演示电子收据：未生成"]);
+        }
+        if (skippedCount > 0) items.push(["skip-forward", `跳过补能演示：${skippedCount} 个节点`]);
+      }
       list.innerHTML = items.map(([icon, label]) => `<div class="simulation-completion-item"><i data-lucide="${icon}"></i><span>${label}</span></div>`).join("");
     }
     renderSimulationSceneAction(phase);
