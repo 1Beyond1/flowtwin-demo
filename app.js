@@ -7859,8 +7859,11 @@
       status.innerHTML = `<strong>本地演示模式</strong> · 未配置飞书多维表格，当前运营结果仍可在本页查看`;
       setOperatorAnalysisStep("feishu", "not-configured", "未配置");
     } else {
-      status.innerHTML = `<strong>等待仿真结果</strong> · 点击“开始智能分析”后自动请求飞书 AI`;
-      setOperatorAnalysisStep("feishu", "idle", "等待仿真结果");
+      const simulationReady = Boolean(state.pendingOperatorPayload);
+      status.innerHTML = simulationReady
+        ? `<strong>沙盘结果已就绪</strong> · 点击“开始智能分析”后请求飞书 AI 解读`
+        : `<strong>等待仿真结果</strong> · 点击“开始智能分析”后自动请求飞书 AI`;
+      setOperatorAnalysisStep("feishu", "idle", simulationReady ? "等待 AI 解读" : "等待仿真结果");
     }
     renderFeishuAiResult(result);
     if (button) button.disabled = stateName === "processing";
@@ -9023,6 +9026,7 @@
       state.pendingOperatorSnapshot = snapshot;
       renderOperatorFlow(payload);
       setOperatorAnalysisStep("simulation", "completed", "已计算");
+      renderFeishuSyncStatus(null);
       showToast(payload.execution?.executable && !payload.insufficientData
         ? "已根据平台边界、券成本与目标人群完成场景仿真"
         : "已完成站点边界校验，当前未生成可执行运营策略");
