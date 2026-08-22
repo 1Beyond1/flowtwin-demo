@@ -7955,8 +7955,8 @@
       if (source) source.textContent = "策略沙盘结果不受影响；飞书 AI 需要完成服务配置后使用。";
     } else if (status === "completed") {
       empty.hidden = false;
-      empty.textContent = "飞书 AI 流程已完成，但没有返回可展示的运营结论；本页不会用预置建议补齐空结果。";
-      if (source) source.textContent = "策略沙盘结果仍可独立查看；飞书 AI 本轮没有形成有效文本。";
+      empty.textContent = "飞书同步轮询已结束，但 AI 字段没有返回可展示的运营结论；本页不会用预置建议补齐空结果。";
+      if (source) source.textContent = "策略沙盘结果仍可独立查看；飞书 AI 本轮没有形成有效文本，不计作 AI 解读成功。";
     } else {
       empty.hidden = false;
       empty.textContent = "点击“开始智能分析”，先生成策略沙盘结果，再查看 AI 对运营结果的自然语言解读。";
