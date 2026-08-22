@@ -2738,6 +2738,37 @@
         line-height: 1.45;
       }
 
+      .planning-ai-example {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-height: 26px;
+        margin-top: 7px;
+        padding: 0 8px;
+        border: 1px solid #b8caf5;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #315bb8;
+        font-size: 8px;
+        font-weight: 750;
+      }
+
+      .planning-ai-example:hover,
+      .planning-ai-example:focus-visible {
+        border-color: #7898e8;
+        background: #eef3ff;
+        outline: none;
+      }
+
+      .planning-ai-example svg {
+        width: 12px;
+        height: 12px;
+      }
+
+      .planning-ai-example[hidden] {
+        display: none;
+      }
+
       .planning-execution-loop {
         border-color: #d8e6df;
         background: #f8fbf9;
@@ -5729,6 +5760,7 @@
             <span>本轮 AI 增量</span>
             <strong id="planningAiValueTitle">等待解析</strong>
             <small id="planningAiValueNote">系统会在需要时调用模型，并让规则校验最终输入。</small>
+            <button class="planning-ai-example" id="planningAiExampleButton" type="button" hidden><i data-lucide="messages-square"></i><span>体验多轮 AI 补充</span></button>
           </div>
           <div class="planning-execution-loop" id="planningExecutionLoop" hidden>
             <div class="planning-execution-loop-head"><strong>从规划到执行</strong><span id="planningLoopCurrent">下一步：开始模拟驾驶</span></div>

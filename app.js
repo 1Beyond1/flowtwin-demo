@@ -1141,8 +1141,10 @@
 
   function renderPlanningAiValue(hasPlan = state.hasPlannedRoute) {
     const panel = byId("planningAiValue");
+    const exampleButton = byId("planningAiExampleButton");
     if (!panel) return;
     panel.hidden = !hasPlan;
+    if (exampleButton) exampleButton.hidden = !hasPlan || state.lastPlanAiStatus?.state === "ready";
     if (!hasPlan) return;
     const copy = planningAiIncrementCopy();
     setText("planningAiValueTitle", copy.title);
@@ -9977,6 +9979,7 @@
     byId("reservationButton")?.addEventListener("click", () => { void simulateReservation(); });
     byId("voiceIntentButton")?.addEventListener("click", () => { toggleVoiceIntent(); });
     byId("aiMultiturnExampleButton")?.addEventListener("click", fillAiMultiturnExample);
+    byId("planningAiExampleButton")?.addEventListener("click", fillAiMultiturnExample);
     byId("composerSubmitButton")?.addEventListener("click", parseIntent);
     byId("destinationCandidates")?.addEventListener("click", (event) => {
       const button = event.target.closest("[data-candidate-index]");
