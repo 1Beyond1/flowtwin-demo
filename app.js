@@ -7931,7 +7931,8 @@
     const source = byId("feishuAiSource");
     if (!empty || !conclusions) return;
     const status = result?.status;
-    const entries = status === "completed" ? parseFeishuAiResult(result.aiResult) : [];
+    const errorState = status === "error" || result?.mode === "error";
+    const entries = status === "completed" && !errorState ? parseFeishuAiResult(result.aiResult) : [];
     if (entries.length) {
       empty.hidden = true;
       conclusions.hidden = false;
@@ -7940,18 +7941,22 @@
       return;
     }
     conclusions.hidden = true;
-    if (status === "processing" || status === "syncing") {
-      empty.hidden = false;
-      empty.textContent = "正在等待飞书 AI 返回运营解读……";
-      if (source) source.textContent = "仿真结果已生成，AI 正在读取策略记录。";
-    } else if (status === "error" || result?.mode === "error") {
+    if (errorState) {
       empty.hidden = false;
       empty.textContent = `策略沙盘结果已生成，但飞书 AI 暂时不可用：${result.message || "请检查配置或权限"}`;
       if (source) source.textContent = "策略沙盘结果不受影响；飞书 AI 结果未伪造。";
+    } else if (status === "processing" || status === "syncing") {
+      empty.hidden = false;
+      empty.textContent = "正在等待飞书 AI 返回运营解读……";
+      if (source) source.textContent = "仿真结果已生成，AI 正在读取策略记录。";
     } else if (status === "not-configured") {
       empty.hidden = false;
       empty.textContent = "策略沙盘结果已生成，当前未配置飞书 AI；不会用示例文字冒充 AI 结果。";
       if (source) source.textContent = "策略沙盘结果不受影响；飞书 AI 需要完成服务配置后使用。";
+    } else if (status === "completed") {
+      empty.hidden = false;
+      empty.textContent = "飞书 AI 流程已完成，但没有返回可展示的运营结论；本页不会用预置建议补齐空结果。";
+      if (source) source.textContent = "策略沙盘结果仍可独立查看；飞书 AI 本轮没有形成有效文本。";
     } else {
       empty.hidden = false;
       empty.textContent = "点击“开始智能分析”，先生成策略沙盘结果，再查看 AI 对运营结果的自然语言解读。";
@@ -7973,9 +7978,14 @@
     status.dataset.state = stateName;
     if (stateName === "completed") {
       const entryCount = parseFeishuAiResult(result.aiResult).length;
-      const resultSummary = entryCount ? `已生成 ${entryCount} 条运营解读` : "已返回 AI 策略结果";
-      status.innerHTML = `<strong>飞书 AI 已完成</strong> · ${resultSummary}`;
-      setOperatorAnalysisStep("feishu", "completed", "已完成");
+      if (entryCount > 0) {
+        status.innerHTML = `<strong>飞书 AI 已完成</strong> · 已生成 ${entryCount} 条运营解读`;
+        setOperatorAnalysisStep("feishu", "completed", "已完成");
+      } else {
+        status.dataset.state = "error";
+        status.innerHTML = "<strong>飞书 AI 未产出结论</strong> · 流程已结束，本轮无可展示文本";
+        setOperatorAnalysisStep("feishu", "error", "无有效结论");
+      }
     } else if (stateName === "processing") {
       status.innerHTML = `<strong>飞书 AI 分析中</strong> · 已同步 ${Number(result.stationCount || 0)} 个站点，等待 AI 字段返回`;
       setOperatorAnalysisStep("feishu", "processing", "分析中");
@@ -8200,7 +8210,10 @@
         state.feishuSync = result;
         renderFeishuSyncStatus(result);
         if (result.status === "completed" || result.status === "error") {
-          showToast(result.status === "completed" ? "飞书 AI 策略已返回" : "飞书同步失败，请查看状态提示", 3200);
+          const entryCount = result.status === "completed" ? parseFeishuAiResult(result.aiResult).length : 0;
+          showToast(result.status === "completed"
+            ? entryCount > 0 ? "飞书 AI 运营解读已返回" : "飞书 AI 流程已结束，但无可展示结论"
+            : "飞书同步失败，请查看状态提示", 3200);
           return;
         }
       } catch {
@@ -9631,6 +9644,20 @@
     refreshIcons();
   }
 
+  function operatorAnalysisCompletionToast(result = state.feishuSync) {
+    const status = result?.status;
+    if (status === "error" || result?.mode === "error") return "策略沙盘已完成；飞书 AI 暂不可用，未伪造运营解读";
+    if (status === "completed") {
+      const entryCount = parseFeishuAiResult(result.aiResult).length;
+      return entryCount > 0
+        ? "分析完成：策略沙盘与飞书 AI 运营解读已更新"
+        : "策略沙盘已完成；飞书 AI 本轮没有返回可展示结论";
+    }
+    if (status === "processing" || status === "syncing") return "策略沙盘已完成；飞书 AI 仍在处理，可稍后重新获取";
+    if (status === "not-configured") return "策略沙盘已完成；飞书 AI 未配置，本轮未生成 AI 解读";
+    return "策略沙盘已完成；飞书 AI 尚未返回结果";
+  }
+
   async function runExecutionLoop() {
     if (state.executionState === "running") return;
     if (state.executionState === "after") {
@@ -9652,7 +9679,7 @@
     state.executionState = "after";
     setOperatorAnalysisStep("simulation", "completed", "已完成");
     if (button) {
-      button.innerHTML = '<i data-lucide="loader-circle"></i>正在获取 AI 解读…';
+      button.innerHTML = '<i data-lucide="loader-circle"></i>正在同步并检查 AI 解读…';
       refreshIcons();
     }
     await syncFeishuOperatorSnapshot();
@@ -9667,7 +9694,7 @@
     // The main CTA becomes “重置分析” after completion; keep the legacy
     // secondary reset control hidden so the evaluator sees one clear action.
     byId("resetExecution")?.classList.add("hidden");
-    showToast("分析完成：策略沙盘结果与 AI 运营解读已更新");
+    showToast(operatorAnalysisCompletionToast());
     refreshIcons();
   }
 
