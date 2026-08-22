@@ -1560,6 +1560,10 @@
         margin-bottom: 17px;
       }
 
+      .operator-head > div:first-child {
+        min-width: 0;
+      }
+
       .operator-head h2 {
         font-size: 20px;
         font-weight: 650;
@@ -1569,6 +1573,13 @@
         margin-top: 5px;
         color: var(--muted);
         font-size: 11px;
+      }
+
+      .operator-head p .source-badge {
+        min-height: 20px;
+        padding-block: 2px;
+        white-space: normal;
+        vertical-align: middle;
       }
 
       .operator-boundary-note {
@@ -1609,6 +1620,7 @@
         color: var(--muted);
         font-size: 9px;
         line-height: 1.25;
+        overflow-wrap: anywhere;
       }
 
       .operator-context-item strong {
