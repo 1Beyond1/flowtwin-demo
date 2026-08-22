@@ -23,7 +23,7 @@
   const DEFAULT_LONG_TRIP_MAX_STOPS = 6;
   const ADAPTIVE_LONG_TRIP_MAX_STOPS = 12;
   const COMPLETED_ROUTE_PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
-  const COMPLETED_ROUTE_PLAN_STORAGE_KEY = "flowtwin:completed-route-plan:v1";
+  const COMPLETED_ROUTE_PLAN_STORAGE_KEY = "flowtwin:completed-route-plan:v2";
   const DEFAULT_VISION_SAMPLE_URL = "/assets/vision/default-camera-scene.png";
   // 地图/演示输入没有支付与驶离事件时间。单独保留一个透明的缓冲项，
   // 避免把这段时间偷偷塞进“排队”等字段；后续企业适配器可以按站点覆盖。
@@ -1311,6 +1311,13 @@
     renderPlanningExecutionLoop(true);
   }
 
+  function routeP90Wait(record) {
+    const aggregate = Number(record?.p90Wait);
+    if (Number.isFinite(aggregate)) return Number(aggregate.toFixed(1));
+    const station = Number(record?.station?.p90);
+    return Number.isFinite(station) ? Number(station.toFixed(1)) : null;
+  }
+
   function renderRouteDecisionSummary() {
     const summary = byId("routeDecisionSummary");
     if (!summary) return;
@@ -1348,13 +1355,14 @@
       title = delay > 0
         ? "推荐稳妥方案：用少量 ETA 换取更低尾部排队风险"
         : "推荐稳妥方案：同等 ETA 下优先更低尾部排队风险";
+      const stableP90 = routeP90Wait(record) ?? "—";
       text = delay > 0
-        ? `相较最快方案预计晚 ${delay} 分钟；P90 排队 ${record.station?.p90 ?? record.p90Wait ?? "—"} 分钟，优先降低到站后的不确定性。`
-        : `与最快方案预计到达时间基本一致；P90 排队 ${record.station?.p90 ?? record.p90Wait ?? "—"} 分钟，因此优先选择尾部风险更低的方案。`;
+        ? `相较最快方案预计晚 ${delay} 分钟；全程补能排队 P90 ${stableP90} 分钟，优先降低到站后的不确定性。`
+        : `与最快方案预计到达时间基本一致；全程补能排队 P90 ${stableP90} 分钟，因此优先选择尾部风险更低的方案。`;
     } else if (record.isActualFastest && stable && stable !== record) {
-      const riskDelta = Number(record.station?.p90 ?? record.p90Wait ?? 0) - Number(stable.station?.p90 ?? stable.p90Wait ?? 0);
+      const riskDelta = Number(routeP90Wait(record) ?? 0) - Number(routeP90Wait(stable) ?? 0);
       title = "最快方案：适合时间优先，但需接受更高排队风险";
-      text = `预计 ${formatJourneyClock(record.arrival)} 到达；相较稳妥方案 P90 排队${riskDelta >= 0 ? "增加" : "减少"}约 ${Math.abs(riskDelta).toFixed(1)} 分钟。`;
+      text = `预计 ${formatJourneyClock(record.arrival)} 到达；相较稳妥方案，全程补能排队 P90 ${riskDelta >= 0 ? "增加" : "减少"}约 ${Math.abs(riskDelta).toFixed(1)} 分钟。`;
     } else if (record.isActualCheapest) {
       title = "最低成本方案：在到达约束内压低综合费用";
       text = `预计 ${formatJourneyClock(record.arrival)} 到达，系统同时检查能源安全余量与补能停靠可行性。`;
@@ -2269,8 +2277,9 @@
     return Math.max(0, difference < 0 ? difference + 24 * 60 : difference);
   }
 
-  function forecastScenarioKey(baseRoute) {
+  function forecastScenarioKey(baseRoute, routeKey = "reliable") {
     return [
+      routeKey,
       state.departureMinutes,
       state.energyType,
       state.hybridBranch,
@@ -2391,8 +2400,10 @@
     if (reservationOverrideFor(station) > 0) return;
     state.reservationOverrides[key] = 1;
     state.stationForecastScenarioKey = null;
-    const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
-    if (base) await ensureStationForecasts(base);
+    const routeKey = state.selectedRoute || "reliable";
+    const base = state.baseRouteRecords[routeKey] || state.routeRecords[routeKey]
+      || state.baseRouteRecords.reliable || state.routeRecords.reliable;
+    if (base) await ensureStationForecasts(base, routeKey);
     const updated = state.stations.find((candidate) => String(candidate.id) === key) || station;
     state.selectedStation = updated;
     renderReservationAction(updated);
@@ -2400,23 +2411,31 @@
     showToast("已加入演示预约队列，站点等待时间已重新计算", 2600);
   }
 
-  async function ensureStationForecasts(baseRoute) {
+  async function ensureStationForecasts(baseRoute, routeKey = "reliable") {
     const stations = Array.isArray(state.stations) ? state.stations : [];
     if (!stations.length || !baseRoute) return null;
-    const scenarioKey = forecastScenarioKey(baseRoute);
+    const scenarioKey = forecastScenarioKey(baseRoute, routeKey);
     if (state.stationForecastScenarioKey === scenarioKey && stations.every((station) => (
       Array.isArray(station.forecast) && station.forecast.length && station.forecastMethod
     ))) return null;
     const requestId = ++state.stationForecastRequestVersion;
     const duration = Math.max(30, Number(baseRoute.duration || 30));
     const horizonMinutes = Math.min(240, Math.max(30, Math.ceil(duration / 5) * 5));
-    const inputStations = stations.map((station) => Object.assign({}, station, {
-      stationSource: station.source,
-      ...buildStationForecastInput(station),
-      arrivalOffsetMinutes: Math.max(0, Number.isFinite(Number(station.routeProgress))
-        ? Number(station.routeProgress) * Number(baseRoute.duration || 0)
-        : 0)
-    }));
+    const inputStations = stations.map((station) => {
+      const forecastInput = buildStationForecastInput(station);
+      // A second objective forecast runs after the first one has attached a
+      // 30--240 minute point series to every station. Sending those arrays
+      // back to /api/forecast can exceed the 128 KB request guard and leave
+      // the browser waiting for the timeout. The forecast is regenerated from
+      // scalar station/port inputs, so reuse the same bounded representation
+      // as the long-trip planner instead of echoing prior output.
+      return Object.assign(compactLongTripStation(forecastInput), {
+        stationSource: station.source,
+        arrivalOffsetMinutes: Math.max(0, Number.isFinite(Number(station.routeMetricsByPolicy?.[routeKey]?.routeProgress ?? station.routeProgress))
+          ? Number(station.routeMetricsByPolicy?.[routeKey]?.routeProgress ?? station.routeProgress) * Number(baseRoute.duration || 0)
+          : 0)
+      });
+    });
     try {
       const payload = await postJson("/api/forecast", {
         stations: inputStations,
@@ -4316,6 +4335,7 @@
   }
 
   async function requestLongTripPlans(routeKey = "reliable") {
+    const routeLabel = { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }[routeKey] || routeKey;
     const base = state.baseRouteRecords[routeKey]
       || state.routeRecords[routeKey]
       || state.baseRouteRecords.reliable
@@ -4341,7 +4361,8 @@
         injectProvisionalCorridorStations(routeKey);
       }
     }
-    await ensureStationForecasts(base);
+    setMapStatus(`到站压力预测 · ${routeLabel} · 正在对齐预计经过时刻`);
+    await ensureStationForecasts(base, routeKey);
     // Once route verification has proved that public POI coverage is too sparse,
     // plan only with the explicit corridor anchors. Mixing the original sparse
     // POIs back in can repeatedly select an unverified urban station instead.
@@ -4353,6 +4374,7 @@
     const planningStations = (activeCorridorStations.length ? activeCorridorStations : activeBranchStations)
       .map((station) => compactLongTripStation(station, routeKey));
     try {
+      setMapStatus(`多站补能组合搜索 · ${routeLabel} · ${planningStations.length} 个候选`);
       const proposal = await postJson("/api/longtrip", {
         distanceKm: base.distance,
         durationMinutes: base.duration,
@@ -4723,6 +4745,18 @@
     const routedBackup = {};
     for (let index = 0; index < roles.length; index += 1) {
       const role = roles[index];
+      const roleLabel = { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }[role] || role;
+      setMapStatus(`逐段安全核验 ${index + 1}/${roles.length} · ${roleLabel}`);
+      if (state.aiActive) {
+        setAiStatus(`正在核验 ${roleLabel} · ${index + 1}/${roles.length}`, "loading");
+        setAiReply("正在用真实道路里程逐段检查补能点可达性、补能后余量、绕行和最终 ETA；该阶段不由大模型猜测路线。");
+      }
+      const base = state.baseRouteRecords[role] || state.baseRouteRecords.reliable;
+      // The final road policy can place the same station at a different ETA.
+      // Refresh the bounded forecast inputs for this policy before validating
+      // its real-road sequence, rather than reusing the cheapest/reliable
+      // corridor's arrival snapshot for every objective.
+      if (base) await ensureStationForecasts(base, role);
       // Candidate estimates are screened again with the actual road geometry.
       // A station sequence that works on a corridor approximation may fail on
       // a particular road policy, so try the objective's plan first and then
@@ -4742,10 +4776,12 @@
         ...rolePlans
       ].filter(Boolean);
       const seen = new Set();
+      let candidateAttempt = 0;
       for (const plan of candidates) {
         const signature = (plan.stops || []).map((stop) => stop.id).join("|") || "direct";
         if (seen.has(signature)) continue;
         seen.add(signature);
+        candidateAttempt += 1;
         const stops = (plan.stops || []).map((stop) => {
           const station = state.stations.find((candidate) => String(candidate.id) === String(stop.id));
           const metrics = station?.routeMetricsByPolicy?.[role];
@@ -4761,7 +4797,6 @@
         if (materiallyDifferentCheapRoute && role !== "cheapest"
           && stops.some((station) => station.provisionalCorridor
             && (station.provisionalRouteKey || "reliable") !== role)) continue;
-        const base = state.baseRouteRecords[role] || state.baseRouteRecords.reliable;
         // A generated corridor anchor can lie on a motorway centre line and
         // therefore cannot always be used as a road-routing endpoint. Its
         // energy sequence is still calculated from the verified AMap main
@@ -4779,6 +4814,7 @@
         if (record && !routedBackup[role]) routedBackup[role] = record;
         if (record?.feasible) {
           validated[role] = record;
+          setMapStatus(`逐段安全核验 ${index + 1}/${roles.length} · ${roleLabel}已通过（候选 ${candidateAttempt}）`);
           break;
         }
       }
@@ -5966,8 +6002,13 @@
     state.selectedStation = station;
     selectStation(station, false);
     try {
-      const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
-      if (base) await ensureStationForecasts(base);
+      const routeKey = state.simulation?.record?.key || state.selectedRoute || "reliable";
+      const base = state.baseRouteRecords[routeKey] || state.routeRecords[routeKey]
+        || state.baseRouteRecords.reliable || state.routeRecords.reliable;
+      if (base) await ensureStationForecasts(
+        base,
+        routeKey
+      );
       const updated = state.stations.find((candidate) => String(candidate.id) === key) || station;
       state.selectedStation = updated;
       selectStation(updated, false);
@@ -7034,7 +7075,7 @@
     if (evidence[2]) {
       const difference = Math.round(record.arrival - reliable.arrival);
       if (record.isActualStable && record.isActualFastest) evidence[2].textContent = "该方案同时拥有最早 ETA 与最低 P90 排队风险";
-      else if (record.isActualStable) evidence[2].textContent = `该方案 P90 排队 ${record.station.p90} 分钟，在可行方案中尾部排队风险最低`;
+      else if (record.isActualStable) evidence[2].textContent = `该方案全程补能排队 P90 ${routeP90Wait(record) ?? "—"} 分钟，在可行方案中尾部排队风险最低`;
       else if (record.isActualFastest) evidence[2].textContent = `相较低风险方案，预计提前 ${Math.max(0, Math.abs(difference))} 分钟`;
       else if (record.isActualCheapest) evidence[2].textContent = `该方案总成本最低，仍满足当前到达约束`;
       else evidence[2].textContent = `这是成本与风险的可解释备选方案，预计 ${formatJourneyClock(record.arrival)} 抵达`;
@@ -9710,7 +9751,7 @@
       .join("|");
     const departureBucket = Math.floor(Number(state.departureMinutes || 0) / 5) * 5;
     return [
-      "demo-route-v1",
+      "demo-route-v2",
       state.origin.map((value) => Number(value).toFixed(5)).join(","),
       state.destination.map((value) => Number(value).toFixed(5)).join(","),
       routeSignature,
@@ -9741,6 +9782,7 @@
     // departure bucket, so changing any planning condition still recomputes.
     if (!entry) {
       try {
+        window.localStorage.removeItem("flowtwin:completed-route-plan:v1");
         const persisted = JSON.parse(window.localStorage.getItem(COMPLETED_ROUTE_PLAN_STORAGE_KEY) || "null");
         if (persisted?.expiresAt <= Date.now()) {
           window.localStorage.removeItem(COMPLETED_ROUTE_PLAN_STORAGE_KEY);
