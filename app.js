@@ -8468,14 +8468,20 @@
 
   function planningCompletionMessage() {
     const records = Object.values(state.routeRecords || {});
-    const directCount = records.filter((record) => record.directTrip).length;
-    const feasibleCount = records.filter((record) => record.feasible).length;
-    if (directCount === records.length && records.length) return "当前余量可直达目的地，已取消不必要的补能停靠。";
+    const groups = Array.isArray(state.routeDisplayGroups) ? state.routeDisplayGroups : [];
+    const displayedRecords = groups.length
+      ? groups.map((group) => state.routeRecords[group.representative]).filter(Boolean)
+      : records;
+    const directCount = displayedRecords.filter((record) => record.directTrip).length;
+    const feasibleCount = displayedRecords.filter((record) => record.feasible).length;
+    const feasibleObjectiveCount = records.filter((record) => record.feasible).length;
+    const objectiveCoverage = feasibleObjectiveCount > feasibleCount ? `，覆盖 ${feasibleObjectiveCount} 个优化目标` : "";
+    if (directCount === displayedRecords.length && displayedRecords.length) return "当前余量可直达目的地，已取消不必要的补能停靠。";
     if (!feasibleCount && state.multiStopPlanningMeta?.failure) return `未生成虚假的可行路线：${state.multiStopPlanningMeta.failure}`;
     if (!feasibleCount) return "未生成虚假的可行路线：当前余量无法安全抵达符合绕行约束的补能站。";
-    if (state.energyPercent <= 12) return `已进入低电量救援模式：先锁定最近的安全可达站，再比较 ${feasibleCount} 条后续路线。`;
+    if (state.energyPercent <= 12) return `已进入低电量救援模式：先锁定最近的安全可达站，再比较 ${feasibleCount} 条去重后的后续路线${objectiveCoverage}。`;
     const caveat = state.multiStopPlanningMeta?.searchCaveat ? "候选搜索有界，结果仍需按展示口径理解" : "";
-    return `已生成 ${feasibleCount} 条通过首段可达性、${state.arrivalReserveEnabled ? "到达余量" : "车辆安全下限"}和绕行约束校验的方案。${caveat ? ` ${caveat}。` : ""}`;
+    return `已生成 ${feasibleCount} 条去重后的可行路线${objectiveCoverage}，均通过首段可达性、${state.arrivalReserveEnabled ? "到达余量" : "车辆安全下限"}和绕行约束校验。${caveat ? ` ${caveat}。` : ""}`;
   }
 
   function clearPlanForUnresolvedDestination() {
