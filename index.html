@@ -1590,6 +1590,32 @@
         font-weight: 700;
       }
 
+      .operator-context-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .operator-context-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-width: 0;
+        padding: 5px 8px;
+        border: 1px solid rgba(216, 220, 215, 0.92);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.76);
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.25;
+      }
+
+      .operator-context-item strong {
+        color: var(--ink);
+        font-weight: 680;
+      }
+
       /* The operator view intentionally shows the two halves of the decision
          loop: deterministic simulation first, natural-language interpretation
          second.  The entry point is shared, but the responsibilities stay
@@ -5964,9 +5990,15 @@
         <div class="operator-head">
           <div>
             <div class="eyebrow">Operator intelligence</div>
-            <h2 id="operatorPanelTitle">北京区域补能供需</h2>
+            <h2 id="operatorPanelTitle">沿线补能供需</h2>
             <p>把全网站点观察结果与平台可调控站点分开，形成可解释的策略沙盘建议。<span class="source-badge">地图 POI（真实服务可用时来自高德） · 演示平台配置 · 仿真经营状态</span></p>
             <div class="operator-boundary-note"><strong>业务边界</strong><span>所有站点都可用于地图导航和补能候选；只有演示平台配置中同时满足合作、可调控、可发券、商家接受的站点，才会进入运营策略计算。</span></div>
+            <div class="operator-context-strip" aria-label="本轮运营输入证据">
+              <span class="operator-context-item"><strong>当前方案</strong><span id="operatorContextRoute">等待路线规划</span></span>
+              <span class="operator-context-item"><strong>地图来源</strong><span id="operatorContextMap">等待路线结果</span></span>
+              <span class="operator-context-item"><strong>站点池</strong><span id="operatorContextStations">等待沿线候选</span></span>
+              <span class="operator-context-item"><strong>预测输入</strong><span id="operatorContextPrior">等待站点预测</span></span>
+            </div>
           </div>
           <button class="close-button" id="closeOperator" aria-label="关闭运营视图"><i data-lucide="x"></i></button>
         </div>

@@ -7922,8 +7922,64 @@
     return "沿线";
   }
 
+  function syncOperatorContextEvidence() {
+    const route = state.routeRecords[state.selectedRoute];
+    const objectiveLabels = { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" };
+    const selectedGroup = state.routeDisplayGroups.find((group) => group.keys.includes(state.selectedRoute));
+    const coveredObjectives = (selectedGroup?.keys || [state.selectedRoute])
+      .map((key) => objectiveLabels[key])
+      .filter(Boolean);
+    const routeLabel = coveredObjectives.length === 3
+      ? "最佳方案 · 覆盖三目标"
+      : coveredObjectives.join(" / ") || "当前方案";
+    const stopCount = Array.isArray(route?.stops) ? route.stops.length : route?.station ? 1 : 0;
+    const routeState = !route
+      ? "等待路线规划"
+      : route.directTrip
+        ? `${routeLabel} · 余量可直达`
+        : `${routeLabel} · ${stopCount} 次补能`;
+    setText("operatorContextRoute", routeState);
+
+    const evidence = routeSourceEvidence();
+    const mapSource = !state.live
+      ? "固定场景回退"
+      : evidence.completedPlanCacheHit
+        ? "高德结果 · 完整方案缓存"
+        : evidence.cacheHit && evidence.cacheStale
+          ? "高德结果 · 缓存（含旧缓存标记）"
+          : evidence.cacheHit
+            ? "高德结果 · 路线缓存"
+            : evidence.cacheStale
+              ? "高德结果 · 旧缓存标记"
+              : "高德路线与 POI";
+    setText("operatorContextMap", mapSource);
+
+    const expectedType = isFuelActive() ? "加油站" : "充电站";
+    const matching = state.stations.filter((station) => station.type === expectedType);
+    const pool = matching.length ? matching : state.stations;
+    const provisionalCount = pool.filter((station) => station.provisionalCorridor === true).length;
+    const executableCount = pool.filter((station) => {
+      const meta = station.operatorMeta || {};
+      return meta.partner === true && meta.controllable === true && meta.couponEligible === true && meta.merchantAccepted === true;
+    }).length;
+    const stationSource = provisionalCount > 0
+      ? `${pool.length} 个候选 · ${provisionalCount} 个演示候选 · ${executableCount} 个可调控`
+      : `${pool.length} 个沿线候选 · ${executableCount} 个演示可调控`;
+    setText("operatorContextStations", stationSource);
+
+    const priorMatches = pool.filter((station) => station.forecastEnterprisePrior?.matched === true).length;
+    const forecastCount = pool.filter((station) => station.forecastMethod).length;
+    const priorSource = priorMatches > 0
+      ? `企业需求先验 ${priorMatches}/${pool.length} 站 · 站态仿真`
+      : forecastCount > 0
+        ? "未匹配企业先验 · 站态仿真"
+        : "等待站点预测";
+    setText("operatorContextPrior", priorSource);
+  }
+
   function syncOperatorPanelTitle() {
     setText("operatorPanelTitle", `${operatorCorridorLabel()}补能供需`);
+    syncOperatorContextEvidence();
   }
 
   function setOperatorAnalysisStep(step, stateName, label) {
@@ -8533,12 +8589,16 @@
     byId("routeSheet").style.display = mode === "driver" && !state.mobileInsightOpen ? "" : "none";
     if (mode === "driver") byId("mapAttribution").textContent = state.live ? "高德地图 · 真实路线与 POI / 演示预测状态" : "固定场景地图 · POI 示意 / 演示预测状态";
     if (mode === "operator") {
-      byId("mapAttribution").textContent = "高德地图 · 真实站点 / 演示负载";
+      byId("mapAttribution").textContent = state.live
+        ? "高德地图 · 真实路线与 POI / 演示运营负载"
+        : "固定场景地图 · POI 示意 / 演示运营负载";
       syncOperatorPanelTitle();
       renderOperatorFlow(state.pendingOperatorPayload);
       if (state.map && state.stations.length) state.map.setFitView(state.stationOverlays, false, [90, 380, 220, 330], 11);
     }
-    if (mode === "validation") byId("mapAttribution").textContent = "高德地图 · 固定种子验证场景";
+    if (mode === "validation") byId("mapAttribution").textContent = state.live
+      ? "高德地图 · 沿线 POI / 固定种子验证场景"
+      : "固定场景地图 · POI 示意 / 固定种子验证场景";
     if (mode === "validation" && !state.validationLoaded) loadValidation();
     if (mode === "vision") {
       byId("mapAttribution").textContent = "站内视觉演示 · 内置样例/上传媒体 · 本地 OCR";
