@@ -271,6 +271,9 @@
       reservationStopKey: null,
       reservationEvidenceOpen: false,
       skippedStopIndexes: new Set(),
+      ocrExecutedStopIndexes: new Set(),
+      ocrFallbackStopIndexes: new Set(),
+      paymentCompletedStopIndexes: new Set(),
       paymentNotifiedFor: null,
       ocrHealth: null
     }
@@ -1157,7 +1160,11 @@
     const loop = byId("planningExecutionLoop");
     if (!loop) return;
     loop.hidden = !hasPlan;
-    if (!hasPlan) return;
+    const operatorButton = byId("planningOperatorButton");
+    if (!hasPlan) {
+      if (operatorButton) operatorButton.hidden = true;
+      return;
+    }
 
     const forecastAvailable = Array.isArray(state.stations)
       && state.stations.some((station) => station && (station.forecastMethod || station.forecast || station.prediction));
@@ -1181,6 +1188,10 @@
 
     if (phase) {
       const type = String(phase.type || "");
+      const stopIndex = phase.stopIndex;
+      const localOcrExecuted = Number.isInteger(stopIndex) && simulation.ocrExecutedStopIndexes?.has(stopIndex);
+      const ocrFallbackUsed = Number.isInteger(stopIndex) && simulation.ocrFallbackStopIndexes?.has(stopIndex);
+      const resolvedOcrState = localOcrExecuted ? "pass" : ocrFallbackUsed ? "available" : "active";
       if (type === "drive") {
         current = "车辆行驶中 · 预约将在下一补能站触发";
         note = "路线自动推进；进入补能站后会切换为手动查看，不把后续业务流程一闪而过。";
@@ -1192,31 +1203,49 @@
           : "预约状态已写入本轮演示；站点排队变化仍明确标为演示/企业先验推演。";
       } else if (type === "recognition") {
         statuses.reservation = "pass";
-        statuses.ocr = simulation.recognitionResolved ? "pass" : "active";
-        current = simulation.recognitionResolved ? "本地 OCR 已完成 · 可继续查看扣款链路" : "下一步：执行本地 OCR";
+        statuses.ocr = simulation.recognitionResolved ? resolvedOcrState : "active";
+        current = localOcrExecuted
+          ? "本地 OCR 已完成 · 可继续查看扣款链路"
+          : ocrFallbackUsed
+            ? "已使用预置样例继续 · 本地 OCR 未计为成功"
+            : "下一步：执行本地 OCR";
         note = simulation.recognitionResolved
-          ? (simulation.ocrFallbackUsed
-            ? "本轮使用了明确标注的预置样例继续，不把预置文字冒充本地推理结果。"
+          ? (ocrFallbackUsed
+            ? "本轮使用了明确标注的预置样例托底，不把预置文字冒充本地推理结果。"
             : "车牌识别结果来自本地 OCR 服务；识别失败时不会伪造成功。")
           : "中央卡片会暂停在识别阶段，评委可以先看到本地调用结果再继续。";
       } else if (type === "queue" || type === "service") {
         statuses.reservation = "pass";
-        statuses.ocr = simulation.recognitionResolved ? "pass" : "active";
+        statuses.ocr = simulation.recognitionResolved ? resolvedOcrState : "active";
         current = type === "queue" ? "到站排队已重算 · 下一步查看补能服务" : "补能服务进行中 · 完成后生成演示扣款";
-        note = "当前阶段展示预计到站时刻、端口/队列口径与服务耗时；这些状态仍按页面标注的演示输入计算。";
+        note = `${ocrFallbackUsed ? "本节点使用预置样例托底，未计作本地 OCR 成功；" : ""}当前阶段展示预计到站时刻、端口/队列口径与服务耗时；这些状态仍按页面标注的演示输入计算。`;
       } else if (type === "payment") {
         statuses.reservation = "pass";
-        statuses.ocr = simulation.recognitionResolved ? "pass" : "active";
+        statuses.ocr = simulation.recognitionResolved ? resolvedOcrState : "active";
         statuses.payment = "active";
         current = "演示扣款已生成 · 请查看电子收据后继续";
-        note = "程序根据车牌识别结果关联本次演示订单并生成电子收据；当前不连接真实支付。";
+        note = ocrFallbackUsed
+          ? "程序使用明确标注的预置演示身份串联电子收据；本节点没有本地 OCR 成功结果，也不连接真实支付。"
+          : "程序根据本地车牌识别结果关联本次演示订单并生成电子收据；当前不连接真实支付。";
       } else if (type === "leave" || type === "arrived") {
+        const actualOcrCount = simulation.ocrExecutedStopIndexes?.size || 0;
+        const fallbackOcrCount = simulation.ocrFallbackStopIndexes?.size || 0;
+        const paymentCount = simulation.paymentCompletedStopIndexes?.size || 0;
+        const skippedCount = simulation.skippedStopIndexes?.size || 0;
+        const ocrParts = [];
+        if (actualOcrCount > 0) ocrParts.push(`本地 OCR ${actualOcrCount} 次`);
+        if (fallbackOcrCount > 0) ocrParts.push(`预置样例继续 ${fallbackOcrCount} 次（非本地推理）`);
+        const ocrSummary = ocrParts.length ? ocrParts.join("、") : "本地 OCR 未执行";
         statuses.reservation = "pass";
-        statuses.ocr = simulation.recognitionResolved ? "pass" : "active";
-        statuses.payment = "pass";
+        statuses.ocr = actualOcrCount > 0 ? "pass" : fallbackOcrCount > 0 ? "available" : "idle";
+        statuses.payment = paymentCount > 0 ? "pass" : "idle";
         statuses.operator = "available";
-        current = "站内流程完成 · 下一步进入运营复盘";
-        note = "路线、预约、OCR 与扣款演示已串成一条可检查链路；运营分流与飞书 AI 仍需在运营页手动触发。";
+        current = skippedCount > 0
+          ? `路线已完成 · 已跳过 ${skippedCount} 个补能节点演示`
+          : "站内流程完成 · 下一步进入运营复盘";
+        note = skippedCount > 0
+          ? `路线与预约已完成；跳过的节点没有被计作 OCR 或扣款成功。本轮${ocrSummary}。`
+          : `路线、预约、${ocrSummary}与演示扣款 ${paymentCount} 次已串成可检查链路；运营分流与飞书 AI 仍需在运营页手动触发。`;
       }
     }
 
@@ -1226,6 +1255,7 @@
     });
     setText("planningLoopCurrent", current);
     setText("planningLoopNote", note);
+    if (operatorButton) operatorButton.hidden = statuses.operator !== "available";
   }
 
   function routeSourceEvidence() {
@@ -5567,9 +5597,11 @@
 
   function canSkipSimulationStop() {
     const simulation = state.simulation;
-    // Reservation is the approach phase: the reviewer must see the automatic
-    // reservation finish before the station-level skip becomes available.
-    if (!simulation.active || !simulation.phases.length || simulation.phase?.type === "arrived" || simulation.phase?.type === "reservation") return false;
+    // A stop can be skipped only after its reservation card has completed and
+    // the reviewer has explicitly entered the station workflow. Keeping the
+    // control disabled on drive/reservation phases prevents bypassing the
+    // automatic reservation evidence for a later stop.
+    if (!simulation.active || !simulation.phases.length || !isSimulationStationPhase(simulation.phase) || simulation.phase.type === "reservation") return false;
     return simulationSkipTargetIndex(simulationStopIndexToSkip()) !== null;
   }
 
@@ -5712,7 +5744,7 @@
         ["map", "高德真实路线与车辆追踪"],
         ["calendar-clock", `提前预约演示：${state.simulation.reservedStops?.size || 0} 个节点`],
         ["scan-line", ocrCopy],
-        ["chart-no-axes", "P50 / P90 排队预测"],
+        ["bar-chart-3", "P50 / P90 排队预测"],
         [isFuelActive() ? "fuel" : "battery-charging", "补能服务时长推演"],
         ["receipt", "车牌关联与演示电子收据"]
       ];
@@ -6161,6 +6193,7 @@
     renderSimulationPhase(phase);
     if (phase.type === "payment") {
       const paymentKey = `${phase.stopIndex ?? index}:${phase.stop?.id || ""}`;
+      if (Number.isInteger(phase.stopIndex)) simulation.paymentCompletedStopIndexes.add(phase.stopIndex);
       if (simulation.paymentNotifiedFor !== paymentKey) {
         simulation.paymentNotifiedFor = paymentKey;
         showToast("已扣款成功 · 电子收据已生成（演示）", 4200);
@@ -6304,6 +6337,7 @@
         state.simulation.ocrFallbackUsed = false;
         state.simulation.ocrFallbackAvailable = false;
         state.simulation.recognizedPlate = plate;
+        if (Number.isInteger(targetStopIndex)) state.simulation.ocrExecutedStopIndexes.add(targetStopIndex);
         status.textContent = `已成功识别：${plate}`;
         if (badge) badge.textContent = "本地 OCR 结果";
         if (detail) {
@@ -6363,6 +6397,7 @@
     simulation.ocrFallbackUsed = true;
     simulation.recognizedPlate = null;
     simulation.ocrFallbackAvailable = false;
+    if (Number.isInteger(simulation.phase?.stopIndex)) simulation.ocrFallbackStopIndexes.add(simulation.phase.stopIndex);
     const status = byId("simulationOcrStatus");
     const detail = byId("simulationOcrDetail");
     const badge = byId("simulationSceneBadge");
@@ -6418,6 +6453,9 @@
     simulation.ocrHealth = null;
     simulation.reservedStops = new Set();
     simulation.skippedStopIndexes = new Set();
+    simulation.ocrExecutedStopIndexes = new Set();
+    simulation.ocrFallbackStopIndexes = new Set();
+    simulation.paymentCompletedStopIndexes = new Set();
     simulation.savedMapView = state.live && state.map ? { center: parseLocation(state.map.getCenter?.()), zoom: state.map.getZoom?.() } : null;
     document.body.classList.add("simulation-active");
     byId("tripPanel")?.classList.remove("collapsed");
@@ -10063,6 +10101,7 @@
       if (state.mode === "driver") byId("routeSheet").style.display = "";
     });
     byId("closeOperator").addEventListener("click", () => setMode("driver"));
+    byId("planningOperatorButton")?.addEventListener("click", () => setMode("operator"));
     byId("closeValidation").addEventListener("click", () => setMode("driver"));
     byId("closeVision")?.addEventListener("click", () => setMode("driver"));
     byId("simulationExitButton")?.addEventListener("click", stopSimulationDriving);

@@ -2871,6 +2871,32 @@
         font-weight: 700;
       }
 
+      .planning-operator-cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        min-height: 28px;
+        margin-top: 7px;
+        padding: 0 10px;
+        border: 1px solid #a9d6c8;
+        border-radius: 6px;
+        background: #eaf7f2;
+        color: #16725f;
+        font-size: 8px;
+        font-weight: 800;
+      }
+
+      .planning-operator-cta:hover,
+      .planning-operator-cta:focus-visible {
+        border-color: #65b49d;
+        background: #daf1e9;
+        outline: none;
+      }
+
+      .planning-operator-cta svg { width: 12px; height: 12px; }
+      .planning-operator-cta[hidden] { display: none; }
+
       @media (max-width: 540px) {
         .planning-execution-loop-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .planning-loop-stage:nth-child(3)::after,
@@ -5822,6 +5848,7 @@
               <span class="planning-loop-stage" data-loop-stage="operator">运营复盘</span>
             </div>
             <small id="planningLoopNote">路线结果已完成；开始模拟后，站内动作会逐步暂停，方便查看每个真实执行边界。</small>
+            <button class="planning-operator-cta" id="planningOperatorButton" type="button" hidden><i data-lucide="arrow-right-circle"></i><span>进入运营复盘</span></button>
           </div>
         </section>
         <section class="service-nudge" id="serviceNudge" aria-live="polite" hidden>
