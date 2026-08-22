@@ -4938,6 +4938,12 @@
     state.routeCandidates = Object.assign({}, state.multiStopRouteRecords);
     state.routeRecords = Object.assign({}, state.multiStopRouteRecords);
     state.recommendedRoute = preferred;
+    // Validation ends on the cheapest role, but the details panel opens on
+    // the recommended route. Restore the station ETA/forecast snapshot for
+    // that visible route so the selected-station card cannot show another
+    // objective's arrival-time pressure after planning completes.
+    const preferredBase = state.baseRouteRecords[preferred] || state.baseRouteRecords.reliable;
+    if (preferredBase) await ensureStationForecasts(preferredBase, preferred);
     renderLiveStationMarkers();
     return true;
   }
