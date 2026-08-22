@@ -138,6 +138,15 @@ function parseCoordinate(value) {
   return `${longitude.toFixed(6)},${latitude.toFixed(6)}`;
 }
 
+export function parseRouteWaypoints(value, maxWaypoints = 16) {
+  const text = String(value || "").trim();
+  if (!text) return [];
+  const parts = text.split(";").map((part) => part.trim()).filter(Boolean);
+  if (!parts.length || parts.length > maxWaypoints) return null;
+  const points = parts.map(parseCoordinate);
+  return points.every(Boolean) ? points : null;
+}
+
 function normalizePath(path, key, station) {
   const steps = Array.isArray(path.steps) ? path.steps : [];
   const points = steps.flatMap((step) => String(step.polyline || "").split(";")).map((point) => point.split(",").map(Number)).filter((point) => point.length === 2 && point.every(Number.isFinite));
@@ -189,10 +198,16 @@ export function routeSourceLabel(cacheState) {
 async function routeApi(requestUrl, response) {
   const origin = parseCoordinate(requestUrl.searchParams.get("origin"));
   const destination = parseCoordinate(requestUrl.searchParams.get("destination"));
-  const waypoint = parseCoordinate(requestUrl.searchParams.get("waypoint"));
+  const legacyWaypoint = parseCoordinate(requestUrl.searchParams.get("waypoint"));
+  const parsedWaypoints = parseRouteWaypoints(requestUrl.searchParams.get("waypoints"));
+  const waypoints = parsedWaypoints === null
+    ? null
+    : parsedWaypoints.length
+      ? parsedWaypoints
+      : legacyWaypoint ? [legacyWaypoint] : [];
   const key = requestUrl.searchParams.get("plan") || "reliable";
   const strategies = { fastest: "38", reliable: "33", cheapest: "36" };
-  if (!origin || !destination || !strategies[key]) return json(response, 400, { error: "INVALID_ROUTE_PARAMS" });
+  if (!origin || !destination || waypoints === null || !strategies[key]) return json(response, 400, { error: "INVALID_ROUTE_PARAMS" });
 
   const params = new URLSearchParams({
     origin,
@@ -202,7 +217,7 @@ async function routeApi(requestUrl, response) {
     ferry: "1",
     show_fields: "cost,navi,polyline"
   });
-  if (waypoint) params.set("waypoints", waypoint);
+  if (waypoints.length) params.set("waypoints", waypoints.join(";"));
   let cached;
   try {
     cached = await requestCachedAmap("route", "https://restapi.amap.com/v5/direction/driving", params, {
@@ -215,7 +230,7 @@ async function routeApi(requestUrl, response) {
   const result = cached.payload || {};
   const paths = Array.isArray(result.route?.paths) ? result.route.paths : [];
   if (result.status !== "1" || !paths.length) return json(response, 502, { error: result.info || "AMAP_ROUTE_FAILED", infocode: result.infocode || null });
-  const station = waypoint ? { location: waypoint.split(",").map(Number) } : null;
+  const station = waypoints.length === 1 ? { location: waypoints[0].split(",").map(Number) } : null;
   return json(response, 200, {
     route: normalizePath(paths[0], key, station),
     alternatives: paths.length,

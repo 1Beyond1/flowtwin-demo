@@ -3717,6 +3717,86 @@
     }
   }
 
+  function splitWaypointRouteIntoLegs(route, orderedWaypoints = []) {
+    const path = Array.isArray(route?.path) ? route.path.map(parseLocation).filter(Boolean) : [];
+    if (path.length < 2) return [];
+    const boundaries = [0];
+    let minimumIndex = 0;
+    orderedWaypoints.forEach((waypoint, waypointIndex) => {
+      const point = parseLocation(waypoint?.location || waypoint);
+      const remainingBoundaries = orderedWaypoints.length - waypointIndex;
+      const maximumIndex = Math.max(minimumIndex, path.length - 1 - remainingBoundaries);
+      let bestIndex = minimumIndex;
+      let bestDistance = Infinity;
+      for (let index = minimumIndex; index <= maximumIndex; index += 1) {
+        const candidateDistance = point ? distanceKm(point, path[index]) : Infinity;
+        if (candidateDistance < bestDistance) {
+          bestDistance = candidateDistance;
+          bestIndex = index;
+        }
+      }
+      boundaries.push(bestIndex);
+      minimumIndex = Math.min(path.length - 1, bestIndex + 1);
+    });
+    boundaries.push(path.length - 1);
+
+    const rawDistances = boundaries.slice(1).map((endIndex, index) => {
+      const startIndex = boundaries[index];
+      let distance = 0;
+      for (let cursor = startIndex + 1; cursor <= endIndex; cursor += 1) {
+        distance += distanceKm(path[cursor - 1], path[cursor]);
+      }
+      return distance;
+    });
+    const rawTotal = rawDistances.reduce((sum, distance) => sum + distance, 0);
+    if (!(rawTotal > 0)) return [];
+    const officialDistance = Math.max(0, Number(route.distance || 0));
+    const officialDuration = Math.max(0, Number(route.duration || 0));
+    const officialTolls = Math.max(0, Number(route.tolls || 0));
+    return rawDistances.map((rawDistance, index) => {
+      const ratio = rawDistance / rawTotal;
+      const startIndex = boundaries[index];
+      const endIndex = boundaries[index + 1];
+      return {
+        key: route.key,
+        path: path.slice(startIndex, endIndex + 1),
+        distance: officialDistance * ratio,
+        duration: officialDuration * ratio,
+        tolls: officialTolls * ratio,
+        highway: route.highway === true,
+        routeClass: route.routeClass || (route.highway === true ? "highway" : "unknown"),
+        roadNames: Array.isArray(route.roadNames) ? route.roadNames : [],
+        source: route.source,
+        routeSource: route.routeSource
+      };
+    });
+  }
+
+  async function queryServerWaypointRoute(key, routeStops) {
+    if (!Array.isArray(routeStops) || !routeStops.length || routeStops.length > 16) return null;
+    const waypointText = routeStops.map((stop) => formatRouteCoordinate(stop.location)).filter(Boolean).join(";");
+    if (!waypointText || waypointText.split(";").length !== routeStops.length) return null;
+    const params = new URLSearchParams({
+      origin: formatRouteCoordinate(state.origin),
+      destination: formatRouteCoordinate(state.destination),
+      waypoints: waypointText,
+      plan: key,
+      cartype: isFuelActive() ? "0" : "1"
+    });
+    try {
+      const { route, payload } = await fetchRouteWithRetry(params);
+      const normalized = Object.assign({}, route, {
+        routeSource: payload.source || route.source || "高德 Web 服务路线规划 2.0"
+      });
+      const legs = splitWaypointRouteIntoLegs(normalized, routeStops);
+      if (legs.length !== routeStops.length + 1 || legs.some((leg) => !(leg.distance >= 0) || !(leg.duration >= 0))) return null;
+      return { route: normalized, legs };
+    } catch (error) {
+      recordRouteError(`${key}:waypoint-sequence`, error);
+      return null;
+    }
+  }
+
   function routeStopsWithTripWaypoints(stops = [], includeTripWaypoints = true, routeKey = "reliable") {
     const corridor = corridorReferenceRoute(routeKey);
     const baseStops = (Array.isArray(stops) ? stops : []).map((stop, index) => Object.assign({}, stop, {
@@ -3851,6 +3931,25 @@
 
   async function queryRouteSequence(key, stops, options = {}) {
     const routeStops = routeStopsWithTripWaypoints(stops, options.includeTripWaypoints !== false, key);
+    const waypointRoute = await queryServerWaypointRoute(key, routeStops);
+    if (waypointRoute) {
+      const route = waypointRoute.route;
+      return {
+        key,
+        path: route.path,
+        legs: waypointRoute.legs,
+        waypoints: routeStops,
+        viaWaypoints: routeStops.filter((stop) => stop.kind === "waypoint"),
+        distance: Number(route.distance || 0),
+        duration: Number(route.duration || 0),
+        tolls: Number(route.tolls || 0),
+        highway: route.highway === true,
+        routeClass: route.routeClass || (route.highway === true ? "highway" : "unknown"),
+        roadNames: Array.isArray(route.roadNames) ? route.roadNames.slice(0, 80) : [],
+        source: "高德多途经点全程路线核验",
+        routeSource: route.routeSource
+      };
+    }
     const locations = [state.origin].concat(routeStops.map((station) => station.location), [state.destination]);
     // Keep a small amount of concurrency instead of sending every long-trip
     // leg at once. This avoids transient route-service throttling while still
@@ -6840,7 +6939,11 @@
     }
     timeline.hidden = false;
     const hasProvisional = record.stops.some((stop) => stop.provisionalCorridor);
-    const verificationNote = hasProvisional ? "高德主路线已核验 · 兜底候选需确认" : "逐段路线已核验";
+    const verificationNote = hasProvisional
+      ? "高德主路线已核验 · 兜底候选需确认"
+      : String(record.source || "").includes("多途经点")
+        ? "全程途经点已核验 · 道路折线分段"
+        : "逐段路线已核验";
      timeline.innerHTML = `<div class="stop-timeline-head"><strong>分段补能账本</strong><span>${verificationNote}</span></div>${record.stops.map((stop) => `<div class="stop-timeline-item"><b>${stop.sequence}</b><div><strong title="${escapeHtml(stop.name)}">${escapeHtml(stop.name)}</strong><small>到站 ${stop.arrivalSoc}% → 补至 ${stop.targetSoc}% · ${stop.legDistanceKm} km · 停靠 P50 ${stop.stopMinutesP50 ?? "—"} 分（排队 ${stop.plannedP50 ?? stop.p50 ?? "—"} + 服务 ${stop.chargeMinutes ?? "—"} + 支付驶离缓冲 ${stop.paymentExitMinutes ?? "—"}）${stop.provisionalCorridor ? " · 设备待确认" : ""}</small></div><span>+${stop.energyAmount}${record.energyUnit}</span></div>`).join("")}`;
   }
 
@@ -9631,10 +9734,10 @@
         const stationSearchStartedAt = Date.now();
         await queryStations();
         timingMarks.stationSearchMs = Date.now() - stationSearchStartedAt;
-        setMapStatus("沿线补能候选已提取 · 正在逐段核验安全与 ETA");
+        setMapStatus("沿线补能候选已提取 · 正在核验全程途经点与安全 ETA");
         if (state.aiActive) {
-          setAiStatus("补能候选已提取 · 正在逐段核验", "loading");
-          setAiReply("沿线候选站已完成提取，正在核验每一段能源可达性、绕行、排队与最终到达时间。");
+          setAiStatus("补能候选已提取 · 正在核验全程路线", "loading");
+          setAiReply("沿线候选站已完成提取，正在用高德多途经点路线核验全程道路，并拆分能源可达性、绕行、排队与最终到达时间。");
         }
         const routeValidationStartedAt = Date.now();
         await replanRoutesViaStations();

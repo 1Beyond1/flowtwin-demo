@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildAiHealthSummary, buildForecastApiScenario, buildLongTripApiInput, routeSourceLabel } from "../server.mjs";
+import { buildAiHealthSummary, buildForecastApiScenario, buildLongTripApiInput, parseRouteWaypoints, routeSourceLabel } from "../server.mjs";
 import { forecastStations } from "../lib/forecast.mjs";
 import { buildLongTripPlans } from "../lib/longtrip.mjs";
 
@@ -72,6 +72,13 @@ test("route responses distinguish fresh AMap results from local cache hits", () 
   assert.equal(routeSourceLabel("miss"), "高德 Web 服务路线规划 2.0");
   assert.equal(routeSourceLabel("hit"), "本地路线缓存 · 高德结果");
   assert.equal(routeSourceLabel("stale"), "本地路线缓存 · 高德结果（上游暂不可用）");
+});
+
+test("route waypoint input accepts an ordered bounded coordinate list", () => {
+  assert.deepEqual(parseRouteWaypoints("116.1,39.1; 117.2,40.2"), ["116.100000,39.100000", "117.200000,40.200000"]);
+  assert.deepEqual(parseRouteWaypoints(""), []);
+  assert.equal(parseRouteWaypoints("116.1,39.1;not-a-coordinate"), null);
+  assert.equal(parseRouteWaypoints(Array.from({ length: 17 }, () => "116.1,39.1").join(";")), null);
 });
 
 test("longtrip adapter whitelists and bounds forecast controls", () => {
