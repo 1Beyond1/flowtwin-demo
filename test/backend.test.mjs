@@ -570,7 +570,7 @@ test("plan response exposes parsed and destinationLocation contract", () => {
       destination: { coordinate: [116.41, 39.509], source: "高德", name: "北京大兴国际机场", city: "北京市", district: "大兴区" }
     }
   });
-  assert.equal(response.parsed.destination, "大兴机场");
+  assert.equal(response.parsed.destination, "北京大兴国际机场");
   assert.deepEqual(response.destinationLocation, [116.41, 39.509]);
   assert.equal(response.locationSources.destination, "高德");
   assert.deepEqual(response.locationMeta, {
