@@ -23,6 +23,7 @@
   const DEFAULT_LONG_TRIP_MAX_STOPS = 6;
   const ADAPTIVE_LONG_TRIP_MAX_STOPS = 12;
   const COMPLETED_ROUTE_PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
+  const COMPLETED_ROUTE_PLAN_STORAGE_KEY = "flowtwin:completed-route-plan:v1";
   const DEFAULT_VISION_SAMPLE_URL = "/assets/vision/default-camera-scene.png";
   // 地图/演示输入没有支付与驶离事件时间。单独保留一个透明的缓冲项，
   // 避免把这段时间偷偷塞进“排队”等字段；后续企业适配器可以按站点覆盖。
@@ -1233,7 +1234,8 @@
       .filter(Boolean);
     const cacheHit = sources.some((source) => source.includes("本地路线缓存") && !source.includes("上游暂不可用"));
     const cacheStale = sources.some((source) => source.includes("上游暂不可用"));
-    return { sources, cacheHit, cacheStale };
+    const completedPlanCacheHit = state.lastPlanTimings?.completedPlanCacheHit === true;
+    return { sources, cacheHit, cacheStale, completedPlanCacheHit };
   }
 
   function renderPlanningDecisionChain(hasPlan = state.hasPlannedRoute) {
@@ -1258,7 +1260,9 @@
     }
 
     const routeEvidence = routeSourceEvidence();
-    const cacheLabel = routeEvidence.cacheHit && routeEvidence.cacheStale
+    const cacheLabel = routeEvidence.completedPlanCacheHit
+      ? "完整补能方案缓存复用"
+      : routeEvidence.cacheHit && routeEvidence.cacheStale
       ? "高德路线 + 缓存命中（含旧缓存）"
       : routeEvidence.cacheHit
         ? "高德路线 + 本地缓存命中"
@@ -1270,7 +1274,9 @@
       : cacheLabel;
     const mapNote = !state.live
       ? "地图能力不可用时不冒充实时道路结果"
-      : routeEvidence.cacheHit && routeEvidence.cacheStale
+      : routeEvidence.completedPlanCacheHit
+        ? "路线、POI 与逐段安全核验结果来自同条件短期缓存；规划条件或五分钟压力快照变化时会重新计算"
+        : routeEvidence.cacheHit && routeEvidence.cacheStale
         ? "部分策略命中本地缓存，部分策略使用带标记的短期旧缓存；缓存内容仍来自高德结果"
         : routeEvidence.cacheHit
           ? "相同路线条件优先复用本地缓存；缓存内容仍来自高德结果"
@@ -9651,6 +9657,52 @@
     return JSON.parse(JSON.stringify(value));
   }
 
+  function compactRouteRecordForStorage(record) {
+    if (!record || typeof record !== "object") return record;
+    const compact = clonePlanCacheValue(record);
+    if (Array.isArray(compact.path)) {
+      compact.path = compact.path.map((point) => {
+        const parsed = parseLocation(point);
+        return parsed ? parsed.map((value) => Number(Number(value).toFixed(6))) : point;
+      });
+    }
+    // Leg paths duplicate the already verified full path and are only consumed
+    // while building the record. Distances/durations have already been folded
+    // into `stops` and route totals, so they are unnecessary after restore.
+    delete compact.legs;
+    return compact;
+  }
+
+  function compactCompletedRoutePlanForStorage(value) {
+    const routeRecords = Object.fromEntries(Object.entries(value.routeRecords || {}).map(([key, record]) => [
+      key,
+      compactRouteRecordForStorage(record)
+    ]));
+    return {
+      stations: clonePlanCacheValue(value.stations || []),
+      routeRecords,
+      // The other two collections are aliases of the same completed records.
+      // Persist the relationship, not two more copies of every road polyline.
+      hasMultiStopRouteRecords: Boolean(value.multiStopRouteRecords),
+      multiStopPlanningMeta: clonePlanCacheValue(value.multiStopPlanningMeta || null),
+      recommendedRoute: value.recommendedRoute,
+      provisionalCorridorActive: value.provisionalCorridorActive
+    };
+  }
+
+  function expandStoredCompletedRoutePlan(value) {
+    const routeRecords = clonePlanCacheValue(value.routeRecords || {});
+    return {
+      stations: clonePlanCacheValue(value.stations || []),
+      routeRecords,
+      routeCandidates: clonePlanCacheValue(routeRecords),
+      multiStopRouteRecords: value.hasMultiStopRouteRecords ? clonePlanCacheValue(routeRecords) : null,
+      multiStopPlanningMeta: clonePlanCacheValue(value.multiStopPlanningMeta || null),
+      recommendedRoute: value.recommendedRoute,
+      provisionalCorridorActive: value.provisionalCorridorActive
+    };
+  }
+
   function completedPlanCacheKey(baseRoutes = {}) {
     const routeSignature = Object.entries(baseRoutes)
       .sort(([left], [right]) => left.localeCompare(right))
@@ -9677,11 +9729,38 @@
   }
 
   function readCompletedRoutePlan(key) {
-    const entry = state.completedRoutePlanCache.get(key);
-    if (!entry || entry.expiresAt <= Date.now()) {
+    let entry = state.completedRoutePlanCache.get(key);
+    if (entry?.expiresAt <= Date.now()) {
       state.completedRoutePlanCache.delete(key);
-      return null;
+      entry = null;
     }
+    // The in-memory cache made repeated clicks fast, but a browser refresh
+    // discarded the fully verified plan and forced another 20s+ waypoint
+    // validation pass. Persist exactly one short-lived snapshot. The cache key
+    // already includes route geometry, energy constraints and a five-minute
+    // departure bucket, so changing any planning condition still recomputes.
+    if (!entry) {
+      try {
+        const persisted = JSON.parse(window.localStorage.getItem(COMPLETED_ROUTE_PLAN_STORAGE_KEY) || "null");
+        if (persisted?.expiresAt <= Date.now()) {
+          window.localStorage.removeItem(COMPLETED_ROUTE_PLAN_STORAGE_KEY);
+        } else if (persisted?.key === key && persisted?.value
+          && Array.isArray(persisted.value.stations)
+          && persisted.value.routeRecords && typeof persisted.value.routeRecords === "object") {
+          entry = {
+            value: Object.prototype.hasOwnProperty.call(persisted.value, "hasMultiStopRouteRecords")
+              ? expandStoredCompletedRoutePlan(persisted.value)
+              : persisted.value,
+            expiresAt: persisted.expiresAt
+          };
+          state.completedRoutePlanCache.set(key, entry);
+        }
+      } catch {
+        // Storage can be unavailable or full in privacy-restricted browsers.
+        // The normal in-memory cache and full planning path remain available.
+      }
+    }
+    if (!entry) return null;
     return clonePlanCacheValue(entry.value);
   }
 
@@ -9695,10 +9774,23 @@
       recommendedRoute: state.recommendedRoute,
       provisionalCorridorActive: state.provisionalCorridorActive
     };
-    state.completedRoutePlanCache.set(key, {
+    const entry = {
       value: clonePlanCacheValue(value),
       expiresAt: Date.now() + COMPLETED_ROUTE_PLAN_CACHE_TTL_MS
-    });
+    };
+    state.completedRoutePlanCache.set(key, entry);
+    try {
+      // Keep one entry only: this is a bounded responsiveness cache, not trip
+      // history. Never persist keys, user media, OCR input or external tokens.
+      window.localStorage.setItem(COMPLETED_ROUTE_PLAN_STORAGE_KEY, JSON.stringify({
+        key,
+        expiresAt: entry.expiresAt,
+        value: compactCompletedRoutePlanForStorage(entry.value)
+      }));
+    } catch {
+      // Large national routes may exceed a browser's storage quota. Falling
+      // back to the in-memory entry is safer than trimming route evidence.
+    }
     // This is a UI responsiveness cache, not an unbounded trip history.
     while (state.completedRoutePlanCache.size > 12) {
       state.completedRoutePlanCache.delete(state.completedRoutePlanCache.keys().next().value);
