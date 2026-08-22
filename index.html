@@ -2650,6 +2650,14 @@
         text-align: right;
       }
 
+      .planning-decision-chain-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        min-width: 0;
+      }
+
       .planning-decision-chain-list {
         display: grid;
         gap: 5px;
@@ -2767,6 +2775,19 @@
 
       .planning-ai-example[hidden] {
         display: none;
+      }
+
+      .planning-decision-chain-head .planning-ai-example {
+        min-height: 23px;
+        margin-top: 0;
+        padding: 0 6px;
+        flex: 0 0 auto;
+      }
+
+      .planning-decision-chain-head .planning-ai-example span {
+        color: inherit;
+        font-size: 8px;
+        text-align: left;
       }
 
       .planning-execution-loop {
@@ -4894,7 +4915,7 @@
         bottom: clamp(88px, 12vh, 140px);
       }
 
-      .app.has-plan .ai-composer:not(:hover):not(:focus-within) {
+      .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) {
         grid-template-columns: 1fr;
         grid-template-rows: 50px;
         row-gap: 0;
@@ -4908,21 +4929,21 @@
         box-shadow: 0 9px 22px rgba(22, 29, 30, 0.17), 0 0 0 3px rgba(255, 255, 255, 0.58);
       }
 
-      .app.has-plan .ai-composer:not(:hover):not(:focus-within) textarea {
+      .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) textarea {
         display: none;
       }
 
-      .app.has-plan .ai-composer:not(:hover):not(:focus-within) .ai-parse-button {
+      .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) .ai-parse-button {
         width: 50px;
         height: 50px;
       }
 
-      .app.has-plan .ai-composer:not(:hover):not(:focus-within) .composer-submit-button {
+      .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) .composer-submit-button {
         width: 50px;
         height: 50px;
       }
 
-      .app.has-plan .ai-composer:not(:hover):not(:focus-within) .ai-input-hint {
+      .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) .ai-input-hint {
         display: none;
         opacity: 0;
         overflow: hidden;
@@ -5749,7 +5770,7 @@
           <div class="ai-thinking" id="aiThinking" hidden>正在理解约束并调用规划工具</div>
         </div>
         <section class="planning-decision-chain" id="planningDecisionChain" aria-label="本轮规划决策链" hidden data-reviewer-only>
-          <div class="planning-decision-chain-head"><strong>本轮决策链</strong><span>每层只处理其可验证职责</span></div>
+          <div class="planning-decision-chain-head"><strong>本轮决策链</strong><div class="planning-decision-chain-actions"><span>每层只处理可验证职责</span><button class="planning-ai-example" id="planningAiExampleButton" type="button" hidden><i data-lucide="messages-square"></i><span>多轮 AI 示例</span></button></div></div>
           <div class="planning-decision-chain-list">
             <article class="planning-decision-step" id="decisionIntentStep" data-state="idle"><span>01 · 语义入口</span><div><strong id="decisionIntentValue">等待解析</strong><small id="decisionIntentNote">复杂语义按需调用 AI，硬约束由规则复核</small></div></article>
             <article class="planning-decision-step" id="decisionMapStep" data-state="idle"><span>02 · 地图事实</span><div><strong id="decisionMapValue">等待路线</strong><small id="decisionMapNote">坐标、道路、里程与 POI 不由大模型生成</small></div></article>
@@ -5760,7 +5781,6 @@
             <span>本轮 AI 增量</span>
             <strong id="planningAiValueTitle">等待解析</strong>
             <small id="planningAiValueNote">系统会在需要时调用模型，并让规则校验最终输入。</small>
-            <button class="planning-ai-example" id="planningAiExampleButton" type="button" hidden><i data-lucide="messages-square"></i><span>体验多轮 AI 补充</span></button>
           </div>
           <div class="planning-execution-loop" id="planningExecutionLoop" hidden>
             <div class="planning-execution-loop-head"><strong>从规划到执行</strong><span id="planningLoopCurrent">下一步：开始模拟驾驶</span></div>

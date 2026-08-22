@@ -708,6 +708,7 @@
     state.lastIntentSignature = null;
     state.manualDeadlineOverride = null;
     state.manualArrivalReserveOverride = null;
+    byId("aiComposer")?.classList.add("force-expanded");
     fitIntentInput();
     updateComposerActionLabel();
     input.focus();
@@ -1358,6 +1359,7 @@
 
   function setPlanningVisibility(hasPlan) {
     byId("app")?.classList.toggle("has-plan", Boolean(hasPlan));
+    byId("aiComposer")?.classList.remove("force-expanded");
     updateIntentInputHint(Boolean(hasPlan));
     if (hasPlan) byId("intentInput")?.blur();
     const routeSheet = byId("routeSheet");
