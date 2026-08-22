@@ -690,6 +690,30 @@
     input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
   }
 
+  const AI_MULTITURN_EXAMPLE = "中途想先吃麦当劳，然后再找个咖啡店，尽量不要下高速";
+
+  function updateIntentInputHint(hasPlan = state.hasPlannedRoute) {
+    const copy = byId("intentInputHintCopy");
+    if (!copy) return;
+    copy.innerHTML = hasPlan
+      ? "<strong>继续补充当前行程：</strong>复杂语义会按需调用 AI，规则负责最终约束校验。"
+      : "<strong>可直接体验或改写：</strong>去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时。";
+  }
+
+  function fillAiMultiturnExample() {
+    if (!state.hasPlannedRoute || state.aiActive) return;
+    const input = byId("intentInput");
+    if (!input) return;
+    input.value = AI_MULTITURN_EXAMPLE;
+    state.lastIntentSignature = null;
+    state.manualDeadlineOverride = null;
+    state.manualArrivalReserveOverride = null;
+    fitIntentInput();
+    updateComposerActionLabel();
+    input.focus();
+    showToast("已填入多轮补充示例；点击箭头后才会按需调用 AI", 3200);
+  }
+
   function revealServiceFlow(options = {}) {
     const panel = byId("insightPanel");
     const flow = byId("serviceFlow");
@@ -1332,6 +1356,7 @@
 
   function setPlanningVisibility(hasPlan) {
     byId("app")?.classList.toggle("has-plan", Boolean(hasPlan));
+    updateIntentInputHint(Boolean(hasPlan));
     if (hasPlan) byId("intentInput")?.blur();
     const routeSheet = byId("routeSheet");
     const insightPanel = byId("insightPanel");
@@ -9951,6 +9976,7 @@
     });
     byId("reservationButton")?.addEventListener("click", () => { void simulateReservation(); });
     byId("voiceIntentButton")?.addEventListener("click", () => { toggleVoiceIntent(); });
+    byId("aiMultiturnExampleButton")?.addEventListener("click", fillAiMultiturnExample);
     byId("composerSubmitButton")?.addEventListener("click", parseIntent);
     byId("destinationCandidates")?.addEventListener("click", (event) => {
       const button = event.target.closest("[data-candidate-index]");

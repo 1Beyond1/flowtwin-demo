@@ -4805,6 +4805,43 @@
         transition: opacity 220ms ease, transform 420ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 420ms;
       }
 
+      .ai-input-hint-copy {
+        vertical-align: middle;
+      }
+
+      .ai-multiturn-example {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 6px;
+        padding: 3px 7px;
+        border: 1px solid rgba(74, 125, 240, 0.28);
+        border-radius: 999px;
+        background: rgba(235, 241, 255, 0.92);
+        color: #315fbf;
+        font: inherit;
+        font-weight: 750;
+        line-height: 1.2;
+        cursor: pointer;
+        vertical-align: middle;
+      }
+
+      .ai-multiturn-example:hover,
+      .ai-multiturn-example:focus-visible {
+        border-color: rgba(49, 95, 191, 0.48);
+        background: #e3ecff;
+        outline: none;
+      }
+
+      .ai-multiturn-example svg {
+        width: 12px;
+        height: 12px;
+      }
+
+      .app:not(.has-plan) .ai-multiturn-example {
+        display: none;
+      }
+
       .ai-composer:hover .ai-input-hint,
       .ai-composer:focus-within .ai-input-hint {
         opacity: 1;
@@ -5627,7 +5664,7 @@
               <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
             </span>
           </button>
-          <div class="ai-input-hint" id="intentInputHint" role="tooltip"><strong>可直接体验或改写：</strong>去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时。</div>
+          <div class="ai-input-hint" id="intentInputHint" role="note"><span class="ai-input-hint-copy" id="intentInputHintCopy"><strong>可直接体验或改写：</strong>去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时。</span><button class="ai-multiturn-example" id="aiMultiturnExampleButton" type="button" data-reviewer-only><i data-lucide="sparkles"></i><span>填入 AI 多轮示例</span></button></div>
         </div>
       </div>
 
