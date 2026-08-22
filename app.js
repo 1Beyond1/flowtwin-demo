@@ -179,7 +179,9 @@
     // 折线是真的，却是另一趟行程的。起点必须和终点一样被解析、被显示、被校验。
     originName: DEFAULT_ORIGIN_NAME,
     originNote: "北京市朝阳区姚家园南路 1 号 · 演示默认起点",
+    originCity: "北京",
     destinationName: "北京大兴国际机场",
+    destinationCity: "北京",
     energyType: "electric",
     // A hybrid carries two independent levels. `hybridLevels` is the source of
     // truth for both; `energyPercent` mirrors whichever branch is being planned,
@@ -788,6 +790,7 @@
       const coordinate = candidate.coordinate || candidate.location || candidate.lnglat || null;
       return {
         name: candidate.name || candidate.destination || candidate.label || "",
+        city: candidate.city || "",
         address: candidate.address || candidate.district || candidate.city || "",
         location: coordinate,
         coordinate,
@@ -836,7 +839,11 @@
     clearDestinationCandidates();
     setAiReply(`已选择目的地「${name}」，继续规划…`);
     setText("aiReplyMeta", "已选定候选目的地");
-    await parseIntent({ explicitDestination: name, destinationLocation: location });
+    await parseIntent({
+      explicitDestination: name,
+      destinationLocation: location,
+      destinationCity: String(candidate.city || "").trim() || null
+    });
   }
 
   const voiceIntent = {
@@ -2591,6 +2598,10 @@
       state.originNote = originIsDefault
         ? "北京市朝阳区姚家园南路 1 号 · 演示默认起点"
         : `${payload.locationSources?.origin || "高德定位"} · 按你指定的出发地规划`;
+      state.originCity = normalizeRegionCity(
+        payload.locationMeta?.origin?.city
+          || (originIsDefault ? "北京" : extractRegionCity(`${requestedOrigin} ${payload.locationMeta?.origin?.name || ""}`))
+      );
     } else if (!originIsDefault) {
       return { ok: false, destination: requestedDestination, origin: requestedOrigin, originUnresolved: true };
     }
@@ -2615,6 +2626,10 @@
     }
     if (parsed.priority) state.priority = parsed.priority;
     state.destination = normalizedDestination;
+    state.destinationCity = normalizeRegionCity(
+      payload.locationMeta?.destination?.city
+        || extractRegionCity(`${requestedDestination} ${payload.locationMeta?.destination?.name || ""}`)
+    );
     state.aiContext = Object.assign({}, state.aiContext || {}, parsed);
     renderParsedIntent(parsed);
     updateEnergyControls();
@@ -7882,17 +7897,33 @@
     return { applied, failed };
   }
 
-  // 运营页标题原来写死"北京区域补能供需"：用户规划"从上海去杭州"后打开运营视图，
-  // 标题仍写北京。从起点名/备注里提取城市 token，提不到就退成"沿线"，不再假设北京。
+  // 运营页标题原来只展示起点区域：跨城路线打开运营视图时，沿线多个城市的站点
+  // 会被误写成单一城市供需。优先使用高德解析返回的城市元数据，再用可见地点名兜底。
   const REGION_CITY_PATTERN = /北京|上海|天津|重庆|广州|深圳|杭州|南京|济南|成都|武汉|西安|苏州|长沙|青岛|大连|沈阳|哈尔滨|长春|昆明|厦门|福州|郑州|合肥|南昌|石家庄|太原|呼和浩特|银川|乌鲁木齐|拉萨|西宁|兰州|南宁|海口|贵阳|宁波|无锡|佛山|东莞|烟台|温州|唐山|徐州|潍坊|保定|廊坊|沧州|德州/;
-  function originRegionLabel() {
-    const source = `${state.originName || ""} ${state.originNote || ""}`;
-    const match = source.match(REGION_CITY_PATTERN);
-    return match ? `${match[0]}区域` : "沿线";
+  function extractRegionCity(value) {
+    const match = String(value || "").match(REGION_CITY_PATTERN);
+    return match ? match[0] : null;
+  }
+
+  function normalizeRegionCity(value) {
+    const city = String(value || "").trim();
+    if (!city) return null;
+    return city.replace(/(?:市|地区|自治州|特别行政区)$/, "") || null;
+  }
+
+  function operatorCorridorLabel() {
+    const origin = normalizeRegionCity(state.originCity)
+      || extractRegionCity(`${state.originName || ""} ${state.originNote || ""}`);
+    const destination = normalizeRegionCity(state.destinationCity)
+      || extractRegionCity(state.destinationName || "");
+    if (origin && destination && origin !== destination) return `${origin} → ${destination}沿线`;
+    if (origin) return `${origin}区域`;
+    if (destination) return `${destination}沿线`;
+    return "沿线";
   }
 
   function syncOperatorPanelTitle() {
-    setText("operatorPanelTitle", `${originRegionLabel()}补能供需`);
+    setText("operatorPanelTitle", `${operatorCorridorLabel()}补能供需`);
   }
 
   function setOperatorAnalysisStep(step, stateName, label) {
@@ -8592,6 +8623,7 @@
       value: String(value || "").trim(),
       explicitDestination: options.explicitDestination || null,
       destinationLocation: options.destinationLocation || null,
+      destinationCity: options.destinationCity || null,
       energyType: state.energyType,
       energyPercent: state.energyPercent,
       departure: state.departureMinutes,
@@ -8642,7 +8674,8 @@
           currentDestination: state.hasPlannedRoute ? state.destinationName : null,
           currentServices: state.hasPlannedRoute ? (state.aiContext?.services || []) : [],
           explicitDestination: options.explicitDestination || null,
-          destinationLocation: options.destinationLocation || null
+          destinationLocation: options.destinationLocation || null,
+          destinationCity: options.destinationCity || null
         }
       }, 60000);
       setAiStatus("正在确认目的地与意图", "loading");
@@ -8655,6 +8688,11 @@
       if (options.destinationLocation) {
         payload.destinationLocation = options.destinationLocation;
         parsed.destinationLocation = options.destinationLocation;
+      }
+      if (options.destinationCity) {
+        payload.locationMeta = Object.assign({}, payload.locationMeta, {
+          destination: Object.assign({}, payload.locationMeta?.destination, { city: options.destinationCity })
+        });
       }
       const requestMode = resolveRequestMode(value, parsed);
       state.lastRequestMode = requestMode;
@@ -8750,7 +8788,10 @@
         clearSupplementalStopsForNewTrip();
       }
       const payloadForApply = options.destinationLocation
-        ? { destinationLocation: options.destinationLocation }
+        ? {
+            destinationLocation: options.destinationLocation,
+            locationMeta: { destination: { city: options.destinationCity || null } }
+          }
         : { destinationLocation: parsedForApply.destinationLocation, originLocation: parsedForApply.originLocation };
       const applied = applyParsedIntent(parsedForApply, payloadForApply);
       if (!applied.ok) {

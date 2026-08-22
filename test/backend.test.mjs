@@ -565,11 +565,18 @@ test("plan response exposes parsed and destinationLocation contract", () => {
     origin: "能链北京总部",
     destination: "大兴机场",
     aiUsed: false,
-    locations: { origin: { coordinate: [116.491, 39.951], source: "默认" }, destination: { coordinate: [116.41, 39.509], source: "高德" } }
+    locations: {
+      origin: { coordinate: [116.491, 39.951], source: "默认", city: "北京市" },
+      destination: { coordinate: [116.41, 39.509], source: "高德", name: "北京大兴国际机场", city: "北京市", district: "大兴区" }
+    }
   });
   assert.equal(response.parsed.destination, "大兴机场");
   assert.deepEqual(response.destinationLocation, [116.41, 39.509]);
   assert.equal(response.locationSources.destination, "高德");
+  assert.deepEqual(response.locationMeta, {
+    origin: { name: "能链北京总部", city: "北京市", district: null },
+    destination: { name: "北京大兴国际机场", city: "北京市", district: "大兴区" }
+  });
   assert.deepEqual(response.destinationCandidates, []);
 });
 
@@ -650,7 +657,8 @@ test("explicit destination coordinate from picker skips re-geocoding", async () 
     message: "从能链北京总部前往华山",
     context: {
       explicitDestination: "华山风景区",
-      destinationLocation: [110.09, 34.48]
+      destinationLocation: [110.09, 34.48],
+      destinationCity: "渭南市"
     },
     config: { webServiceKey: "geo-key" },
     fetchImpl: async () => {
@@ -661,6 +669,7 @@ test("explicit destination coordinate from picker skips re-geocoding", async () 
   assert.equal(result.destination, "西岳华山风景区");
   assert.deepEqual(result.locations.destination.coordinate, [110.09, 34.48]);
   assert.equal(result.locations.destination.source, "用户选定候选");
+  assert.equal(result.locations.destination.city, "渭南市");
   assert.equal(fetchCount, 0);
 });
 
