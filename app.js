@@ -688,8 +688,13 @@
   function fitIntentInput() {
     const input = byId("intentInput");
     if (!input || input.tagName !== "TEXTAREA") return;
-    const minHeight = 54;
-    const maxHeight = 104;
+    // The post-plan composer is intentionally a compact single/two-line
+    // capsule.  The previous 104px ceiling made clicking the multi-turn
+    // example inflate the composer into a large white panel even when the
+    // inserted example fit on one line.  Keep longer text scrollable instead
+    // of letting the floating composer cover the route sheet.
+    const minHeight = 48;
+    const maxHeight = 72;
     input.style.height = "auto";
     const next = Math.min(Math.max(input.scrollHeight, minHeight), maxHeight);
     input.style.height = `${next}px`;
