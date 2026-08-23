@@ -8369,13 +8369,15 @@
   }
 
   function renderStationSummary() {
-    if (!state.stations.length) return;
-    ensureOperatorDemoMetadata();
-    state.operatorOriginalStations = state.stations.map((station) => Object.assign({}, station));
-    state.operatorBefore = computeOperatorSnapshot(state.stations);
+    // Reset route-scoped operator/execution state before checking the station
+    // pool. A failed live route can legitimately leave zero stations; returning
+    // early in that case used to leave the previous trip's strategy payload in
+    // memory until the next successful plan, even though the operator tab was
+    // already disabled. Clearing it here keeps a failed/new trip boundary
+    // deterministic as well as visually safe.
+    state.operatorOriginalStations = [];
+    state.operatorBefore = null;
     state.operatorAfter = null;
-    // A new route owns a new operator snapshot. Do not let a strategy payload
-    // from the previous trip reappear when the reviewer opens the operator tab.
     state.pendingOperatorPayload = null;
     state.pendingOperatorSnapshot = null;
     state.executionState = "before";
@@ -8385,8 +8387,12 @@
     resetOperatorAnalysisSteps();
     closePaymentReceipt();
     syncOperatorPanelTitle();
-    renderOperatorMetrics(state.operatorBefore, false);
     resetValidationView();
+    if (!state.stations.length) return;
+    ensureOperatorDemoMetadata();
+    state.operatorOriginalStations = state.stations.map((station) => Object.assign({}, station));
+    state.operatorBefore = computeOperatorSnapshot(state.stations);
+    renderOperatorMetrics(state.operatorBefore, false);
     loadWeather();
   }
 
