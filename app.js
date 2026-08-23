@@ -8824,7 +8824,9 @@
       setAiStatus("正在请求路线与沿线补能站", "loading");
       setAiReply(payload.assistantReply || parsedForApply.assistantReply || "已识别出行约束，正在请求真实路线与沿线补能站……");
       await recomputePlan({ manageButton: false, silent: true });
-      setPlanningVisibility(true);
+      // A live route failure clears hasPlannedRoute. Do not reopen the old
+      // route sheet (or an empty sheet) just because parsing itself completed.
+      setPlanningVisibility(Boolean(state.hasPlannedRoute));
       setAiStatus("正在校验多目标方案", "loading");
       const postRouteOutcome = await applyPostRouteActions(actions);
       const failedActions = preRouteOutcome.failed.concat(postRouteOutcome.failed);
@@ -8875,7 +8877,9 @@
       setAiReply("模型连接暂时不可用，已按本地规则保留核心规划能力。");
       setAiStatus("正在请求路线与沿线补能站", "loading");
       await recomputePlan({ manageButton: false, silent: true });
-      setPlanningVisibility(true);
+      // Keep the failure boundary visible: a failed map request must not make
+      // the previous trip look like the result of this request.
+      setPlanningVisibility(Boolean(state.hasPlannedRoute));
       setAiStatus("正在校验多目标方案", "loading");
       const postRouteOutcome = await applyPostRouteActions(actions);
       const failedActions = preRouteOutcome.failed.concat(postRouteOutcome.failed);
