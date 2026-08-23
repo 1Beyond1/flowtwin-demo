@@ -4549,6 +4549,22 @@
       .display-mode-option small { color: inherit; font-size: 9px; line-height: 1.4; }
       .display-mode-option.active { border-color: #b9caf5; background: #ffffff; color: var(--text); box-shadow: 0 2px 8px rgba(22, 29, 30, 0.08); }
       .display-mode-option:hover:not(.active), .display-mode-option:focus-visible { border-color: #c9d5f3; color: var(--text); outline: 0; }
+      .settings-origin-current { display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
+      .settings-origin-current > svg { flex: 0 0 auto; width: 16px; height: 16px; margin-top: 1px; color: var(--blue); }
+      .settings-origin-current > span { display: grid; gap: 4px; min-width: 0; }
+      .settings-origin-current strong { color: var(--text); font-size: 12px; }
+      .settings-origin-current small { overflow-wrap: anywhere; color: var(--muted); font-size: 10px; line-height: 1.45; }
+      .settings-origin-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 9px; }
+      .settings-origin-option { display: grid; gap: 4px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--muted); text-align: left; }
+      .settings-origin-option strong { color: inherit; font-size: 11px; }
+      .settings-origin-option small { color: inherit; font-size: 9px; line-height: 1.4; }
+      .settings-origin-option.active { border-color: #b9caf5; background: #f7f9ff; color: var(--text); box-shadow: 0 2px 8px rgba(22, 29, 30, 0.06); }
+      .settings-origin-option:hover:not(:disabled), .settings-origin-option:focus-visible { border-color: #b9caf5; background: #f7f9ff; color: var(--text); outline: 0; }
+      .settings-origin-option:disabled { cursor: wait; opacity: .58; }
+      .settings-origin-status { min-height: 17px; margin-top: 8px; color: var(--quiet); font-size: 10px; line-height: 1.45; }
+      .settings-origin-status[data-tone="loading"] { color: var(--blue); }
+      .settings-origin-status[data-tone="success"] { color: var(--teal); }
+      .settings-origin-status[data-tone="error"] { color: var(--amber); }
 
       .settings-toggle-row {
         display: flex;
@@ -4615,7 +4631,7 @@
         .settings-trigger { min-width: 42px; min-height: 42px; padding: 0 10px; }
         .settings-trigger span { display: none; }
         .settings-panel { width: 100vw; padding: 20px 18px 28px; }
-        .display-mode-switch, .version-grid { grid-template-columns: 1fr; }
+        .display-mode-switch, .version-grid, .settings-origin-actions { grid-template-columns: 1fr; }
         .display-mode-option { min-height: 58px; }
         .station-stat { grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
         .station-stat .stat-block { padding: 8px 7px; }
@@ -6259,6 +6275,23 @@
               <strong>用户模式</strong><small>只看出行、路线、补能、等待、价格与服务建议</small>
             </button>
           </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="settingsOriginTitle">
+          <div class="settings-section-head"><h3 id="settingsOriginTitle">出发位置</h3><span>本次访问可随时切换</span></div>
+          <div class="settings-origin-current">
+            <i data-lucide="map-pin" aria-hidden="true"></i>
+            <span><strong id="settingsOriginCurrent">能链中心 · 北京总部</strong><small id="settingsOriginMeta">北京市朝阳区姚家园南路 1 号 · 演示默认起点</small></span>
+          </div>
+          <div class="settings-origin-actions" role="group" aria-label="切换出发位置">
+            <button class="settings-origin-option active" type="button" data-settings-origin="default" aria-pressed="true">
+              <strong>能链总部</strong><small>使用演示默认起点</small>
+            </button>
+            <button class="settings-origin-option" type="button" data-settings-origin="location" aria-pressed="false">
+              <strong>使用当前位置</strong><small>申请浏览器定位权限</small>
+            </button>
+          </div>
+          <div class="settings-origin-status" id="settingsOriginStatus" role="status" aria-live="polite">当前使用能链总部</div>
         </section>
 
         <section class="settings-section" aria-labelledby="versionTitle">

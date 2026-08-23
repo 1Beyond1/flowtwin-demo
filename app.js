@@ -467,7 +467,7 @@
     }
   }
 
-  function setDefaultOrigin() {
+  function setDefaultOrigin(options = {}) {
     state.origin = FALLBACK.origin.slice();
     state.originName = DEFAULT_ORIGIN_NAME;
     state.originNote = DEFAULT_ORIGIN_NOTE;
@@ -475,7 +475,7 @@
     state.originSource = "演示默认起点";
     state.originAccuracy = null;
     updateOriginSurface();
-    refreshOriginMapSurface();
+    if (!options.deferMapRefresh) refreshOriginMapSurface();
   }
 
   function waitForAmap(timeoutMs = 2600) {
@@ -531,7 +531,7 @@
     return error?.message || "当前浏览器不支持定位";
   }
 
-  async function chooseBrowserOrigin() {
+  async function chooseBrowserOrigin(options = {}) {
     if (!navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") {
       throw new Error("当前浏览器不支持定位");
     }
@@ -563,7 +563,7 @@
     state.originSource = "用户当前位置（浏览器定位）";
     state.originAccuracy = Number.isFinite(accuracy) ? accuracy : null;
     updateOriginSurface();
-    refreshOriginMapSurface();
+    if (!options.deferMapRefresh) refreshOriginMapSurface();
     return { converted: converted.converted, address, location };
   }
 
@@ -840,6 +840,65 @@
     }
   }
 
+  function renderSettingsOrigin() {
+    const isDefault = state.originName === DEFAULT_ORIGIN_NAME;
+    setText("settingsOriginCurrent", isDefault ? "能链中心 · 北京总部" : (state.originName || "当前位置"));
+    setText("settingsOriginMeta", state.originNote || "起点已按本次选择更新");
+    $$('[data-settings-origin]').forEach((button) => {
+      const active = (button.dataset.settingsOrigin === "default") === isDefault;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+  }
+
+  function setSettingsOriginStatus(message, tone = "") {
+    const status = byId("settingsOriginStatus");
+    if (!status) return;
+    status.textContent = message || "";
+    status.dataset.tone = tone;
+  }
+
+  function invalidatePlanForOriginChange() {
+    state.lastIntentSignature = null;
+    if (state.hasPlannedRoute) {
+      clearPlanForUnresolvedDestination();
+      setAiStatus("起点已更新", "idle");
+      setAiReply("起点已更新，请重新提交出行要求，系统将按新起点重新规划。");
+      setText("aiReplyMeta", "等待重新规划");
+    } else {
+      refreshOriginMapSurface();
+    }
+  }
+
+  async function handleSettingsOriginChoice(choice) {
+    if (originChoiceBusy || !["default", "location"].includes(choice)) return;
+    originChoiceBusy = true;
+    const buttons = $$('[data-settings-origin]');
+    buttons.forEach((button) => { button.disabled = true; });
+    setSettingsOriginStatus(choice === "location" ? "正在请求浏览器定位权限……" : "正在切换出发位置……", "loading");
+    try {
+      if (choice === "default") {
+        setDefaultOrigin({ deferMapRefresh: true });
+      } else {
+        await chooseBrowserOrigin({ deferMapRefresh: true });
+      }
+      invalidatePlanForOriginChange();
+      renderSettingsOrigin();
+      setSettingsOriginStatus(
+        choice === "location" ? "已切换为当前位置；如已有路线，请重新提交规划。" : "已切换为能链总部；如已有路线，请重新提交规划。",
+        "success"
+      );
+      showToast(choice === "location" ? "起点已切换为用户当前位置" : "起点已切换为能链总部", 2800);
+    } catch (error) {
+      setSettingsOriginStatus(`${browserLocationError(error)}，仍保留当前起点。`, "error");
+      showToast(`${browserLocationError(error)}，未修改起点`, 3600);
+    } finally {
+      originChoiceBusy = false;
+      buttons.forEach((button) => { button.disabled = false; });
+      renderSettingsOrigin();
+    }
+  }
+
   function openSettings() {
     const backdrop = byId("settingsBackdrop");
     const panel = byId("settingsPanel");
@@ -853,6 +912,11 @@
       const first = settingsFocusableElements()[0];
       (first || panel).focus();
     }, 0);
+    renderSettingsOrigin();
+    setSettingsOriginStatus(
+      state.originName === DEFAULT_ORIGIN_NAME ? "当前使用能链总部" : "当前使用用户当前位置",
+      ""
+    );
     loadVersionInfo();
   }
 
@@ -906,6 +970,10 @@
     $$('[data-display-mode-option]').forEach((button) => {
       button.addEventListener("click", () => setDisplayMode(button.dataset.displayModeOption));
     });
+    $$('[data-settings-origin]').forEach((button) => {
+      button.addEventListener("click", () => void handleSettingsOriginChoice(button.dataset.settingsOrigin));
+    });
+    renderSettingsOrigin();
     document.addEventListener("keydown", handleSettingsKeydown);
   }
 
