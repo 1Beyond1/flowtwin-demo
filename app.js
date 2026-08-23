@@ -8374,6 +8374,10 @@
     state.operatorOriginalStations = state.stations.map((station) => Object.assign({}, station));
     state.operatorBefore = computeOperatorSnapshot(state.stations);
     state.operatorAfter = null;
+    // A new route owns a new operator snapshot. Do not let a strategy payload
+    // from the previous trip reappear when the reviewer opens the operator tab.
+    state.pendingOperatorPayload = null;
+    state.pendingOperatorSnapshot = null;
     state.executionState = "before";
     state.paymentState = "authorized";
     state.paymentReceipt = null;
