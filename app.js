@@ -10170,6 +10170,12 @@
       prepareFallbackPlan();
       state.hasPlannedRoute = true;
       renderFallbackRouteVisuals();
+      // The fallback page starts with an "enter a request" status. Once the
+      // deterministic demo plan has actually been built, keep the status
+      // truthful and actionable instead of leaving a stale pre-plan message
+      // above a rendered route.
+      setMapStatus("固定场景路线已生成 · 预测与运营为演示仿真", "ready");
+      setText("mapAttribution", "固定场景地图 · POI 示意 / 演示预测状态");
     }
     state.hasPlannedRoute = true;
     state.lastPlanTimings = Object.assign(timingMarks, { totalMs: Date.now() - timingStartedAt });
