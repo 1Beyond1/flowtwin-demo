@@ -108,7 +108,10 @@ const SECURITY_HEADERS = Object.freeze({
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "X-Frame-Options": "SAMEORIGIN",
-  "Permissions-Policy": "camera=(self), microphone=(self), geolocation=()"
+  // The entry flow can request browser location after an explicit user click.
+  // Keep camera/microphone scoped to this origin and do not grant geolocation
+  // to embedded third parties.
+  "Permissions-Policy": "camera=(self), microphone=(self), geolocation=(self)"
 });
 
 function json(response, status, body, headers = {}) {

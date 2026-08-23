@@ -4010,6 +4010,11 @@
       .mode-choice-option-action { display: flex; align-items: center; gap: 5px; margin-top: auto; padding-top: 15px; color: var(--blue); font-size: 10px; font-weight: 700; }
       .mode-choice-option-action svg { width: 13px; height: 13px; }
       .mode-choice-foot { margin-top: 18px; color: var(--quiet); font-size: 10px; line-height: 1.5; }
+      .origin-choice-status { min-height: 18px; margin-top: 14px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+      .origin-choice-status[data-tone="loading"] { color: var(--blue); }
+      .origin-choice-status[data-tone="success"] { color: #16725f; }
+      .origin-choice-status[data-tone="error"] { color: #a04b42; }
+      .origin-choice .mode-choice-option:disabled { cursor: wait; opacity: .62; transform: none; box-shadow: none; }
 
       @media (max-width: 620px) {
         .mode-choice { padding: 22px; }
@@ -6306,6 +6311,30 @@
           </button>
         </div>
         <div class="mode-choice-foot">进入后仍可通过右上角“设置”随时切换；本次选择不会被记住，下次访问会重新询问。</div>
+      </section>
+    </div>
+
+    <div class="mode-choice-backdrop origin-choice-backdrop" id="originChoiceBackdrop" hidden>
+      <section class="mode-choice origin-choice" id="originChoicePanel" role="dialog" aria-modal="true" aria-labelledby="originChoiceTitle" aria-describedby="originChoiceDescription" tabindex="-1">
+        <div class="mode-choice-kicker">FlowTwin · 出发位置</div>
+        <h2 id="originChoiceTitle">选择本次出发位置</h2>
+        <p class="mode-choice-intro" id="originChoiceDescription">默认从能链北京总部开始规划；如果你希望按实际所在位置体验，可以在这里授权浏览器定位。本次选择仅对当前访问生效。</p>
+        <div class="mode-choice-options" role="group" aria-label="选择出发位置">
+          <button class="mode-choice-option" type="button" data-origin-choice="default">
+            <span class="mode-choice-option-icon"><i data-lucide="building-2"></i></span>
+            <span class="mode-choice-option-head"><strong>能链总部</strong><em>默认</em></span>
+            <small>使用能链北京总部作为演示起点，路线、地图与示例数据口径保持一致。</small>
+            <span class="mode-choice-option-action">从能链总部出发 <i data-lucide="arrow-right"></i></span>
+          </button>
+          <button class="mode-choice-option" type="button" data-origin-choice="location">
+            <span class="mode-choice-option-icon"><i data-lucide="locate-fixed"></i></span>
+            <span class="mode-choice-option-head"><strong>使用当前位置</strong></span>
+            <small>点击后才会申请浏览器定位权限；定位成功后将用当前位置作为起点，并尝试显示附近地址。</small>
+            <span class="mode-choice-option-action">申请定位并继续 <i data-lucide="arrow-right"></i></span>
+          </button>
+        </div>
+        <div class="origin-choice-status" id="originChoiceStatus" role="status" aria-live="polite">本次访问默认使用能链北京总部。</div>
+        <div class="mode-choice-foot">如果拒绝授权、定位超时或浏览器不支持定位，系统不会伪造坐标，会保留能链总部供你继续体验。</div>
       </section>
     </div>
 

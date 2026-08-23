@@ -133,6 +133,28 @@ test("simple explicit new trips stay local and do not call AI", async () => {
   assert.equal(formatPlanResponse(result).analysis.mode, "rules");
 });
 
+test("browser-selected origin coordinates are preserved without external geocoding", async () => {
+  const origin = [121.4737, 31.2304];
+  const result = await parseTripIntent({
+    message: "去上海东方明珠广播电视塔",
+    context: {
+      origin: "当前位置",
+      originLocation: origin,
+      originLocationSource: "用户当前位置（浏览器定位）",
+      originCity: "上海",
+      hasPlannedRoute: false
+    },
+    config: {},
+    fetchImpl: async () => { throw new Error("browser origin test should not call a provider"); }
+  });
+  assert.deepEqual(result.locations.origin.coordinate, origin);
+  assert.equal(result.locations.origin.source, "用户当前位置（浏览器定位）");
+  const response = formatPlanResponse(result);
+  assert.deepEqual(response.originLocation, origin);
+  assert.equal(response.locationMeta.origin.city, "上海");
+  assert.equal(response.parsed.origin, "当前位置");
+});
+
 test("a bare place query resolves through AMap without requiring a destination verb", async () => {
   const messages = ["天津站", "搜天津站"];
   for (const message of messages) {

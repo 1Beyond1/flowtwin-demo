@@ -17,6 +17,8 @@
   // 必须和 lib/config.mjs 的 DEFAULT_ORIGIN.name 一致：后端用这个名字判断
   // "用户没说起点"，前端用它判断"这个起点是默认值，不是用户要求的"。
   const DEFAULT_ORIGIN_NAME = "能链北京总部";
+  const DEFAULT_ORIGIN_NOTE = "北京市朝阳区姚家园南路 1 号 · 演示默认起点";
+  const DEFAULT_ORIGIN_CITY = "北京";
   // 标准正态的 90 分位，用于在 p50/p90 和标准差之间换算。与 lib/longtrip.mjs
   // 的同名常量保持一致，两边算的是同一条路线的同一个 P90。
   const Z90 = 1.2816;
@@ -178,8 +180,10 @@
     // destinationLocation。结果是"从上海去杭州"照样从北京总部起算——画出来的
     // 折线是真的，却是另一趟行程的。起点必须和终点一样被解析、被显示、被校验。
     originName: DEFAULT_ORIGIN_NAME,
-    originNote: "北京市朝阳区姚家园南路 1 号 · 演示默认起点",
-    originCity: "北京",
+    originNote: DEFAULT_ORIGIN_NOTE,
+    originCity: DEFAULT_ORIGIN_CITY,
+    originSource: "演示默认起点",
+    originAccuracy: null,
     destinationName: "北京大兴国际机场",
     destinationCity: "北京",
     energyType: "electric",
@@ -404,6 +408,8 @@
 
   let settingsPreviousFocus = null;
   let modeChoicePreviousFocus = null;
+  let originChoicePreviousFocus = null;
+  let originChoiceBusy = false;
   let versionInfoLoading = null;
 
   function modeChoiceFocusableElements() {
@@ -413,15 +419,203 @@
       .filter((element) => !element.disabled && !element.hidden && element.offsetParent !== null);
   }
 
+  function originChoiceFocusableElements() {
+    const panel = byId("originChoicePanel");
+    if (!panel) return [];
+    return Array.from(panel.querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"))
+      .filter((element) => !element.disabled && !element.hidden && element.offsetParent !== null);
+  }
+
+  function setOriginChoiceStatus(message, tone = "") {
+    const status = byId("originChoiceStatus");
+    if (!status) return;
+    status.textContent = message || "";
+    status.dataset.tone = tone;
+  }
+
+  function updateOriginSurface() {
+    const displayName = state.originName === DEFAULT_ORIGIN_NAME
+      ? "能链中心 · 北京总部"
+      : (state.originName || "当前位置");
+    setText("originName", displayName);
+    setText("originMeta", state.originNote || "起点已按本次选择更新");
+    const input = byId("intentInput");
+    if (input) {
+      const current = input.value.trim();
+      // The initial prompt explicitly contains the demo headquarters. Once a
+      // reviewer chooses the browser location, keeping that old phrase would
+      // make the parser treat the headquarters as a new, explicit origin.
+      if (!current || current === DEFAULT_DEMO_INTENT || current.startsWith(`从${DEFAULT_ORIGIN_NAME}`)) {
+        input.value = (current || DEFAULT_DEMO_INTENT).replaceAll(DEFAULT_ORIGIN_NAME, state.originName || DEFAULT_ORIGIN_NAME);
+        fitIntentInput();
+      }
+    }
+  }
+
+  function refreshOriginMapSurface() {
+    if (state.live && state.map) {
+      clearLiveOverlays();
+      addAmapEndpoints({ includeDestination: Boolean(state.hasPlannedRoute) });
+      if (state.hasPlannedRoute) {
+        drawAmapRoutes();
+        renderLiveStationMarkers();
+      } else {
+        fitAmapView();
+      }
+    } else if (!state.hasPlannedRoute) {
+      renderFallbackMap();
+    }
+  }
+
+  function setDefaultOrigin() {
+    state.origin = FALLBACK.origin.slice();
+    state.originName = DEFAULT_ORIGIN_NAME;
+    state.originNote = DEFAULT_ORIGIN_NOTE;
+    state.originCity = DEFAULT_ORIGIN_CITY;
+    state.originSource = "演示默认起点";
+    state.originAccuracy = null;
+    updateOriginSurface();
+    refreshOriginMapSurface();
+  }
+
+  function waitForAmap(timeoutMs = 2600) {
+    if (state.AMap) return Promise.resolve(state.AMap);
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      const check = () => {
+        if (state.AMap) return resolve(state.AMap);
+        if (Date.now() - startedAt >= timeoutMs) return resolve(null);
+        window.setTimeout(check, 100);
+      };
+      check();
+    });
+  }
+
+  function convertBrowserCoordinate(location) {
+    return waitForAmap().then((AMap) => {
+      if (!AMap || typeof AMap.convertFrom !== "function") return { location, converted: false };
+      return new Promise((resolve) => {
+        try {
+          AMap.convertFrom(location, "gps", (status, result) => {
+            const converted = status === "complete" && Array.isArray(result?.locations) && parseLocation(result.locations[0]);
+            resolve(converted ? { location: converted, converted: true } : { location, converted: false });
+          });
+        } catch {
+          resolve({ location, converted: false });
+        }
+      });
+    });
+  }
+
+  function reverseGeocodeBrowserLocation(location) {
+    return waitForAmap().then((AMap) => {
+      if (!AMap?.Geocoder) return null;
+      return new Promise((resolve) => {
+        try {
+          const geocoder = new AMap.Geocoder({ city: "全国", radius: 1000, extensions: "all" });
+          geocoder.getAddress(location, (status, result) => {
+            if (status === "complete" && result?.regeocode) return resolve(result.regeocode);
+            resolve(null);
+          });
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+  }
+
+  function browserLocationError(error) {
+    if (error?.code === 1) return "你拒绝了浏览器定位权限";
+    if (error?.code === 3) return "定位请求超时";
+    if (error?.code === 2) return "暂时无法获取当前位置";
+    return error?.message || "当前浏览器不支持定位";
+  }
+
+  async function chooseBrowserOrigin() {
+    if (!navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") {
+      throw new Error("当前浏览器不支持定位");
+    }
+    const position = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: true,
+        timeout: 12000,
+        maximumAge: 60000
+      });
+    });
+    const rawLocation = [Number(position.coords.longitude), Number(position.coords.latitude)];
+    if (!rawLocation.every(Number.isFinite)) throw new Error("定位结果无效");
+    const converted = await convertBrowserCoordinate(rawLocation);
+    const location = converted.location;
+    const regeocode = await reverseGeocodeBrowserLocation(location);
+    const component = regeocode?.addressComponent || {};
+    const city = Array.isArray(component.city) ? component.city.find(Boolean) : component.city;
+    const district = component.district || "";
+    const township = component.township || "";
+    const poi = Array.isArray(regeocode?.pois) ? regeocode.pois.find((item) => item?.name)?.name : "";
+    const address = String(regeocode?.formattedAddress || "").trim();
+    const name = String(poi || district || city || "当前位置").trim();
+    const accuracy = Number(position.coords.accuracy);
+    const accuracyText = Number.isFinite(accuracy) ? `定位精度约 ${Math.round(accuracy)} 米` : "浏览器定位";
+    state.origin = location;
+    state.originName = name;
+    state.originNote = [address, `用户当前位置 · ${accuracyText}`, address ? "地址已解析" : "地址解析暂不可用"].filter(Boolean).join(" · ");
+    state.originCity = normalizeRegionCity(city || district || township || extractRegionCity(address)) || null;
+    state.originSource = "用户当前位置（浏览器定位）";
+    state.originAccuracy = Number.isFinite(accuracy) ? accuracy : null;
+    updateOriginSurface();
+    refreshOriginMapSurface();
+    return { converted: converted.converted, address, location };
+  }
+
+  function finishOriginChoice() {
+    const backdrop = byId("originChoiceBackdrop");
+    if (!backdrop) return;
+    backdrop.hidden = true;
+    document.body.classList.remove("mode-choice-open");
+    const previous = originChoicePreviousFocus;
+    originChoicePreviousFocus = null;
+    originChoiceBusy = false;
+    if (previous && typeof previous.focus === "function" && document.contains(previous) && previous.offsetParent !== null) {
+      previous.focus();
+    } else {
+      byId("intentInput")?.focus();
+    }
+  }
+
+  async function handleOriginChoice(choice) {
+    if (originChoiceBusy) return;
+    if (choice === "default") {
+      setDefaultOrigin();
+      finishOriginChoice();
+      return;
+    }
+    if (choice !== "location") return;
+    originChoiceBusy = true;
+    const buttons = $$('[data-origin-choice]');
+    buttons.forEach((button) => { button.disabled = true; });
+    setOriginChoiceStatus("正在请求浏览器定位权限……", "loading");
+    try {
+      const result = await chooseBrowserOrigin();
+      setOriginChoiceStatus("已获取当前位置，正在进入体验……", "success");
+      showToast("起点已切换为用户当前位置", 2600);
+      window.setTimeout(finishOriginChoice, 180);
+    } catch (error) {
+      originChoiceBusy = false;
+      buttons.forEach((button) => { button.disabled = false; });
+      const message = browserLocationError(error);
+      setOriginChoiceStatus(`${message}，仍可选择能链总部继续。`, "error");
+      showToast(`${message}，已保留能链总部`, 3600);
+    }
+  }
+
   function closeModeChoice(mode = "reviewer") {
     const backdrop = byId("modeChoiceBackdrop");
     if (!backdrop || backdrop.hidden) return;
     setDisplayMode(mode);
     backdrop.hidden = true;
-    document.body.classList.remove("mode-choice-open");
-    const previous = modeChoicePreviousFocus;
-    modeChoicePreviousFocus = null;
-    if (previous && typeof previous.focus === "function" && document.contains(previous)) previous.focus();
+    // The display mode is only the first part of the entry flow. Continue
+    // directly to the origin decision instead of returning focus to the page.
+    openOriginChoice();
   }
 
   function openModeChoice() {
@@ -463,6 +657,50 @@
     }
   }
 
+  function openOriginChoice() {
+    const backdrop = byId("originChoiceBackdrop");
+    const panel = byId("originChoicePanel");
+    if (!backdrop || !panel) {
+      document.body.classList.remove("mode-choice-open");
+      const previous = modeChoicePreviousFocus;
+      modeChoicePreviousFocus = null;
+      if (previous && typeof previous.focus === "function" && document.contains(previous)) previous.focus();
+      return;
+    }
+    originChoicePreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : modeChoicePreviousFocus;
+    modeChoicePreviousFocus = null;
+    setOriginChoiceStatus("本次访问默认使用能链北京总部。", "");
+    backdrop.hidden = false;
+    document.body.classList.add("mode-choice-open");
+    window.setTimeout(() => {
+      const first = originChoiceFocusableElements()[0];
+      (first || panel).focus();
+    }, 0);
+    refreshIcons();
+  }
+
+  function handleOriginChoiceKeydown(event) {
+    const backdrop = byId("originChoiceBackdrop");
+    if (!backdrop || backdrop.hidden) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      void handleOriginChoice("default");
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = originChoiceFocusableElements();
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   function initModeChoice() {
     const backdrop = byId("modeChoiceBackdrop");
     if (!backdrop) return;
@@ -473,6 +711,16 @@
       if (event.target === backdrop) closeModeChoice("reviewer");
     });
     document.addEventListener("keydown", handleModeChoiceKeydown);
+    $$('[data-origin-choice]').forEach((button) => {
+      button.addEventListener("click", () => void handleOriginChoice(button.dataset.originChoice));
+    });
+    const originBackdrop = byId("originChoiceBackdrop");
+    if (originBackdrop) {
+      originBackdrop.addEventListener("click", (event) => {
+        if (event.target === originBackdrop) void handleOriginChoice("default");
+      });
+      document.addEventListener("keydown", handleOriginChoiceKeydown);
+    }
     openModeChoice();
   }
 
@@ -2599,12 +2847,19 @@
     if (normalizedOrigin) {
       state.origin = normalizedOrigin;
       state.originName = originIsDefault ? DEFAULT_ORIGIN_NAME : requestedOrigin;
+      const originSource = payload.locationSources?.origin || "高德定位";
+      const browserOrigin = /当前位置|浏览器定位/.test(originSource);
       state.originNote = originIsDefault
-        ? "北京市朝阳区姚家园南路 1 号 · 演示默认起点"
-        : `${payload.locationSources?.origin || "高德定位"} · 按你指定的出发地规划`;
+        ? DEFAULT_ORIGIN_NOTE
+        : browserOrigin
+          ? (state.originNote || `${originSource} · 浏览器定位起点`)
+          : `${originSource} · 按你指定的出发地规划`;
+      state.originSource = originIsDefault
+        ? "演示默认起点"
+        : (payload.locationSources?.origin || state.originSource || "用户指定起点");
       state.originCity = normalizeRegionCity(
         payload.locationMeta?.origin?.city
-          || (originIsDefault ? "北京" : extractRegionCity(`${requestedOrigin} ${payload.locationMeta?.origin?.name || ""}`))
+          || (originIsDefault ? DEFAULT_ORIGIN_CITY : extractRegionCity(`${requestedOrigin} ${payload.locationMeta?.origin?.name || ""}`))
       );
     } else if (!originIsDefault) {
       return { ok: false, destination: requestedDestination, origin: requestedOrigin, originUnresolved: true };
@@ -2642,8 +2897,7 @@
     if (destinationName) destinationName.textContent = state.destinationName;
     const destinationValue = document.querySelector(".route-field.destination-field .field-value");
     if (destinationValue) destinationValue.textContent = state.destinationName;
-    setText("originName", state.originName);
-    setText("originMeta", state.originNote);
+    updateOriginSurface();
     const departureValue = byId("departureValue");
     if (departureValue) departureValue.textContent = formatClock(state.departureMinutes);
     syncManualControls();
@@ -8695,6 +8949,8 @@
   function buildIntentSignature(value, options = {}) {
     return JSON.stringify({
       value: String(value || "").trim(),
+      origin: state.origin,
+      originName: state.originName,
       explicitDestination: options.explicitDestination || null,
       destinationLocation: options.destinationLocation || null,
       destinationCity: options.destinationCity || null,
@@ -8736,7 +8992,10 @@
         // airport back as context, otherwise an uncertain parse can silently
         // fall back to Beijing Daxing International Airport.
         context: {
-          origin: "能链北京总部",
+          origin: state.originName || DEFAULT_ORIGIN_NAME,
+          originLocation: state.origin,
+          originLocationSource: state.originSource || null,
+          originCity: state.originCity || null,
           arrivalDeadline: state.deadlineEnabled ? formatClock(state.deadlineMinutes) : null,
           minArrivalSoc: state.arrivalReserveEnabled ? state.minArrivalSoc : null,
           energyType: state.energyType,
@@ -10478,6 +10737,8 @@
     live: state.live,
     mode: state.mode,
     originName: state.originName || null,
+    originSource: state.originSource || null,
+    originAccuracy: state.originAccuracy,
     destinationName: state.destinationName || null,
     origin: state.origin,
     destination: state.destination,
