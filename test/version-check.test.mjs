@@ -47,13 +47,39 @@ test("local version truth comes from package.json and deployment metadata can us
       throw new Error("no .git in deployment package");
     }
   });
-  assert.equal(info.version, "1.1.0");
+  assert.equal(info.version, "1.1.1");
   assert.equal(info.commit, "abcdef0123456789abcdef0123456789abcdef01");
   assert.equal(info.commitSource, "env");
   assert.equal(info.buildTime, "2026-08-08T01:02:03.000Z");
   assert.equal(info.buildTimeSource, "env");
   assert.equal(info.source, "package.json");
   assert.equal(info.repo, "1Beyond1/flowtwin-demo");
+});
+
+test("deployment build metadata supplies a commit when a release has no .git directory", async () => {
+  const info = await loadVersionInfo({
+    root: "C:/flowtwin-release",
+    env: {},
+    execImpl: async () => {
+      throw new Error("no .git in deployment package");
+    },
+    readFileImpl: async (path) => {
+      const value = String(path).replaceAll("\\", "/");
+      if (value.endsWith("/package.json")) return JSON.stringify({ version: "1.1.1" });
+      if (value.endsWith("/runtime/build-info.json")) {
+        return JSON.stringify({
+          commit: "fedcba9876543210fedcba9876543210fedcba98",
+          buildTime: "2026-08-23T23:59:00.000Z"
+        });
+      }
+      throw new Error("ENOENT");
+    }
+  });
+  assert.equal(info.version, "1.1.1");
+  assert.equal(info.commit, "fedcba9876543210fedcba9876543210fedcba98");
+  assert.equal(info.commitSource, "build-metadata");
+  assert.equal(info.buildTime, "2026-08-23T23:59:00.000Z");
+  assert.equal(info.buildTimeSource, "build-metadata");
 });
 
 test("release is preferred and a newer release is reported as an available update", async () => {

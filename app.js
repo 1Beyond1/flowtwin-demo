@@ -747,7 +747,7 @@
   }
 
   function renderVersionInfo(payload) {
-    const version = String(payload?.version || "1.1.0").replace(/^v/i, "");
+    const version = String(payload?.version || "1.1.1").replace(/^v/i, "");
     setVersionText("currentVersionValue", `v${version}`);
     setVersionText("currentCommitValue", payload?.commit ? String(payload.commit).slice(0, 7) : "—");
     const source = payload?.source || "package.json";
@@ -766,7 +766,7 @@
       .catch(() => {
         // The visible fallback is the shipped package version, not a claim
         // about the remote checkout. Update checking has its own three states.
-        renderVersionInfo({ version: "1.1.0", source: "本地页面默认值" });
+        renderVersionInfo({ version: "1.1.1", source: "本地页面默认值" });
         setVersionText("versionInfoStatus", "暂时无法读取服务版本信息");
         return null;
       })
