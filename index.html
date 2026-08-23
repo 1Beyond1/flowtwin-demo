@@ -5863,7 +5863,7 @@
           <div class="ai-thinking" id="aiThinking" hidden>正在理解约束并调用规划工具</div>
         </div>
         <section class="planning-decision-chain" id="planningDecisionChain" aria-label="本轮规划决策链" hidden data-reviewer-only>
-          <div class="planning-decision-chain-head"><strong>本轮决策链</strong><div class="planning-decision-chain-actions"><span>每层只处理可验证职责</span><button class="planning-ai-example" id="planningAiExampleButton" type="button" hidden><i data-lucide="messages-square"></i><span>多轮 AI 示例</span></button></div></div>
+          <div class="planning-decision-chain-head"><strong>本轮决策链</strong><div class="planning-decision-chain-actions"><span>每层只处理可验证职责</span><button class="planning-ai-example" id="planningAiExampleButton" type="button" title="仅填入一条复杂需求示例，点击提交后才会调用模型" aria-label="体验多轮 AI；仅填入示例，提交后才调用模型" hidden><i data-lucide="messages-square"></i><span>体验多轮 AI</span></button></div></div>
           <div class="planning-decision-chain-list">
             <article class="planning-decision-step" id="decisionIntentStep" data-state="idle"><span>01 · 语义入口</span><div><strong id="decisionIntentValue">等待解析</strong><small id="decisionIntentNote">复杂语义按需调用 AI，硬约束由规则复核</small></div></article>
             <article class="planning-decision-step" id="decisionMapStep" data-state="idle"><span>02 · 地图事实</span><div><strong id="decisionMapValue">等待路线</strong><small id="decisionMapNote">坐标、道路、里程与 POI 不由大模型生成</small></div></article>
