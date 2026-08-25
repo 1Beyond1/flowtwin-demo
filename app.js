@@ -1283,11 +1283,26 @@
         voiceIntent.stream.getTracks().forEach((track) => track.stop());
         voiceIntent.stream = null;
       }
+      // setVoiceRecordingState(false) intentionally enters the short
+      // “正在识别语音” state after a normal recording stop. Permission or
+      // device errors never reach STT, so return to an actionable idle state
+      // instead of leaving the composer looking permanently busy.
+      setAiStatus("等待出行需求", "idle");
       const name = String(error?.name || "");
       if (name === "NotAllowedError" || name === "PermissionDeniedError") showToast("未获得麦克风权限", 3200);
       else if (name === "NotFoundError") showToast("未检测到可用麦克风", 3200);
       else showToast("无法启动语音输入", 3200);
     }
+  }
+
+  function httpRequestError(response, payload = {}) {
+    const status = Number(response?.status) || 0;
+    const message = payload?.error || payload?.message || `HTTP_${status || "NETWORK"}`;
+    const error = new Error(message);
+    error.status = status;
+    error.code = payload?.code || payload?.error || `HTTP_${status || "NETWORK"}`;
+    error.retryable = [408, 425, 429, 500, 502, 503, 504].includes(status);
+    return error;
   }
 
   async function postJson(path, body, timeoutMs) {
@@ -1301,7 +1316,7 @@
         signal: controller.signal
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || `HTTP_${response.status}`);
+      if (!response.ok) throw httpRequestError(response, payload);
       return payload;
     } finally {
       window.clearTimeout(timeout);
@@ -1314,7 +1329,7 @@
     try {
       const response = await fetch(path, { headers: { Accept: "application/json" }, signal: controller.signal });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || `HTTP_${response.status}`);
+      if (!response.ok) throw httpRequestError(response, payload);
       return payload;
     } finally {
       window.clearTimeout(timeout);
@@ -8416,7 +8431,7 @@
       setOperatorAnalysisStep("feishu", "idle", simulationReady ? "等待 AI 解读" : "等待仿真结果");
     }
     renderFeishuAiResult(result);
-    if (button) button.disabled = stateName === "processing";
+    if (button) button.disabled = stateName === "processing" && result?.timedOut !== true;
   }
 
   function resetFeishuSync() {
@@ -8615,11 +8630,25 @@
   }
 
   async function pollFeishuSync(syncId, pollVersion) {
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 1800));
+    const maxAttempts = 18;
+    const pollIntervalMs = 2000;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, pollIntervalMs));
       if (pollVersion !== state.feishuPollVersion) return;
       try {
         const result = await getJson(`/api/feishu/sync/${encodeURIComponent(syncId)}`, 12000);
+        if (result.status === "error" && result.retryable === true && attempt < maxAttempts - 1) {
+          state.feishuSync = {
+            ...state.feishuSync,
+            ...result,
+            mode: "feishu-bitable",
+            status: "processing",
+            retrying: true,
+            message: "飞书结果读取暂时波动，正在自动重试"
+          };
+          renderFeishuSyncStatus(state.feishuSync);
+          continue;
+        }
         state.feishuSync = result;
         renderFeishuSyncStatus(result);
         if (result.status === "completed" || result.status === "error") {
@@ -8629,14 +8658,37 @@
             : "飞书同步失败，请查看状态提示", 3200);
           return;
         }
-      } catch {
-        state.feishuSync = { mode: "error", status: "error", message: "暂时无法读取飞书 AI 结果" };
+      } catch (error) {
+        const retryable = error?.retryable === true || error?.name === "AbortError" || error?.name === "TimeoutError";
+        if (retryable && attempt < maxAttempts - 1) {
+          state.feishuSync = {
+            ...state.feishuSync,
+            mode: "feishu-bitable",
+            status: "processing",
+            retrying: true,
+            message: "飞书结果读取暂时波动，正在自动重试"
+          };
+          renderFeishuSyncStatus(state.feishuSync);
+          continue;
+        }
+        state.feishuSync = {
+          mode: "error",
+          status: "error",
+          code: error?.code || "FEISHU_STATUS_FAILED",
+          message: Number(error?.status) === 404
+            ? "同步记录未找到，请重新获取 AI 解读"
+            : "暂时无法读取飞书 AI 结果，请稍后重试"
+        };
         renderFeishuSyncStatus(state.feishuSync);
         return;
       }
     }
     if (pollVersion === state.feishuPollVersion && state.feishuSync?.status === "processing") {
-      renderFeishuSyncStatus({ ...state.feishuSync, message: "AI 仍在处理，可稍后再次点击同步" });
+      renderFeishuSyncStatus({
+        ...state.feishuSync,
+        timedOut: true,
+        message: "AI 仍在处理，可点击“重新获取 AI 解读”继续读取"
+      });
     }
   }
 
@@ -8690,7 +8742,7 @@
       renderFeishuSyncStatus(state.feishuSync);
       showToast("飞书同步失败，未影响本地运营结果", 3600);
     } finally {
-      if (button && state.feishuSync?.status !== "processing") button.disabled = false;
+      if (button && (state.feishuSync?.status !== "processing" || state.feishuSync?.timedOut === true)) button.disabled = false;
     }
   }
 

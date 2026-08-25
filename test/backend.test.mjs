@@ -335,6 +335,23 @@ test("plan parser treats a service follow-up as a supplement to the current trip
   });
 });
 
+test("composite service preferences do not become removals and keep both requested stops", async () => {
+  const result = await parseTripIntent({
+    message: "中途想先吃麦当劳，然后再找个咖啡店，尽量不要下高速",
+    context: {
+      hasPlannedRoute: true,
+      currentDestination: "上海东方明珠广播电视塔"
+    },
+    config: {},
+    fetchImpl: async () => { throw new Error("offline"); }
+  });
+  assert.equal(result.requestMode, "supplement");
+  assert.equal(result.actions.some((action) => action.type === "REMOVE_STOP"), false);
+  assert.equal(result.actions.filter((action) => action.type === "ADD_SERVICE").length, 2);
+  assert.ok(result.actions.some((action) => action.name === "麦当劳"));
+  assert.ok(result.actions.some((action) => action.location === "咖啡店"));
+});
+
 test("plan parser treats an explicit new destination as a new trip", async () => {
   const result = await parseTripIntent({
     message: "我想去南京",

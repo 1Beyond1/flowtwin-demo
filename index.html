@@ -5763,6 +5763,82 @@
         .vision-status { margin-left: 0; }
       }
 
+      /* Keep the top controls reachable on tablets and phones. The previous
+         single-row layout let the mode tabs keep their desktop intrinsic width,
+         so the right side of the tablist fell outside narrow viewports. Put the
+         status controls on a second row and let the four tabs share that row. */
+      @media (max-width: 900px) {
+        .topbar {
+          flex-wrap: wrap;
+          row-gap: 8px;
+        }
+        .topbar-actions {
+          flex: 1 1 100%;
+          width: 100%;
+          max-width: none;
+          min-width: 0;
+        }
+        .status-rail {
+          flex: 1 1 auto;
+          min-width: 0;
+          width: calc(100% - 56px);
+          max-width: none;
+        }
+        .status-rail > .status-item:nth-child(1),
+        .status-rail > .top-energy-status,
+        .status-rail > .connection-status {
+          display: none;
+        }
+        .status-rail > .status-item.status-editable {
+          flex: 0 1 auto;
+          min-width: 0;
+          padding-right: 10px;
+          padding-left: 10px;
+        }
+        .status-rail > .status-item.status-editable .status-caption {
+          display: none;
+        }
+        .mode-switch {
+          flex: 1 1 0;
+          min-width: 0;
+          width: 0;
+        }
+        .mode-switch button {
+          flex: 1 1 0;
+          min-width: 0;
+          justify-content: center;
+          padding-right: 6px;
+          padding-left: 6px;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .topbar {
+          top: 10px;
+          right: 10px;
+          left: 10px;
+        }
+        .brand-name { display: none; }
+        .topbar-actions { gap: 5px; }
+        .status-rail {
+          width: calc(100% - 47px);
+          max-width: none;
+        }
+        .status-rail > .status-item.status-editable {
+          gap: 4px;
+          padding-right: 8px;
+          padding-left: 8px;
+        }
+        .mode-switch button {
+          gap: 3px;
+          padding-right: 3px;
+          padding-left: 3px;
+          font-size: 10px;
+        }
+        .trip-panel { top: 112px; }
+        .insight-panel.mobile-visible { top: 112px; }
+      }
+
     </style>
   </head>
   <body data-display-mode="reviewer">

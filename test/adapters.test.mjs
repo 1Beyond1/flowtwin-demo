@@ -93,6 +93,33 @@ test("Feishu Bitable sync writes snapshots and reads the AI field", async () => 
   assert.match(status.aiResult, /引导至承接站/);
 });
 
+test("Feishu status marks transient read failures as retryable", async () => {
+  clearFeishuCaches();
+  const config = {
+    feishuBaseUrl: "https://open.feishu.cn",
+    feishuAppId: "app-retry",
+    feishuAppSecret: "retry-secret",
+    feishuAppToken: "base-retry",
+    feishuSnapshotTableId: "tbl-retry-snapshot",
+    feishuStrategyTableId: "tbl-retry-strategy",
+    feishuAiStrategyField: "AI策略"
+  };
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url).includes("tenant_access_token")) return response({ code: 0, tenant_access_token: "tenant-retry", expire: 7200 });
+    if (String(url).includes("batch_create")) return response({ code: 0, data: { records: [{ record_id: "snapshot-retry" }] } });
+    if (options.method === "POST") return response({ code: 0, data: { record: { record_id: "strategy-retry" } } });
+    return response({ code: 999, msg: "busy" }, 429);
+  };
+  const started = await startFeishuSync({
+    config,
+    fetchImpl,
+    payload: { runId: "run-retry-1", stations: [{ id: "station-retry", name: "示例站" }] }
+  });
+  const status = await getFeishuSyncStatus({ syncId: started.syncId, config, fetchImpl });
+  assert.equal(status.status, "error");
+  assert.equal(status.retryable, true);
+});
+
 test("Feishu remains an explicit local demo when credentials are absent", async () => {
   clearFeishuCaches();
   const summary = feishuConfigSummary({});
