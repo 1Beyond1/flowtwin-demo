@@ -1,3 +1,5 @@
+简体中文 | [English](README.en.md)
+
 # 能流智枢 FlowTwin
 
 > AI 油电一体化补能协同决策 Demo · v1.1.1
@@ -38,20 +40,24 @@ FlowTwin 面向能链命题，展示从车主自然语言需求到真实地图�
 浏览器
   ├─ 高德 JS API：地图和 POI
   └─ Node.js 后端
-      ├─ /api/plan              AI 意图解析 + 地点解析（地理编码/POI 评分 + 候选）
-      ├─ /api/stt               语音转写代理（可选，密钥仅服务端）
-      ├─ /api/route             高德经站路线代理
-      ├─ /api/forecast          到站时刻排队仿真预测（聚合/端口级，含天气因子）
-      ├─ /api/weather           高德实况天气（regeo→adcode→天气，文件缓存）
-      ├─ /api/longtrip          多站补能组合规划
-      ├─ /api/operator/simulate 定价与分流仿真
-      ├─ /api/validate          1,000 次策略实验
-      ├─ /api/cv/health         可选本地视觉服务状态（不返回密钥）
-      ├─ /api/cv/analyze        内置样例/上传图片或视频的视觉分析适配器
-      ├─ /api/feishu/sync       写入飞书多维表格并创建分析批次
-      ├─ /api/feishu/sync/:id   读取飞书 AI 字段结果
-      ├─ /api/feishu/health     只返回配置状态，不返回密钥
-      └─ /api/execution         飞书 Webhook 通知适配器（可选）
+      ├─ /api/health                       服务健康与 AI/CV/企业先验配置状态（不返回密钥）
+      ├─ /api/contracts                    API 契约描述
+      ├─ /api/plan                         AI 意图解析 + 地点解析（地理编码/POI 评分 + 候选）
+      ├─ /api/stt                          语音转写代理（可选，密钥仅服务端）
+      ├─ /api/route                        高德经站路线代理
+      ├─ /api/poi                          高德沿线周边/文本 POI 检索代理
+      ├─ /api/forecast                     到站时刻排队仿真预测（聚合/端口级，含天气因子）
+      ├─ /api/weather                      高德实况天气（regeo→adcode→天气，文件缓存）
+      ├─ /api/longtrip                     多站补能组合规划
+      ├─ /api/operator/simulate            定价与分流仿真
+      ├─ /api/validate                     1,000 次策略实验
+      ├─ /api/cv/health                    可选本地视觉服务状态（不返回密钥）
+      ├─ /api/cv/analyze                   内置样例/上传图片或视频的视觉分析适配器
+      ├─ /api/feishu/sync                  写入飞书多维表格并创建分析批次
+      ├─ /api/feishu/sync/:id              读取飞书 AI 字段结果
+      ├─ /api/feishu/strategy/:id/approve  审批并写回飞书策略状态
+      ├─ /api/feishu/health                只返回配置状态，不返回密钥
+      └─ /api/execution                    飞书 Webhook 通知适配器（可选）
 ```
 
 `/api/version` 返回当前版本，`/api/version/check` 用于设置页手动检查 GitHub 更新。主备 AI 均通过 OpenAI-compatible 接口调用。
@@ -213,4 +219,4 @@ npm test
 
 ## License
 
-项目代码由项目作者版权所有，采用 MIT License。高德地图、第三方 API、模型服务和其他外部资源不包含在本许可证授权范围内。
+项目代码由项目作者版权所有，采用 [MIT License](LICENSE)。高德地图、第三方 API、模型服务和其他外部资源不包含在本许可证授权范围内。
