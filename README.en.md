@@ -6,6 +6,28 @@
 
 FlowTwin demonstrates an end-to-end decision pipeline built around the NewLink (NaaS) challenge — from natural-language driver intent to real map routing, arrival-time station queue forecasting, multi-objective recommendation, operator load-balancing simulation, and reproducible strategy validation. On first visit, users choose between **Judge Mode** and **User Mode**, then pick either NewLink HQ or the browser's current geolocation as the trip origin (both can be switched anytime in Settings).
 
+## Interface Preview
+
+### Driver View: Trip Intelligence
+
+Parses natural-language trip requests into structured constraints, combining live AMap routing and arrival-time P50/P90 queue forecasts to compare **Fastest**, **Most Reliable**, and **Lowest Cost** replenishment plans:
+
+![Driver Trip Intelligence Interface](docs/screenshots/driver-trip-intelligence.png)
+
+### Operator View: Regional Supply-Demand & Strategy Console
+
+Translates driver trip demand into station-side diversion and pricing actions, enabling interactive coupon and target-cohort tuning with before/after queue, diversion, and scenario ROI estimates plus Feishu approval workflow integration:
+
+![Operator Regional Supply-Demand and Strategy Console](docs/screenshots/operator-dispatch.png)
+
+### Mobile View: Responsive Layout
+
+Adapts to 360–430 px mobile viewports while preserving natural-language intent input, structured constraints, and an independently scrollable bottom plan drawer:
+
+<p align="center">
+  <img src="docs/screenshots/mobile-responsive.png" alt="Mobile Responsive Interface" width="320" />
+</p>
+
 ## Core Capabilities
 
 - **Natural-language intent parsing & multi-turn actions**: An OpenAI-compatible AI model parses Chinese driver requests into destination, optional latest arrival time / arrival SOC margin, powertrain type (EV/fuel), detour cap, optimization priority, and non-energy service preferences. Supports multi-turn actions (adding services, inserting waypoints, editing constraints, removing stops, or starting a new trip). AI only handles intent understanding and explanations — routing and optimization remain deterministic via AMap and backend algorithms, without carrying prior-trip defaults forward as hard constraints.
