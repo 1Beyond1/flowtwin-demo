@@ -183,10 +183,98 @@ def _png_header_dimensions(raw: bytes) -> tuple[int, int] | None:
     return None
 
 
+_JPEG_SOF_MARKERS = frozenset({
+    0xC0, 0xC1, 0xC2, 0xC3,
+    0xC5, 0xC6, 0xC7,
+    0xC9, 0xCA, 0xCB,
+    0xCD, 0xCE, 0xCF,
+})
+
+
+def _jpeg_header_dimensions(raw: bytes) -> tuple[int, int] | None:
+    if len(raw) < 4 or raw[:2] != b"\xff\xd8":
+        return None
+    pos = 2
+    total = len(raw)
+    while pos < total:
+        while pos < total and raw[pos] != 0xFF:
+            pos += 1
+        while pos < total and raw[pos] == 0xFF:
+            pos += 1
+        if pos >= total:
+            break
+        marker = raw[pos]
+        pos += 1
+        if marker in (0xD9, 0xDA):  # EOI or SOS (scan data follows)
+            break
+        if marker == 0x00 or marker == 0x01 or (0xD0 <= marker <= 0xD8):
+            continue
+        if pos + 2 > total:
+            break
+        seg_len = struct.unpack(">H", raw[pos:pos + 2])[0]
+        if seg_len < 2 or pos + seg_len > total:
+            break
+        if marker in _JPEG_SOF_MARKERS and seg_len >= 7:
+            height, width = struct.unpack(">HH", raw[pos + 3:pos + 7])
+            return int(width), int(height)
+        pos += seg_len
+    return None
+
+
+def _webp_header_dimensions(raw: bytes) -> tuple[int, int] | None:
+    if len(raw) < 16 or raw[:4] != b"RIFF" or raw[8:12] != b"WEBP":
+        return None
+    pos = 12
+    total = len(raw)
+    max_width = 0
+    max_height = 0
+    found = False
+    chunks_seen = 0
+    while pos + 8 <= total and chunks_seen < 64:
+        chunks_seen += 1
+        chunk_type = raw[pos:pos + 4]
+        chunk_size = struct.unpack("<I", raw[pos + 4:pos + 8])[0]
+        data = pos + 8
+        dims: tuple[int, int] | None = None
+        if chunk_type == b"VP8X" and chunk_size >= 10 and data + 10 <= total:
+            width = 1 + (raw[data + 4] | (raw[data + 5] << 8) | (raw[data + 6] << 16))
+            height = 1 + (raw[data + 7] | (raw[data + 8] << 8) | (raw[data + 9] << 16))
+            dims = (int(width), int(height))
+        elif chunk_type == b"VP8 " and chunk_size >= 10 and data + 10 <= total:
+            if raw[data + 3:data + 6] == b"\x9d\x01\x2a":
+                w_raw, h_raw = struct.unpack("<HH", raw[data + 6:data + 10])
+                dims = (int(w_raw & 0x3FFF), int(h_raw & 0x3FFF))
+        elif chunk_type == b"VP8L" and chunk_size >= 5 and data + 5 <= total:
+            if raw[data] == 0x2F:
+                bits = struct.unpack("<I", raw[data + 1:data + 5])[0]
+                width = (bits & 0x3FFF) + 1
+                height = ((bits >> 14) & 0x3FFF) + 1
+                dims = (int(width), int(height))
+        if dims is not None:
+            if dims[0] <= 0 or dims[1] <= 0:
+                return dims
+            found = True
+            max_width = max(max_width, dims[0])
+            max_height = max(max_height, dims[1])
+        next_pos = data + chunk_size + (chunk_size & 1)
+        if next_pos <= pos:
+            break
+        pos = next_pos
+    return (max_width, max_height) if found else None
+
+
+def _header_dimensions(raw: bytes) -> tuple[int, int] | None:
+    return (
+        _png_header_dimensions(raw)
+        or _jpeg_header_dimensions(raw)
+        or _webp_header_dimensions(raw)
+    )
+
+
 def _inspect_image_dimensions(raw: bytes, *, require_valid: bool = False) -> list[int] | None:
-    png_dims = _png_header_dimensions(raw)
-    if png_dims is not None:
-        width, height = png_dims
+    header_dims = _header_dimensions(raw)
+    if header_dims is not None:
+        width, height = header_dims
         if width <= 0 or height <= 0:
             raise ValueError("IMAGE_CONTENT_INVALID")
         if width * height > MAX_IMAGE_PIXELS:
@@ -209,10 +297,12 @@ def _inspect_image_dimensions(raw: bytes, *, require_valid: bool = False) -> lis
         except Exception as exc:
             if require_valid:
                 raise RuntimeError("OCR_IMAGE_DECODE_FAILED") from exc
-            return [png_dims[0], png_dims[1]] if png_dims is not None else None
+            return [header_dims[0], header_dims[1]] if header_dims is not None else None
 
-    if png_dims is not None:
-        return [png_dims[0], png_dims[1]]
+    if header_dims is not None:
+        return [header_dims[0], header_dims[1]]
+    if require_valid:
+        raise RuntimeError("OCR_IMAGE_DECODE_FAILED")
     return None
 
 
@@ -292,9 +382,10 @@ def upload_video_metadata(video_data: str) -> tuple[dict[str, Any], bytes]:
 def _decode_image(raw: bytes) -> Any:
     if np is None:
         raise RuntimeError("OCR_NUMPY_UNAVAILABLE")
-    # Enforce pixel limit via PIL/header parsing BEFORE cv2.imdecode so a
-    # compressed pixel bomb cannot allocate gigabytes in OpenCV.
-    _inspect_image_dimensions(raw, require_valid=Image is not None)
+    # Enforce pixel limit via native PNG/JPEG/WebP header parsing and/or PIL
+    # BEFORE cv2.imdecode so a compressed pixel bomb cannot allocate gigabytes
+    # in OpenCV even when Pillow is not installed.
+    _inspect_image_dimensions(raw, require_valid=True)
     if cv2 is not None:
         image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is not None:
@@ -770,10 +861,13 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
         except (OcrBusyError, ValueError):
             raise
         except RuntimeError as exc:
+            reason_code = _safe_runtime_error(exc)
             return {
                 "ok": True,
                 "mode": "local-video-ocr-unavailable",
                 "inferenceStatus": "not-run",
+                "reasonCode": reason_code,
+                "retryable": reason_code == "PADDLEOCR_NOT_READY",
                 "source": "本地视觉服务 · 视频 OCR 未就绪",
                 "engine": "PaddleOCR 本地 CPU",
                 "observedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -790,7 +884,7 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
                 "confidenceType": None,
                 "evidence": [
                     "视频格式已通过校验，但本次没有完成视频抽帧 OCR",
-                    f"本地运行条件：{_safe_runtime_error(exc)}",
+                    f"本地运行条件：{reason_code}",
                     "未返回车牌号，也未生成支付结果",
                 ],
                 "dataBoundary": "本次视频未完成视觉推理，不能把结果当作识别结论",
@@ -836,8 +930,11 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
     except (OcrBusyError, ValueError):
         raise
     except RuntimeError as exc:
+        reason_code = _safe_runtime_error(exc)
         result.update({
             "mode": "local-ocr-unavailable",
+            "reasonCode": reason_code,
+            "retryable": reason_code == "PADDLEOCR_NOT_READY",
             "source": "本地视觉服务 · PaddleOCR 未就绪",
             "engine": "PaddleOCR 本地 CPU",
             "processingMs": round((time.perf_counter() - started) * 1000, 2),
@@ -845,7 +942,7 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
             "evidence": [
                 "图片格式和内容已通过校验",
                 "本次没有完成 PaddleOCR 推理，因此没有返回车牌号",
-                f"本地运行条件：{_safe_runtime_error(exc)}",
+                f"本地运行条件：{reason_code}",
             ],
         })
         return result

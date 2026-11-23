@@ -105,10 +105,18 @@ test("loadConfig safely falls back to port 4182 when PORT is invalid", async () 
   });
 });
 
-test("parseDotEnv ignores prototype pollution keys and malformed lines", () => {
-  const parsed = parseDotEnv("__proto__=evil\nconstructor=evil\nVALID_KEY='hello # not comment'\nBAD-KEY=1\n");
+test("parseDotEnv ignores prototype pollution keys, strips UTF-8 BOM, and skips malformed lines", async () => {
+  const parsed = parseDotEnv("\uFEFFPORT=4411\n__proto__=evil\nconstructor=evil\nVALID_KEY='hello # not comment'\nBAD-KEY=1\n");
+  assert.equal(parsed.PORT, "4411");
   assert.equal(parsed.VALID_KEY, "hello # not comment");
   assert.equal(Object.hasOwn(parsed, "__proto__"), false);
   assert.equal(Object.hasOwn(parsed, "constructor"), false);
   assert.equal(Object.hasOwn(parsed, "BAD-KEY"), false);
+
+  await withTempRoot(async (root) => {
+    await writeFile(join(root, ".env"), "\uFEFFPORT=4499\nAMAP_JS_KEY=bom-key\n", "utf8");
+    const loaded = await loadConfig({ env: {}, root });
+    assert.equal(loaded.port, 4499);
+    assert.equal(loaded.amapKey, "bom-key");
+  });
 });

@@ -2248,20 +2248,13 @@
     const rawComparison = value.comparison && typeof value.comparison === "object" ? value.comparison : null;
     const snapshot = (input) => {
       if (!input || typeof input !== "object") return null;
-      const optionalNumber = (raw) => {
-        // Number(null) is 0, but a blank arrival reserve/detour is not an
-        // explicit zero constraint. Preserve the distinction in the evidence
-        // panel so it agrees with the route card and manual controls.
-        if (raw === null || raw === undefined || raw === "") return null;
-        return Number.isFinite(Number(raw)) ? Number(raw) : null;
-      };
       return {
         destination: String(input.destination ?? "").trim() || null,
         arrivalDeadline: String(input.arrivalDeadline ?? "").trim() || null,
-        minArrivalSoc: optionalNumber(input.minArrivalSoc),
+        minArrivalSoc: parseOptionalNumber(input.minArrivalSoc),
         energyType: String(input.energyType ?? "").trim() || null,
         priority: String(input.priority ?? "").trim() || null,
-        maxDetourKm: optionalNumber(input.maxDetourKm),
+        maxDetourKm: parseOptionalNumber(input.maxDetourKm),
         services: Array.isArray(input.services) ? input.services.slice(0, 6).map((item) => String(item).slice(0, 40)) : [],
         requestMode: String(input.requestMode ?? "").trim() || null,
         actions: Array.isArray(input.actions) ? input.actions.slice(0, 8).filter((item) => item && typeof item === "object") : []
@@ -2276,7 +2269,7 @@
       final: snapshot(rawComparison.final),
       agreement: {
         compared: rawComparison.agreement?.compared === true,
-        score: Number.isFinite(Number(rawComparison.agreement?.score)) ? Number(rawComparison.agreement.score) : null,
+        score: parseOptionalNumber(rawComparison.agreement?.score),
         label: String(rawComparison.agreement?.label ?? "").trim(),
         differences: Array.isArray(rawComparison.agreement?.differences) ? rawComparison.agreement.differences.slice(0, 10) : []
       },
@@ -2548,8 +2541,9 @@
       const portSummary = entry.method === "port-discrete-event" && snapshot
         ? `总枪位 ${snapshot.totalPorts ?? "—"} · 可用 ${snapshot.availablePorts ?? snapshot.idlePorts ?? "—"} · 已预约 ${snapshot.reservedPorts ?? "—"} · 当前等待 ${snapshot.waitingVehicles ?? snapshot.queueVehicles ?? "—"}`
         : "";
-      const confidenceText = Number.isFinite(Number(entry.confidenceScore))
-        ? ` · 置信度 ${entry.confidenceLabel || `${Math.round(Number(entry.confidenceScore))}/100`}`
+      const parsedConfidenceScore = parseOptionalNumber(entry.confidenceScore);
+      const confidenceText = parsedConfidenceScore !== null
+        ? ` · 置信度 ${entry.confidenceLabel || `${Math.round(parsedConfidenceScore)}/100`}`
         : "";
       text.textContent = `${entry.explanation || payload?.model || "可解释队列近似"}${entry.asOf ? ` · ${entry.asOf}` : ""}${portSummary ? ` · ${portSummary}` : ""}${confidenceText}`;
     }
@@ -2565,6 +2559,7 @@
     const method = entry?.method === "port-discrete-event" ? "端口级离散事件仿真" : "聚合流量仿真";
     const points = Array.isArray(entry?.forecast) ? entry.forecast : [];
     const current = points[0] || {};
+    const evidenceConfidenceScore = parseOptionalNumber(entry?.confidenceScore);
     const lines = [
       ["预测方法", method],
       ["补能位状态", `总枪位 ${snapshot.totalPorts ?? "—"} · 可用 ${snapshot.availablePorts ?? snapshot.idlePorts ?? "—"} · 已预约 ${snapshot.reservedPorts ?? "—"} · 充电中 ${snapshot.chargingPorts ?? "—"}`],
@@ -2577,8 +2572,8 @@
       ["企业需求先验", entry?.enterprisePrior?.matched
         ? `${entry.enterprisePrior.city} · ${entry.enterprisePrior.energyType === "fuel" ? "油站" : "电站"} · 需求倍率 ${Number(entry.enterprisePrior.demandFactor || 1).toFixed(2)} · 匹配距离 ${Number(entry.enterprisePrior.matchDistanceKm || 0).toFixed(1)} km`
         : "未匹配企业先验，使用演示输入"],
-      ["置信度依据", Number.isFinite(Number(entry?.confidenceScore))
-        ? `${entry.confidenceLabel || `${Math.round(Number(entry.confidenceScore))}/100`} · ${(entry.confidenceReasons || []).slice(0, 3).join("；")}`
+      ["置信度依据", evidenceConfidenceScore !== null
+        ? `${entry.confidenceLabel || `${Math.round(evidenceConfidenceScore)}/100`} · ${(entry.confidenceReasons || []).slice(0, 3).join("；")}`
         : "当前版本未计算动态置信度"],
       ["数据时间", entry?.asOf || snapshot.snapshotTime || "本次演示计算"],
       ["数据来源", entry?.dataSource || "FlowTwin 演示仿真"]
@@ -2849,38 +2844,39 @@
       state.stations = stations.map((station) => {
         const entry = forecastById.get(String(station.id));
         if (!entry) return station;
-        const arrivalOffsetMinutes = Number.isFinite(Number(entry.arrivalOffsetMinutes))
-          ? Number(entry.arrivalOffsetMinutes)
+        const parsedArrivalOffset = parseOptionalNumber(entry.arrivalOffsetMinutes);
+        const arrivalOffsetMinutes = parsedArrivalOffset !== null
+          ? parsedArrivalOffset
           : Math.max(0, Number(station.routeProgress || 0) * duration);
         const prediction = (entry.prediction && Object.keys(entry.prediction).length)
           ? entry.prediction
           : (entry.arrivalForecast && Object.keys(entry.arrivalForecast).length)
             ? entry.arrivalForecast
             : selectForecastPointForArrival(entry, arrivalOffsetMinutes) || {};
-        const p50 = Number(prediction.p50 ?? entry.p50 ?? station.p50);
-        const p90 = Number(prediction.p90 ?? entry.p90 ?? station.p90);
-        const wait = Number(prediction.wait ?? entry.wait ?? station.wait);
-        const risk = prediction.risk || entry.baseline?.risk || (p90 >= 20 ? "forecast-risk" : "forecast-ready");
+        const p50 = parseOptionalNumber(prediction.p50) ?? parseOptionalNumber(entry.p50) ?? parseOptionalNumber(station.p50);
+        const p90 = parseOptionalNumber(prediction.p90) ?? parseOptionalNumber(entry.p90) ?? parseOptionalNumber(station.p90);
+        const wait = parseOptionalNumber(prediction.wait) ?? parseOptionalNumber(entry.wait) ?? parseOptionalNumber(station.wait);
+        const risk = prediction.risk || entry.baseline?.risk || ((p90 ?? 0) >= 20 ? "forecast-risk" : "forecast-ready");
         return Object.assign({}, station, {
           stationSource: station.source,
           forecast: entry.forecast,
           prediction,
           arrivalForecast: prediction,
           arrivalOffsetMinutes,
-          arrivalMinute: Number.isFinite(Number(entry.arrivalMinute)) ? Number(entry.arrivalMinute) : state.departureMinutes + arrivalOffsetMinutes,
-          wait: Number.isFinite(wait) ? wait : station.wait,
-          p50: Number.isFinite(p50) ? p50 : station.p50,
-          p90: Number.isFinite(p90) ? p90 : station.p90,
+          arrivalMinute: parseOptionalNumber(entry.arrivalMinute) ?? (state.departureMinutes + arrivalOffsetMinutes),
+          wait: wait !== null ? wait : station.wait,
+          p50: p50 !== null ? p50 : station.p50,
+          p90: p90 !== null ? p90 : station.p90,
           forecastSource: entry.source || payload.source || "simulation",
           forecastAsOf: entry.asOf || payload.asOf || null,
           forecastMethod: entry.method || payload.method || "aggregate-flow-simulation",
           forecastDataAsOf: entry.dataAsOf || payload.dataAsOf || entry.asOf || payload.asOf || null,
-          forecastFreshnessSeconds: Number.isFinite(Number(entry.freshnessSeconds)) ? Number(entry.freshnessSeconds) : null,
+          forecastFreshnessSeconds: parseOptionalNumber(entry.freshnessSeconds),
           forecastInputSnapshot: entry.inputSnapshot || null,
-          forecastArrivalWaitP50: Number.isFinite(Number(prediction.p50)) ? Number(prediction.p50) : null,
-          forecastArrivalWaitP90: Number.isFinite(Number(prediction.p90)) ? Number(prediction.p90) : null,
+          forecastArrivalWaitP50: parseOptionalNumber(prediction.p50),
+          forecastArrivalWaitP90: parseOptionalNumber(prediction.p90),
           forecastConfidence: entry.confidence || payload.confidence || "simulation-only",
-          forecastConfidenceScore: Number.isFinite(Number(entry.confidenceScore)) ? Number(entry.confidenceScore) : null,
+          forecastConfidenceScore: parseOptionalNumber(entry.confidenceScore),
           forecastConfidenceLevel: entry.confidenceLevel || null,
           forecastConfidenceLabel: entry.confidenceLabel || null,
           forecastConfidenceReasons: Array.isArray(entry.confidenceReasons) ? entry.confidenceReasons.slice(0, 8) : [],
@@ -5624,7 +5620,8 @@
     }
     if (name) name.textContent = displayCopy(record.displayName || { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }[record.key]);
     if (strong) strong.textContent = formatJourneyClock(record.arrival);
-    const serviceName = escapeHtml(record.servicePlan?.name || "");
+    const rawServiceName = record.servicePlan?.name || "";
+    const safeServiceName = escapeHtml(rawServiceName);
     const safeArrivalSoc = escapeHtml(record.arrivalSoc);
     const safeTargetArrivalSoc = escapeHtml(record.targetArrivalSoc);
     const safeStopCount = escapeHtml(record.stopCount);
@@ -5634,10 +5631,10 @@
       metrics.innerHTML = displayCopy(record.directTrip
         ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>直达 <b>无需补能</b></span><span>到达 <b>${safeArrivalSoc}%</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span>`
         : record.serviceOnly
-          ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>服务 <b>${serviceName || "已加入"}</b></span><span>到达 <b>${safeArrivalSoc}%</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`
+          ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>服务 <b>${safeServiceName || "已加入"}</b></span><span>到达 <b>${safeArrivalSoc}%</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`
         : record.multiStop
-            ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>补能 <b>${safeStopCount} 次</b></span><span>停靠 <b>${escapeHtml(formatDuration(record.totalStopMinutesP50 || 0))}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>排队 P90 <b>${safeP90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`
-            : `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>停靠 <b>${escapeHtml(formatDuration(record.totalStopMinutesP50 || 0))}</b></span><span>排队 P50 <b>${safeP50Wait}分</b></span><span>排队 P90 <b>${safeP90Wait}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`);
+            ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>补能 <b>${safeStopCount} 次</b></span><span>停靠 <b>${escapeHtml(formatDuration(record.totalStopMinutesP50 || 0))}</b></span>${safeServiceName ? `<span>服务 <b>${safeServiceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>排队 P90 <b>${safeP90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`
+            : `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span>${safeServiceName ? `<span>服务 <b>${safeServiceName}</b></span>` : ""}<span>停靠 <b>${escapeHtml(formatDuration(record.totalStopMinutesP50 || 0))}</b></span><span>排队 P50 <b>${safeP50Wait}分</b></span><span>排队 P90 <b>${safeP90Wait}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`);
     }
     if (tag) {
       const objectiveBadgeText = record.feasible && Array.isArray(record.objectiveBadges) && record.objectiveBadges.length > 1
@@ -5672,12 +5669,12 @@
     if (stationLine) stationLine.textContent = displayCopy(record.directTrip
       ? `无需${isFuelActive() ? "加油" : "补能"} · 直达 ${state.destinationName} · 到达 ${record.arrivalSoc}%`
       : record.serviceOnly
-        ? `服务停靠 · ${serviceName || "沿线服务"} · ETA 已按真实路线重算`
+        ? `服务停靠 · ${rawServiceName || "沿线服务"} · ETA 已按真实路线重算`
       : record.multiStop
-        ? `连续${isFuelActive() ? "加油" : "补能"} ${record.stopCount} 次${serviceName ? ` · 含 ${serviceName}` : ""} · ${record.stops.map((stop) => stop.name).join(" → ")} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment(record.stops || [])}`
+        ? `连续${isFuelActive() ? "加油" : "补能"} ${record.stopCount} 次${rawServiceName ? ` · 含 ${rawServiceName}` : ""} · ${record.stops.map((stop) => stop.name).join(" → ")} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment(record.stops || [])}`
       : !record.canReachStation
         ? (record.planningFailure || `当前余量不足以安全抵达候选${isFuelActive() ? "加油站" : "充电站"} · 不建议执行`)
-        : `${isFuelActive() ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"}${serviceName ? ` · 含 ${serviceName}` : ""} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment([record.station])}`);
+        : `${isFuelActive() ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"}${rawServiceName ? ` · 含 ${rawServiceName}` : ""} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment([record.station])}`);
     if (reason) {
       // 该策略的高德查询没返回独立路线，这里复用的是本次行程另一条真实路线。
       // 必须说出来，否则三张卡片看着像三条不同的路线。
@@ -5690,7 +5687,7 @@
         return;
       }
       if (record.serviceOnly) {
-        reason.textContent = displayCopy(withNote(`已加入 ${serviceName || "沿线服务"} · 预计额外 ${record.servicePlan?.extraMinutes || 0} 分钟 · 到达余量 ${record.arrivalSoc}%。`));
+        reason.textContent = displayCopy(withNote(`已加入 ${rawServiceName || "沿线服务"} · 预计额外 ${record.servicePlan?.extraMinutes || 0} 分钟 · 到达余量 ${record.arrivalSoc}%。`));
         return;
       }
       if (record.multiStop) {
@@ -5706,7 +5703,7 @@
           cheapest: `费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}；优先在模拟单价较低的站点补能。`
         };
          const baseReason = summaries[record.key] || `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：补能停靠总耗时 P90 ${record.totalStopMinutesP90} 分钟。`;
-        reason.textContent = displayCopy(withNote(serviceName ? `${baseReason} 已含服务停靠 ${serviceName}。` : baseReason));
+        reason.textContent = displayCopy(withNote(rawServiceName ? `${baseReason} 已含服务停靠 ${rawServiceName}。` : baseReason));
         return;
       }
       if (!record.canReachStation) {
@@ -5883,7 +5880,8 @@
   }
 
   function simulationMetricValue(value, suffix = "") {
-    return Number.isFinite(Number(value)) ? `${Number(value)}${suffix}` : "—";
+    const parsed = parseOptionalNumber(value);
+    return parsed !== null ? `${parsed}${suffix}` : "—";
   }
 
   function formatVisionTimestamp(value = null) {
@@ -6167,13 +6165,20 @@
     const before = simulation.reservationBeforeSnapshot || {};
     const after = simulation.reservationAfterSnapshot || before;
     const snapshot = after || before;
-    const numberText = (value, suffix = "") => Number.isFinite(Number(value)) ? `${Number(value)}${suffix}` : "—";
-     const available = Number.isFinite(Number(snapshot.available)) ? `${snapshot.available}/${numberText(snapshot.total)}` : "—";
-     const arrivalAvailable = Number.isFinite(Number(snapshot.arrivalAvailable)) ? `${snapshot.arrivalAvailable}/${numberText(snapshot.total)}` : "—";
+    const numberText = (value, suffix = "") => {
+      const parsed = parseOptionalNumber(value);
+      return parsed !== null ? `${parsed}${suffix}` : "—";
+    };
+    const parsedAvailable = parseOptionalNumber(snapshot.available);
+    const available = parsedAvailable !== null ? `${parsedAvailable}/${numberText(snapshot.total)}` : "—";
+    const parsedArrivalAvailable = parseOptionalNumber(snapshot.arrivalAvailable);
+    const arrivalAvailable = parsedArrivalAvailable !== null ? `${parsedArrivalAvailable}/${numberText(snapshot.total)}` : "—";
     const queue = numberText(snapshot.queue, " 辆");
     const reservationAhead = numberText(snapshot.reservationQueueAhead, " 辆");
-    const beforeAfter = Number.isFinite(Number(before.waitP50)) && Number.isFinite(Number(after.waitP50))
-      ? `P50 ${before.waitP50} → ${after.waitP50} 分钟；P90 ${numberText(before.waitP90, " 分钟")} → ${numberText(after.waitP90, " 分钟")}`
+    const beforeWaitP50 = parseOptionalNumber(before.waitP50);
+    const afterWaitP50 = parseOptionalNumber(after.waitP50);
+    const beforeAfter = beforeWaitP50 !== null && afterWaitP50 !== null
+      ? `P50 ${beforeWaitP50} → ${afterWaitP50} 分钟；P90 ${numberText(before.waitP90, " 分钟")} → ${numberText(after.waitP90, " 分钟")}`
       : "预约前后等待预测将在可用输入完整时对比";
     const eta = formatJourneyClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes));
     const station = escapeHtml(phase.stop?.name || "下一补能站");
@@ -8517,10 +8522,10 @@
 
   function compactFeishuMetricSnapshot(value = {}) {
     return {
-      averageWait: Number.isFinite(Number(value.averageWait)) ? Number(value.averageWait) : undefined,
-      p90Wait: Number.isFinite(Number(value.p90Wait)) ? Number(value.p90Wait) : undefined,
-      occupancyDispersion: Number.isFinite(Number(value.occupancyDispersion)) ? Number(value.occupancyDispersion) : undefined,
-      peakQueue: Number.isFinite(Number(value.peakQueue)) ? Number(value.peakQueue) : undefined
+      averageWait: parseOptionalNumber(value.averageWait) ?? undefined,
+      p90Wait: parseOptionalNumber(value.p90Wait) ?? undefined,
+      occupancyDispersion: parseOptionalNumber(value.occupancyDispersion) ?? undefined,
+      peakQueue: parseOptionalNumber(value.peakQueue) ?? undefined
     };
   }
 
@@ -8561,13 +8566,13 @@
 
   function compactFeishuImpact(value = {}) {
     return {
-      divertedVehicles: Number.isFinite(Number(value.divertedVehicles)) ? Number(value.divertedVehicles) : undefined,
-      roi: Number.isFinite(Number(value.roi)) ? Number(value.roi) : undefined,
-      scenarioRoi: Number.isFinite(Number(value.scenarioRoi)) ? Number(value.scenarioRoi) : undefined,
-      retainedOrders: Number.isFinite(Number(value.retainedOrders)) ? Number(value.retainedOrders) : undefined,
-      incrementalOrders: Number.isFinite(Number(value.incrementalOrders)) ? Number(value.incrementalOrders) : undefined,
-      platformContribution: Number.isFinite(Number(value.platformContribution)) ? Number(value.platformContribution) : undefined,
-      merchantContribution: Number.isFinite(Number(value.merchantContribution)) ? Number(value.merchantContribution) : undefined
+      divertedVehicles: parseOptionalNumber(value.divertedVehicles) ?? undefined,
+      roi: parseOptionalNumber(value.roi) ?? undefined,
+      scenarioRoi: parseOptionalNumber(value.scenarioRoi) ?? undefined,
+      retainedOrders: parseOptionalNumber(value.retainedOrders) ?? undefined,
+      incrementalOrders: parseOptionalNumber(value.incrementalOrders) ?? undefined,
+      platformContribution: parseOptionalNumber(value.platformContribution) ?? undefined,
+      merchantContribution: parseOptionalNumber(value.merchantContribution) ?? undefined
     };
   }
 
@@ -8576,10 +8581,7 @@
       const valueText = String(value ?? "").trim();
       return valueText ? valueText.slice(0, max) : undefined;
     };
-    const numberOrUndefined = (value) => {
-      const number = Number(value);
-      return Number.isFinite(number) ? number : undefined;
-    };
+    const numberOrUndefined = (value) => parseOptionalNumber(value) ?? undefined;
     const recommendedBasis = strategy.recommendedBasis && typeof strategy.recommendedBasis === "object"
       ? {
           roi: numberOrUndefined(strategy.recommendedBasis.roi),
@@ -9418,8 +9420,9 @@
     const action = byId("operatorAction");
     if (queue) queue.innerHTML = `${escapeHtml(snapshot.peakQueue)}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> 人</span>`;
     const strategyAvailable = snapshot.strategyAvailable === true;
-    if (discount) discount.innerHTML = strategyAvailable && Number.isFinite(Number(snapshot.discount))
-      ? `¥${Number(snapshot.discount).toFixed(0)}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span>`
+    const parsedDiscount = parseOptionalNumber(snapshot.discount);
+    if (discount) discount.innerHTML = strategyAvailable && parsedDiscount !== null
+      ? `¥${parsedDiscount.toFixed(0)}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span>`
       : "—";
     const discountNote = byId("operatorDiscountNote");
     if (discountNote) {
@@ -9435,9 +9438,10 @@
       }
     }
     if (roi) {
-      if (strategyAvailable && Number.isFinite(Number(snapshot.roi))) {
-        roi.textContent = `${Number(snapshot.roi).toFixed(2)}x`;
-        roi.style.color = Number(snapshot.roi) >= 1 ? "var(--teal)" : "var(--amber)";
+      const parsedRoi = parseOptionalNumber(snapshot.roi);
+      if (strategyAvailable && parsedRoi !== null) {
+        roi.textContent = `${parsedRoi.toFixed(2)}x`;
+        roi.style.color = parsedRoi >= 1 ? "var(--teal)" : "var(--amber)";
       } else {
         roi.textContent = "—";
         roi.style.color = "";
@@ -9633,8 +9637,8 @@
         merchantAccepted: meta.merchantAccepted === true,
         // 缓存/旧版本站点可能没有运营窗口容量；不要把“缺失”编码成显式 0，
         // 否则后端会把 0 当成真实承接能力，导致分流、ROI 和等待变化全部为 0。
-        windowCapacity: Number.isFinite(Number(meta.windowCapacity)) && Number(meta.windowCapacity) > 0
-          ? Number(meta.windowCapacity)
+        windowCapacity: (parseOptionalNumber(meta.windowCapacity) ?? 0) > 0
+          ? parseOptionalNumber(meta.windowCapacity)
           : undefined,
         platformCoupon: Number(meta.platformCoupon ?? OPERATOR_DEMO_DEFAULTS.platformCoupon),
         merchantCouponShare: Number(meta.merchantCouponShare ?? OPERATOR_DEMO_DEFAULTS.merchantCouponShare),
@@ -9647,11 +9651,11 @@
         forecastMethod: station.forecastMethod || null,
         forecastSource: station.forecastSource || null,
         forecastDataAsOf: station.forecastDataAsOf || station.forecastAsOf || null,
-        forecastFreshnessSeconds: Number.isFinite(Number(station.forecastFreshnessSeconds)) ? Number(station.forecastFreshnessSeconds) : null,
+        forecastFreshnessSeconds: parseOptionalNumber(station.forecastFreshnessSeconds),
         forecastSimulation: station.forecastSimulation !== false,
         forecastInputSnapshot: station.forecastInputSnapshot || null,
-        forecastArrivalWaitP50: Number.isFinite(Number(station.forecastArrivalWaitP50)) ? Number(station.forecastArrivalWaitP50) : Number(station.p50 || 0),
-        forecastArrivalWaitP90: Number.isFinite(Number(station.forecastArrivalWaitP90)) ? Number(station.forecastArrivalWaitP90) : Number(station.p90 || 0)
+        forecastArrivalWaitP50: parseOptionalNumber(station.forecastArrivalWaitP50) ?? Number(station.p50 || 0),
+        forecastArrivalWaitP90: parseOptionalNumber(station.forecastArrivalWaitP90) ?? Number(station.p90 || 0)
       };
     });
   }
@@ -10006,6 +10010,14 @@
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+  }
+
+  function parseOptionalNumber(value) {
+    if (value === null || value === undefined || typeof value === "boolean") return null;
+    if (typeof value === "object") return null;
+    if (typeof value === "string" && value.trim() === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   function renderValidationEvidence(payload) {

@@ -86,8 +86,12 @@ export function parseRequestUrl(request) {
     throw Object.assign(new Error("INVALID_REQUEST_URL"), { statusCode: 400 });
   }
   try {
-    const parsed = new URL(rawUrl, `http://${host}`);
-    if (parsed.host.toLowerCase() !== host.toLowerCase()) {
+    const base = new URL(`http://${host}`);
+    if (base.pathname !== "/" || base.username || base.password || base.search || base.hash) {
+      throw new Error("INVALID_HOST");
+    }
+    const parsed = new URL(rawUrl, base);
+    if (parsed.protocol !== base.protocol || parsed.host.toLowerCase() !== base.host.toLowerCase()) {
       throw new Error("HOST_MISMATCH");
     }
     return parsed;
@@ -126,11 +130,29 @@ export function validatePostRequestSecurity(request, requestUrl, { allowNonJson 
     if (!["http:", "https:"].includes(originUrl.protocol)) {
       return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
     }
-    if (originUrl.host.toLowerCase() !== requestUrl.host.toLowerCase()) {
+    const forwardedProto = String(headers["x-forwarded-proto"] || "").split(",", 1)[0].trim().toLowerCase();
+    if ((forwardedProto === "https" || request?.socket?.encrypted) && originUrl.protocol === "http:") {
       return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
     }
-    const forwardedProto = String(headers["x-forwarded-proto"] || "").split(",", 1)[0].trim().toLowerCase();
-    if (forwardedProto === "https" && originUrl.protocol === "http:") {
+    // Normalize the incoming Host header under the Origin's scheme so standard
+    // default ports (`Host: example.com:80` + `Origin: http://example.com` and
+    // `Host: example.com:443` + `Origin: https://example.com`) match, while
+    // mismatched port/scheme combinations (`:443` with `http:` or `:80` with
+    // `https:`) are rejected.
+    const hostHeader = headers.host !== undefined && String(headers.host).trim() !== ""
+      ? String(headers.host).trim()
+      : String(requestUrl?.host || "").trim();
+    let expectedHostUrl;
+    try {
+      expectedHostUrl = new URL(`${originUrl.protocol}//${hostHeader}`);
+      if (expectedHostUrl.pathname !== "/" || expectedHostUrl.username || expectedHostUrl.password
+        || expectedHostUrl.search || expectedHostUrl.hash) {
+        return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
+      }
+    } catch {
+      return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
+    }
+    if (originUrl.host.toLowerCase() !== expectedHostUrl.host.toLowerCase()) {
       return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
     }
   }
@@ -974,14 +996,44 @@ export function isCompletedVisionInference(result) {
     && (result.inferenceStatus === "executed" || result.inferenceStatus === "synthetic");
 }
 
+const NON_RETRYABLE_VISION_REASON_CODES = new Set([
+  "VIDEO_OCR_TIMEOUT",
+  "VIDEO_OCR_FAILED",
+  "VIDEO_DECODE_FAILED",
+  "VIDEO_DECODER_UNAVAILABLE",
+  "VIDEO_FRAME_DIMENSIONS_TOO_LARGE",
+  "OCR_IMAGE_DECODE_FAILED",
+  "OCR_IMAGE_DECODER_UNAVAILABLE",
+  "OCR_NUMPY_UNAVAILABLE",
+  "PADDLEOCR_RUNTIME_UNAVAILABLE",
+  "PADDLEOCR_CLASS_UNAVAILABLE",
+  "PADDLEOCR_LOCAL_MODEL_DIRS_REQUIRED",
+  "PADDLEOCR_INFERENCE_METHOD_UNAVAILABLE",
+  "IMAGE_DIMENSIONS_TOO_LARGE",
+  "IMAGE_CONTENT_INVALID",
+  "IMAGE_TOO_LARGE",
+  "VIDEO_TOO_LARGE",
+  "UNSUPPORTED_CV_MODE"
+]);
+
 export function isTransientVisionResult(result) {
   if (!validateVisionResult(result)) return false;
   if (!["not-run", "error"].includes(String(result.inferenceStatus || ""))) return false;
+  if (result.retryable === false) return false;
+  const reasonCode = String(result.reasonCode || "").trim().toUpperCase();
+  if (reasonCode && NON_RETRYABLE_VISION_REASON_CODES.has(reasonCode)) return false;
+  const mode = String(result.mode || "");
+  if (mode === "local-video-ocr-unavailable") {
+    // Video timeouts and decode/dependency failures are deterministic or already
+    // consumed the full video budget; only retry while PaddleOCR is still warming up.
+    if (result.retryable === true || reasonCode === "PADDLEOCR_NOT_READY") return true;
+    return Array.isArray(result.evidence)
+      && result.evidence.some((item) => String(item || "").includes("PADDLEOCR_NOT_READY"));
+  }
   return [
     "local-ocr-unavailable",
-    "local-ocr-error",
-    "local-video-ocr-unavailable"
-  ].includes(String(result.mode || ""));
+    "local-ocr-error"
+  ].includes(mode);
 }
 
 export function isRetryableVisionStatus(status) {

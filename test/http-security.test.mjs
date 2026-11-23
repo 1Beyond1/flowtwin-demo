@@ -7,6 +7,7 @@ import {
   CONTENT_SECURITY_POLICY,
   createRequestHandler,
   isTransientVisionResult,
+  parseRequestUrl,
   SECURITY_HEADERS,
   validatePostRequestSecurity
 } from "../server.mjs";
@@ -14,6 +15,18 @@ import { createRateLimiter } from "../lib/rate-limit.mjs";
 import { approveFeishuStrategy, clearFeishuCaches } from "../lib/feishu-bitable.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+
+// WHATWG Fetch blocks requests to these ports (undici throws `Error: bad port`).
+// Windows ephemeral port allocation can occasionally assign 5060/5061/6000/etc.,
+// so retry listen(0) if we land on one.
+const FETCH_BAD_PORTS = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79,
+  87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137,
+  139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532,
+  540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723,
+  2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697,
+  10080
+]);
 
 async function withServer(overrides, run) {
   const limiter = overrides.rateLimiter || createRateLimiter({
@@ -23,9 +36,20 @@ async function withServer(overrides, run) {
     },
     trustProxy: false
   });
-  const server = createServer(createRequestHandler({ ...overrides, rateLimiter: limiter }));
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address();
+  let server;
+  let port;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const candidate = createServer(createRequestHandler({ ...overrides, rateLimiter: limiter }));
+    await new Promise((resolve) => candidate.listen(0, "127.0.0.1", resolve));
+    const boundPort = candidate.address().port;
+    if (!FETCH_BAD_PORTS.has(boundPort)) {
+      server = candidate;
+      port = boundPort;
+      break;
+    }
+    await new Promise((resolve) => candidate.close(resolve));
+  }
+  if (!server) throw new Error("FAILED_TO_BIND_SAFE_TEST_PORT");
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
     return await run({ baseUrl, port });
@@ -112,6 +136,62 @@ test("JSON POST endpoints enforce Content-Type application/json and same-origin 
     new URL("http://demo.example.com/api/forecast")
   );
   assert.equal(proxyOk.ok, true);
+
+  // Explicit default ports (:80 for HTTP, :443 for HTTPS) are accepted when scheme matches,
+  // and rejected when port/scheme do not match.
+  const parsedPort80 = parseRequestUrl({ url: "/api/forecast", headers: { host: "demo.example.com:80" } });
+  assert.equal(parsedPort80.pathname, "/api/forecast");
+  assert.equal(
+    validatePostRequestSecurity(
+      { headers: { host: "demo.example.com:80", origin: "http://demo.example.com", "content-type": "application/json" } },
+      parsedPort80
+    ).ok,
+    true
+  );
+
+  const parsedPort443 = parseRequestUrl({ url: "/api/forecast", headers: { host: "demo.example.com:443" } });
+  assert.equal(parsedPort443.pathname, "/api/forecast");
+  assert.equal(
+    validatePostRequestSecurity(
+      {
+        headers: {
+          host: "demo.example.com:443",
+          origin: "https://demo.example.com",
+          "x-forwarded-proto": "https",
+          "content-type": "application/json"
+        }
+      },
+      parsedPort443
+    ).ok,
+    true
+  );
+  assert.equal(
+    validatePostRequestSecurity(
+      { headers: { host: "demo.example.com:443", origin: "http://demo.example.com", "content-type": "application/json" } },
+      parsedPort443
+    ).status,
+    403
+  );
+  assert.equal(
+    validatePostRequestSecurity(
+      { headers: { host: "demo.example.com:80", origin: "https://demo.example.com", "content-type": "application/json" } },
+      parsedPort80
+    ).status,
+    403
+  );
+  assert.equal(
+    validatePostRequestSecurity(
+      {
+        headers: {
+          host: "demo.example.com:8080",
+          origin: "https://demo.example.com",
+          "content-type": "application/json"
+        }
+      },
+      parseRequestUrl({ url: "/api/forecast", headers: { host: "demo.example.com:8080" } })
+    ).status,
+    403
+  );
 });
 
 test("invalid percent-encoding and malformed Host return HTTP 400 rather than 500", async () => {
@@ -171,8 +251,8 @@ test("Feishu strategy approval validates record ID format and status enum whitel
   });
 });
 
-test("CV proxy checks body before locking slot and treats local-video-ocr-unavailable as transient", async () => {
-  const videoUnavailable = {
+test("CV proxy checks body before locking slot and only retries transient video warmup failures", async () => {
+  const baseVideoUnavailable = {
     ok: true,
     mode: "local-video-ocr-unavailable",
     inferenceStatus: "not-run",
@@ -183,7 +263,31 @@ test("CV proxy checks body before locking slot and treats local-video-ocr-unavai
     paymentReceipt: { status: "not-run", receiptId: null, amount: null, message: "未执行任何支付动作" },
     dataBoundary: "未执行"
   };
-  assert.equal(isTransientVisionResult(videoUnavailable), true);
+  assert.equal(
+    isTransientVisionResult({ ...baseVideoUnavailable, reasonCode: "PADDLEOCR_NOT_READY", retryable: true }),
+    true
+  );
+  assert.equal(
+    isTransientVisionResult({ ...baseVideoUnavailable, evidence: ["本地运行条件：PADDLEOCR_NOT_READY"] }),
+    true
+  );
+  assert.equal(
+    isTransientVisionResult({ ...baseVideoUnavailable, reasonCode: "VIDEO_OCR_TIMEOUT", retryable: false }),
+    false
+  );
+  assert.equal(
+    isTransientVisionResult({ ...baseVideoUnavailable, reasonCode: "VIDEO_DECODE_FAILED", retryable: false }),
+    false
+  );
+  assert.equal(
+    isTransientVisionResult({ ...baseVideoUnavailable, reasonCode: "VIDEO_DECODER_UNAVAILABLE", retryable: false }),
+    false
+  );
+  assert.equal(isTransientVisionResult(baseVideoUnavailable), false);
+  assert.equal(
+    isTransientVisionResult({ ...baseVideoUnavailable, mode: "local-ocr-unavailable", reasonCode: "OCR_IMAGE_DECODE_FAILED", retryable: false }),
+    false
+  );
 
   await withServer({ config: {} }, async ({ baseUrl }) => {
     const invalidJson = await fetch(`${baseUrl}/api/cv/analyze`, {
@@ -312,9 +416,13 @@ test("index.html and app.js harden DOM XSS, payment receipt modal placement, and
 
   // app.js must not pass raw <b> HTML into setText("paymentReceiptStation", ...)
   assert.equal(appJs.includes('setText("paymentReceiptStation", `车牌 <b>'), false);
-  // Key previously-unescaped XSS sinks now use escapeHtml
+  // Key previously-unescaped XSS sinks now use escapeHtml, while textContent uses rawServiceName
   assert.equal(appJs.includes('title="${title}"'), false);
   assert.equal(appJs.includes("可直达 ${state.destinationName}<span"), false);
   assert.equal(appJs.includes("途经 · ${record.station.name}"), false);
   assert.equal(appJs.includes("向${payload.targetUser"), false);
+  assert.equal(appJs.includes("const rawServiceName = record.servicePlan?.name || \"\";"), true);
+  assert.equal(appJs.includes("const safeServiceName = escapeHtml(rawServiceName);"), true);
+  assert.equal(appJs.includes("服务停靠 · ${rawServiceName"), true);
+  assert.equal(appJs.includes("已加入 ${rawServiceName"), true);
 });

@@ -38,6 +38,36 @@ def make_png_header(width: int, height: int) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + ihdr_chunk + iend_chunk
 
 
+def make_jpeg_header(width: int, height: int, *, sof_marker: int = 0xC0) -> bytes:
+    # SOI + APP0(JFIF) + SOF(precision=8, height, width, 3 components) + EOI
+    app0_payload = b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    app0 = b"\xff\xe0" + struct.pack(">H", len(app0_payload) + 2) + app0_payload
+    sof_body = struct.pack(">BHHB", 8, height, width, 3) + b"\x01\x11\x00\x02\x11\x00\x03\x11\x00"
+    sof = bytes([0xFF, sof_marker]) + struct.pack(">H", len(sof_body) + 2) + sof_body
+    return b"\xff\xd8" + app0 + sof + b"\xff\xd9"
+
+
+def make_webp_vp8x(width: int, height: int) -> bytes:
+    w = width - 1
+    h = height - 1
+    vp8x_data = b"\x00\x00\x00\x00" + bytes([w & 0xFF, (w >> 8) & 0xFF, (w >> 16) & 0xFF, h & 0xFF, (h >> 8) & 0xFF, (h >> 16) & 0xFF])
+    body = b"WEBP" + b"VP8X" + struct.pack("<I", len(vp8x_data)) + vp8x_data
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def make_webp_vp8_lossy(width: int, height: int) -> bytes:
+    frame_header = b"\x10\x00\x00\x9d\x01\x2a" + struct.pack("<HH", width, height)
+    body = b"WEBP" + b"VP8 " + struct.pack("<I", len(frame_header)) + frame_header
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def make_webp_vp8l_lossless(width: int, height: int) -> bytes:
+    bits = ((width - 1) & 0x3FFF) | (((height - 1) & 0x3FFF) << 14)
+    payload = b"\x2f" + struct.pack("<I", bits)
+    body = b"WEBP" + b"VP8L" + struct.pack("<I", len(payload)) + payload + b"\x00"
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
 class CvAdapterTests(unittest.TestCase):
     def test_sample_is_explicitly_not_model_inference(self):
         result = analyze({"mode": "sample", "seed": "test-seed"})
@@ -76,6 +106,30 @@ class CvAdapterTests(unittest.TestCase):
             upload_metadata(data_url("image/png", bomb_png))
         with self.assertRaisesRegex(ValueError, "IMAGE_DIMENSIONS_TOO_LARGE"):
             analyze({"mode": "upload", "imageData": data_url("image/png", bomb_png)})
+
+        # Even when Pillow is unavailable (Image is None), native header parsers
+        # reject oversized JPEG (SOF0/SOF2) and WebP (VP8X/VP8/VP8L) BEFORE cv2.imdecode.
+        fake_cv2 = mock.MagicMock()
+        fake_cv2.imdecode.side_effect = AssertionError("cv2.imdecode must not run on oversized or unverified images")
+        bomb_cases = [
+            ("image/jpeg", make_jpeg_header(6000, 5000, sof_marker=0xC0)),
+            ("image/jpeg", make_jpeg_header(6000, 5000, sof_marker=0xC2)),
+            ("image/webp", make_webp_vp8x(6000, 5000)),
+            ("image/webp", make_webp_vp8_lossy(6000, 5000)),
+            ("image/webp", make_webp_vp8l_lossless(6000, 5000)),
+        ]
+        with mock.patch.object(app, "Image", None), mock.patch.object(app, "cv2", fake_cv2):
+            for mime, payload_bytes in bomb_cases:
+                with self.assertRaisesRegex(ValueError, "IMAGE_DIMENSIONS_TOO_LARGE"):
+                    upload_metadata(data_url(mime, payload_bytes))
+                with self.assertRaisesRegex(ValueError, "IMAGE_DIMENSIONS_TOO_LARGE"):
+                    analyze({"mode": "upload", "imageData": data_url(mime, payload_bytes)})
+            # Headerless minimal JPEG stub must also not reach cv2.imdecode when Pillow is absent
+            stub_result = analyze({"mode": "upload", "imageData": data_url("image/jpeg", b"\xff\xd8\xff\xd9")})
+            self.assertEqual(stub_result["mode"], "local-ocr-unavailable")
+            self.assertEqual(stub_result["reasonCode"], "OCR_IMAGE_DECODE_FAILED")
+            self.assertFalse(stub_result["retryable"])
+            fake_cv2.imdecode.assert_not_called()
 
     def test_upload_decodes_base64_only_once(self):
         raw = b"\xff\xd8\xff\xd9"
@@ -166,7 +220,15 @@ class CvAdapterTests(unittest.TestCase):
              mock.patch.object(app.time, "perf_counter", side_effect=lambda: next(ticks, 999.9)):
             timed_out = analyze(payload)
             self.assertEqual(timed_out["mode"], "local-video-ocr-unavailable")
+            self.assertEqual(timed_out["reasonCode"], "VIDEO_OCR_TIMEOUT")
+            self.assertFalse(timed_out["retryable"])
             self.assertTrue(any("VIDEO_OCR_TIMEOUT" in item for item in timed_out["evidence"]))
+
+        with mock.patch.object(app, "_analyze_video", side_effect=RuntimeError("PADDLEOCR_NOT_READY")):
+            warming = analyze(payload)
+            self.assertEqual(warming["mode"], "local-video-ocr-unavailable")
+            self.assertEqual(warming["reasonCode"], "PADDLEOCR_NOT_READY")
+            self.assertTrue(warming["retryable"])
 
     def test_http_handler_enforces_json_content_type_sanitizes_errors_and_sets_timeout(self):
         self.assertGreaterEqual(SOCKET_TIMEOUT_SECONDS, 5.0)
