@@ -118,7 +118,7 @@ class CvAdapterTests(unittest.TestCase):
             ("image/webp", make_webp_vp8_lossy(6000, 5000)),
             ("image/webp", make_webp_vp8l_lossless(6000, 5000)),
         ]
-        with mock.patch.object(app, "Image", None), mock.patch.object(app, "cv2", fake_cv2):
+        with mock.patch.object(app, "Image", None), mock.patch.object(app, "cv2", fake_cv2), mock.patch.object(app, "np", None):
             for mime, payload_bytes in bomb_cases:
                 with self.assertRaisesRegex(ValueError, "IMAGE_DIMENSIONS_TOO_LARGE"):
                     upload_metadata(data_url(mime, payload_bytes))

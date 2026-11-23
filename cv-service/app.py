@@ -380,12 +380,12 @@ def upload_video_metadata(video_data: str) -> tuple[dict[str, Any], bytes]:
 
 
 def _decode_image(raw: bytes) -> Any:
+    # Enforce pixel limit via native PNG/JPEG/WebP header parsing and/or PIL
+    # BEFORE cv2.imdecode or numpy checks so a compressed pixel bomb or
+    # headerless payload cannot bypass pre-decode validation.
+    _inspect_image_dimensions(raw, require_valid=True)
     if np is None:
         raise RuntimeError("OCR_NUMPY_UNAVAILABLE")
-    # Enforce pixel limit via native PNG/JPEG/WebP header parsing and/or PIL
-    # BEFORE cv2.imdecode so a compressed pixel bomb cannot allocate gigabytes
-    # in OpenCV even when Pillow is not installed.
-    _inspect_image_dimensions(raw, require_valid=True)
     if cv2 is not None:
         image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is not None:
