@@ -30,27 +30,21 @@ Adapts to 360–430 px mobile viewports while preserving natural-language intent
 
 ## Core Capabilities
 
-- **Natural-language intent parsing & multi-turn actions**: An OpenAI-compatible AI model parses Chinese driver requests into destination, optional latest arrival time / arrival SOC margin, powertrain type (EV/fuel), detour cap, optimization priority, and non-energy service preferences. Supports multi-turn actions (adding services, inserting waypoints, editing constraints, removing stops, or starting a new trip). AI only handles intent understanding and explanations — routing and optimization remain deterministic via AMap and backend algorithms, without carrying prior-trip defaults forward as hard constraints.
-- **Judge Mode vs. User Mode**: Judge Mode surfaces data boundaries, calculation rationales, and operator validation details; User Mode hides implementation internals and keeps routes, replenishment stops, safety, and service recommendations concise.
-- **Origin selection with honest fallback**: After choosing a display mode, first-time visitors pick either NewLink HQ or browser geolocation. If geolocation is denied, times out, or reverse geocoding fails, the origin falls back to NewLink HQ without fabricating coordinates. Changing the origin in Settings prompts replanning for existing trips.
-- **Version & build provenance**: Settings displays the current version, short commit hash, and build source, and supports manually checking GitHub for updates. Release packages without `.git` preserve commit metadata via private `runtime/build-info.json` without false update claims when offline or rate-limited.
-- **Optional voice input (STT)**: Browser audio recordings are proxied server-side to a configured OpenAI-compatible speech-to-text endpoint with optional cleanup of emotion/language tags. Transcriptions feed straight into the text planning pipeline by default (or can be set in Settings to populate the input box only). API keys never leave the server.
-- **Real AMap routing, geocoding, and corridor POIs**: AMap supplies live basemaps, nationwide geocoding/place search, corridor replenishment POIs, and driving routes. Ambiguous short place names present selectable destination candidates. Judge Mode explicitly labels whether results came from live AMap calls, route cache hits, or fixed fallback scenarios.
-- **Multi-stop long-distance replenishment**: Standard trips plan up to 6 stops; extreme long-distance routes enter an adaptive mode verifying up to 12 stops per run. When public POI coverage is sparse, corridor candidates are explicitly labeled as demo candidates requiring confirmation rather than masquerading as verified chargers.
-- **Server-side AMap file cache**: Route, POI, geocoding, reverse-geocoding, and weather responses are cached under `runtime/cache/amap/` (Git-ignored and blocked from static serving). Stale cache entries are served only when upstream requests fail within a short grace window, and are explicitly tagged as stale fallback.
-- **5-minute browser plan snapshot**: Refreshing the page reuses completed POI extraction and segment-by-segment safety verification only when route, powertrain, energy state, safety margin, detour limit, priority, arrival constraint, service stops, and pressure snapshot all match; any change triggers recomputation. Snapshots never store keys, OCR media, or recognition results.
-- **Ordered multi-waypoint verification**: Multi-stop long-distance plans prefer AMap Route 2.0 ordered waypoints to verify the full road polyline in one request and split true road mileage by waypoint order, falling back to per-segment routing only on failure or waypoint-limit overflow.
-- **Arrival-time queue & port-level simulation**: Forecasts station utilization and P50/P90 queue waiting times at estimated arrival time using a unified stop-time ledger (`queue + replenishment service + payment/exit buffer`). Supports port-level discrete-event simulation (total, available, reserved, charging/faulted ports, waiting arrivals, and reservation queue) derived from demo occupancy/capacity inputs, falling back to aggregate flow simulation when port state is absent. Live AMap rain/snow conditions adjust simulated queues via `weatherFactor`. Forecasts are FlowTwin demo simulations, not live NaaS production telemetry.
-- **Multi-objective driver recommendations**: Computes Fastest, Safest, and Lowest-Cost plans, explaining trade-offs across driving, queueing, service, payment/exit, detour, and cost. Identical routes merge objective badges rather than fabricating three artificially distinct plans.
-- **Judge Mode decision chain & execution loop**: Displays whether AI was invoked, map data provenance, enterprise demand prior / simulation source, and unified safety constraints, plus a closed loop from forecast → reservation → local OCR → demo billing → operator review. Rule-handled simple requests offer an optional "Try multi-turn AI refinement" button that only pre-fills an example prompt until explicitly submitted. Simulated driving unlocks "Enter Operator Review" only after arriving at the destination, tracking local OCR, preset fallback, demo billing, and skipped stops separately.
-- **Operator load-balancing & ROI simulation**: Models platform coupons, recommendation diversion, and traffic guidance on designated actionable demo stations, estimating capacity effects, diversion, queue deltas, and scenario ROI (scenario estimates pending real A/B testing).
-- **Reproducible 1,000-trip validation**: Runs 30 synthetic nodes and 1,000 trips with a fixed random seed (default `20260719`) comparing four policies with deterministic, reproducible outputs.
-- **Feishu Bitable + AI Field integration**: Syncs operator snapshots to Feishu Bitable and reads strategy insights back from a Feishu AI field while tracking "local simulation completed" and "Feishu AI returned" as separate states (never masking empty/failed AI calls with canned text). Legacy Feishu robot Webhook notifications remain available as an optional adapter.
-- **Lightweight local CV verification (Judge Mode)**: Runs local PaddleOCR on built-in AI-generated camera samples or uploaded images/short videos when the optional local CV service is running; vehicle detection, bay occupancy, and visual queue detection are explicitly marked as not integrated.
+- **Natural-language intent parsing & multi-turn actions**: An OpenAI-compatible AI model parses Chinese driver requests into destination, optional latest arrival time / arrival SOC margin, powertrain type (EV/fuel), detour cap, optimization priority, and non-energy service preferences, supporting multi-turn refinements (adding services, inserting waypoints, editing constraints, removing stops, or starting a new trip) with deterministic AMap routing and backend optimization.
+- **Judge Mode vs. User Mode**: Switch anytime between Judge Mode (full provenance, calculation rationales, and validation details) and User Mode (streamlined routes, replenishment stops, safety, and service recommendations).
+- **Origin selection & version checks**: Pick either NewLink HQ or browser geolocation on first visit (falling back to NewLink HQ when geolocation is unavailable) and switch anytime in Settings. Settings also displays the current version, short commit hash, and build source (via `runtime/build-info.json` when `.git` is absent) with manual GitHub release checks.
+- **Optional voice input (STT)**: Browser audio recordings are proxied server-side to an OpenAI-compatible speech-to-text endpoint, feeding straight into text planning by default (or populating the input box only) while keeping API keys server-side.
+- **Real AMap routing, geocoding & layered caching**: Live basemaps, nationwide geocoding/place search with selectable candidates, corridor POIs, weather, and driving routes, backed by a server-side file cache (`runtime/cache/amap/`, Git-ignored and blocked from static serving) plus a 5-minute matching-condition browser snapshot.
+- **Multi-stop long-distance replenishment**: Plans up to 6 stops on standard routes and up to 12 stops in adaptive extreme-distance mode; prefers AMap Route 2.0 ordered waypoints to verify the full road polyline in a single request and split road mileage/ETA cleanly, falling back to per-segment routing when needed.
+- **Arrival-time queue & port-level simulation**: Forecasts station utilization and P50/P90 queue waiting times at estimated arrival time using a unified stop-time ledger (`queue + service + payment/exit buffer`), supporting port-level discrete-event simulation alongside aggregate flow simulation and weather-aware queue adjustments (`weatherFactor`).
+- **Multi-objective recommendations & execution loop**: Compares Fastest, Most Reliable, and Lowest-Cost plans with automatic badge merging for identical routes; Judge Mode links forecast → simulated reservation → local OCR → demo receipt → operator review, unlocking one-click transition to Operator Review upon trip completion.
+- **Operator load-balancing & reproducible 1,000-trip validation**: Models platform coupons, target cohorts, diversion, queue deltas, and scenario ROI; the Validation tab runs 30 synthetic nodes and 1,000 trips with a fixed seed (default `20260719`) comparing four policies reproducibly.
+- **Feishu Bitable + AI Field integration**: Syncs operator snapshots to Feishu Bitable, reads strategy insights back from a Feishu AI field, and tracks approval write-backs alongside optional Feishu robot Webhook notifications.
+- **Optional local CV verification (Judge Mode)**: Runs local PaddleOCR license-plate recognition on built-in samples or uploaded images/short videos when the optional local CV service is configured.
 
-### Responsive Layout & Viewport Checks
+### Responsive Layout
 
-Layouts adapt to CSS viewport dimensions with an independently scrolling route drawer and viewport-contained simulation controls. Checked across common desktop, tablet, and mobile CSS viewports (1280×720, 1440×900, 1920×1080, 2560×1440, 3840×2160, 768×1024, 1024×768, 800×600, and 360–430 px mobile widths, plus DPR 2 spot checks).
+Layouts adapt to CSS viewport dimensions with an independently scrolling route drawer and viewport-contained simulation controls, covering desktop (1280×720 to 3840×2160), tablet (768×1024, 1024×768), and mobile (360–430 px, plus DPR 2 spot checks).
 
 ## Architecture
 
@@ -120,7 +114,7 @@ STT_API_KEY=your_stt_api_key
 STT_BASE_URL=https://your-stt-gateway.example.com/v1
 STT_MODEL=your_speech_to_text_model
 
-# Optional local CPU CV adapter; leave blank to keep vision unexecuted without fabricating OCR
+# Optional local CPU CV adapter (leave blank to disable local OCR)
 CV_SERVICE_URL=
 
 # Optional Feishu Webhook
@@ -168,24 +162,24 @@ Create three tables in the same Feishu Base: `站点运营快照` (station snaps
 
 All server secrets are read exclusively from environment variables or Git-ignored `config.local.js` and are never logged or exposed to the browser (`/runtime-config.js` exposes only `amapKey`, `securityJsCode`, `mapMode`, and the boolean `sttEnabled`).
 
-## Data Boundaries
+## Data Sources
 
-- **Real data**: AMap basemaps, POI names/coordinates, geocoding, driving/waypoint routes, and live district weather.
-- **Demo simulation**: Station occupancy, arrival/service rates, pricing, port snapshots, arrival-time queue forecasts, coupons, orders, and ROI. Simulated reservations modify only the current session's demo queue and never create real bookings.
-- **Synthetic validation**: 30 synthetic replenishment nodes and 1,000 fixed-seed trips for reproducible strategy comparisons.
-- **Offline enterprise prior (optional)**: A desensitized city × energy-type × hour demand prior ("seasonal baseline + HistGradientBoosting residual regression"; holdout WAPE ~17.85%, rolling validation mean WAPE ~13.14%) that adjusts simulated arrival intensity and congestion risk when `runtime/enterprise-demand-prior.json` is privately deployed; omitted from the public repository.
-- **Vision demo**: Built-in samples are AI-generated simulated camera frames. Local PaddleOCR runs when configured; vehicle detection, bay detection, real camera feeds, and real payments are not executed, and no raw plates, faces, or videos are stored.
+- **Live external data**: AMap basemaps, POI names/coordinates, geocoding, driving/waypoint routes, and live district weather.
+- **Station & operator simulation**: Station occupancy, arrival/service rates, port snapshots, arrival-time queue forecasts, simulated reservations, coupons, and scenario ROI are generated by local simulation models.
+- **Reproducible validation benchmark**: 30 synthetic replenishment nodes and 1,000 fixed-seed trips for four-policy comparisons.
+- **Optional offline demand prior**: When `runtime/enterprise-demand-prior.json` is privately deployed, a seasonal baseline + HistGradientBoosting residual regression model (holdout WAPE ~17.85%, rolling mean ~13.14%) adjusts simulated arrival intensity and congestion risk.
+- **Optional vision pipeline**: Local PaddleOCR runs when configured; uploaded media is processed in memory only and never persisted to disk.
 
 ## Demo Walkthrough
 
 1. Enter a nationwide origin and destination without time/SOC constraints to inspect the long-distance replenishment plan.
 2. Add a latest arrival time or arrival margin under optional arrival requirements and compare the resulting changes.
-3. Submit via the input arrow to view structured constraints, real routes, and deduplicated multi-objective plans (clear destination queries use deterministic rules first to avoid unnecessary AI token usage).
+3. Submit via the input arrow to view structured constraints, real routes, and deduplicated multi-objective plans.
 4. Click "Try multi-turn AI refinement" or type a multi-stop service request (e.g., adding food and coffee stops) to exercise multi-turn AI parsing with rule verification.
 5. Inspect arrival-time P50/P90 queue forecasts and test "Simulate Reservation" in station details to see reservation queues affect predicted waiting time.
 6. Open **Operator** to tune platform coupons and target cohorts, then click "Start Smart Analysis" to run local diversion simulation and optional Feishu Bitable AI analysis.
 7. Open **Validation** to inspect the 1,000-trip four-policy comparison; switch Judge/User mode or check GitHub version in **Settings**.
-8. In Judge Mode, open **Vision** to test built-in samples or uploads against local PaddleOCR (or observe explicit unexecuted/unrecognized boundaries when CV is unconfigured).
+8. In Judge Mode, open **Vision** to test built-in samples or uploads against the local PaddleOCR pipeline.
 
 ## Verification
 
