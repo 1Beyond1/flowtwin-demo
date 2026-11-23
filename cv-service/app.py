@@ -2,8 +2,9 @@
 
 The production-facing path is deliberately local: uploaded images are decoded
 in memory, passed to a single PaddleOCR CPU instance, and discarded after the
-request.  The Node demo can still run without this optional process and keeps
-its clearly labelled synthetic mode as a fallback.
+request.  Short uploaded videos are decoded in a temporary file that is removed
+immediately after processing.  The Node demo can still run without this
+optional process and keeps its clearly labelled synthetic mode as a fallback.
 
 This adapter currently promises two bounded real capabilities: OCR for a clear
 license-plate image and OCR over sampled frames from a short uploaded video.
@@ -20,6 +21,7 @@ import json
 import math
 import os
 import re
+import struct
 import threading
 import tempfile
 import time
@@ -31,8 +33,11 @@ from typing import Any, Iterable
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
 MAX_VIDEO_BYTES = 24 * 1024 * 1024
 MAX_REQUEST_BYTES = 36 * 1024 * 1024
+MAX_IMAGE_PIXELS = 25_000_000
 MAX_IMAGE_SIDE = max(640, min(int(os.environ.get("CV_MAX_IMAGE_SIDE", "1600")), 2400))
 OCR_WAIT_SECONDS = max(1.0, min(float(os.environ.get("CV_OCR_WAIT_SECONDS", "30")), 120.0))
+SOCKET_TIMEOUT_SECONDS = max(5.0, min(float(os.environ.get("CV_SOCKET_TIMEOUT_SECONDS", "15")), 60.0))
+VIDEO_WALL_CLOCK_TIMEOUT_SECONDS = max(5.0, min(float(os.environ.get("CV_VIDEO_TIMEOUT_SECONDS", "60")), 120.0))
 OCR_CONCURRENCY = 1
 IMAGE_RE = re.compile(r"^data:image/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$", re.I)
 VIDEO_RE = re.compile(r"^data:video/(mp4|webm|quicktime|x-matroska);base64,([A-Za-z0-9+/=]+)$", re.I)
@@ -43,6 +48,42 @@ PLATE_PREFIXES = set("京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘�
 VIDEO_MAX_SECONDS = max(3.0, min(float(os.environ.get("CV_VIDEO_MAX_SECONDS", "15")), 30.0))
 VIDEO_SAMPLE_FPS = max(0.5, min(float(os.environ.get("CV_VIDEO_SAMPLE_FPS", "2")), 4.0))
 VIDEO_MIN_STABLE_HITS = max(1, min(int(os.environ.get("CV_VIDEO_MIN_STABLE_HITS", "2")), 5))
+
+SAFE_CLIENT_ERROR_CODES = frozenset({
+    "REQUEST_TOO_LARGE",
+    "INVALID_JSON_OBJECT",
+    "INVALID_JSON",
+    "UNSUPPORTED_CV_MODE",
+    "UNSUPPORTED_MEDIA_TYPE",
+    "IMAGE_DATA_URL_REQUIRED",
+    "IMAGE_BASE64_INVALID",
+    "IMAGE_EMPTY",
+    "IMAGE_TOO_LARGE",
+    "IMAGE_CONTENT_INVALID",
+    "IMAGE_DIMENSIONS_TOO_LARGE",
+    "VIDEO_DATA_URL_REQUIRED",
+    "VIDEO_BASE64_INVALID",
+    "VIDEO_EMPTY",
+    "VIDEO_TOO_LARGE",
+    "VIDEO_CONTENT_INVALID",
+    "VIDEO_DIMENSIONS_TOO_LARGE",
+    "OCR_BUSY",
+})
+
+SAFE_RUNTIME_ERROR_CODES = frozenset({
+    "VIDEO_DECODER_UNAVAILABLE",
+    "VIDEO_DECODE_FAILED",
+    "VIDEO_OCR_TIMEOUT",
+    "VIDEO_OCR_FAILED",
+    "OCR_NUMPY_UNAVAILABLE",
+    "OCR_IMAGE_DECODE_FAILED",
+    "OCR_IMAGE_DECODER_UNAVAILABLE",
+    "PADDLEOCR_RUNTIME_UNAVAILABLE",
+    "PADDLEOCR_CLASS_UNAVAILABLE",
+    "PADDLEOCR_LOCAL_MODEL_DIRS_REQUIRED",
+    "PADDLEOCR_INFERENCE_METHOD_UNAVAILABLE",
+    "PADDLEOCR_NOT_READY",
+})
 
 try:  # Optional. The adapter remains importable without CV dependencies.
     import cv2  # type: ignore
@@ -56,6 +97,7 @@ except Exception:  # pragma: no cover - environment dependent
 
 try:
     from PIL import Image  # type: ignore
+    Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 except Exception:  # pragma: no cover - environment dependent
     Image = None
 
@@ -79,6 +121,16 @@ _OCR_ENGINE_LABEL = ""
 _OCR_INIT_ERROR = ""
 _OCR_INIT_LOCK = threading.Lock()
 _OCR_RUN_LOCK = threading.BoundedSemaphore(OCR_CONCURRENCY)
+
+
+def _safe_client_error(exc: Exception) -> str:
+    code = str(exc).strip()
+    return code if code in SAFE_CLIENT_ERROR_CODES else "INVALID_REQUEST"
+
+
+def _safe_runtime_error(exc: Exception) -> str:
+    code = str(exc).split(":", 1)[0].strip()
+    return code if code in SAFE_RUNTIME_ERROR_CODES else "LOCAL_OCR_UNAVAILABLE"
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -115,6 +167,7 @@ def runtime_summary() -> dict[str, Any]:
         "modelWeightsBundled": False,
         "device": "cpu",
         "maxImageSide": MAX_IMAGE_SIDE,
+        "maxImagePixels": MAX_IMAGE_PIXELS,
         "ocrConcurrency": OCR_CONCURRENCY,
         "videoSupport": cv2 is not None,
         "videoMaxSeconds": VIDEO_MAX_SECONDS,
@@ -123,7 +176,47 @@ def runtime_summary() -> dict[str, Any]:
     }
 
 
-def upload_metadata(image_data: str) -> dict[str, Any]:
+def _png_header_dimensions(raw: bytes) -> tuple[int, int] | None:
+    if len(raw) >= 24 and raw[:8] == b"\x89PNG\r\n\x1a\n" and raw[12:16] == b"IHDR":
+        width, height = struct.unpack(">II", raw[16:24])
+        return int(width), int(height)
+    return None
+
+
+def _inspect_image_dimensions(raw: bytes, *, require_valid: bool = False) -> list[int] | None:
+    png_dims = _png_header_dimensions(raw)
+    if png_dims is not None:
+        width, height = png_dims
+        if width <= 0 or height <= 0:
+            raise ValueError("IMAGE_CONTENT_INVALID")
+        if width * height > MAX_IMAGE_PIXELS:
+            raise ValueError("IMAGE_DIMENSIONS_TOO_LARGE")
+
+    if Image is not None:
+        bomb_error = getattr(Image, "DecompressionBombError", ())
+        try:
+            with Image.open(BytesIO(raw)) as image:
+                width, height = int(image.width), int(image.height)
+                if width <= 0 or height <= 0:
+                    raise ValueError("IMAGE_CONTENT_INVALID")
+                if width * height > MAX_IMAGE_PIXELS:
+                    raise ValueError("IMAGE_DIMENSIONS_TOO_LARGE")
+                return [width, height]
+        except bomb_error as exc:
+            raise ValueError("IMAGE_DIMENSIONS_TOO_LARGE") from exc
+        except ValueError:
+            raise
+        except Exception as exc:
+            if require_valid:
+                raise RuntimeError("OCR_IMAGE_DECODE_FAILED") from exc
+            return [png_dims[0], png_dims[1]] if png_dims is not None else None
+
+    if png_dims is not None:
+        return [png_dims[0], png_dims[1]]
+    return None
+
+
+def _parse_upload_image(image_data: str) -> tuple[dict[str, Any], bytes]:
     match = IMAGE_RE.match(str(image_data or ""))
     if not match:
         raise ValueError("IMAGE_DATA_URL_REQUIRED")
@@ -152,19 +245,19 @@ def upload_metadata(image_data: str) -> dict[str, Any]:
     )
     if not signature_ok:
         raise ValueError("IMAGE_CONTENT_INVALID")
-    dimensions = None
-    if Image is not None:
-        try:
-            with Image.open(BytesIO(raw)) as image:
-                dimensions = [int(image.width), int(image.height)]
-        except Exception:
-            dimensions = None
-    return {
+    dimensions = _inspect_image_dimensions(raw, require_valid=False)
+    metadata = {
         "mimeType": mime_type,
         "bytes": len(raw),
         "dimensions": dimensions,
         "sha256Prefix": hashlib.sha256(raw).hexdigest()[:12],
     }
+    return metadata, raw
+
+
+def upload_metadata(image_data: str) -> dict[str, Any]:
+    metadata, _raw = _parse_upload_image(image_data)
+    return metadata
 
 
 def upload_video_metadata(video_data: str) -> tuple[dict[str, Any], bytes]:
@@ -199,18 +292,31 @@ def upload_video_metadata(video_data: str) -> tuple[dict[str, Any], bytes]:
 def _decode_image(raw: bytes) -> Any:
     if np is None:
         raise RuntimeError("OCR_NUMPY_UNAVAILABLE")
+    # Enforce pixel limit via PIL/header parsing BEFORE cv2.imdecode so a
+    # compressed pixel bomb cannot allocate gigabytes in OpenCV.
+    _inspect_image_dimensions(raw, require_valid=Image is not None)
     if cv2 is not None:
         image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is not None:
+            height, width = image.shape[:2]
+            if int(width) * int(height) > MAX_IMAGE_PIXELS:
+                raise ValueError("IMAGE_DIMENSIONS_TOO_LARGE")
             return _resize_image(image)
     if Image is not None:
+        bomb_error = getattr(Image, "DecompressionBombError", ())
         try:
             with Image.open(BytesIO(raw)) as source:
+                if int(source.width) * int(source.height) > MAX_IMAGE_PIXELS:
+                    raise ValueError("IMAGE_DIMENSIONS_TOO_LARGE")
                 rgb = source.convert("RGB")
                 if max(rgb.size) > MAX_IMAGE_SIDE:
                     scale = MAX_IMAGE_SIDE / max(rgb.size)
                     rgb = rgb.resize((max(1, round(rgb.width * scale)), max(1, round(rgb.height * scale))))
                 return np.asarray(rgb)
+        except bomb_error as exc:
+            raise ValueError("IMAGE_DIMENSIONS_TOO_LARGE") from exc
+        except ValueError:
+            raise
         except Exception as exc:
             raise RuntimeError("OCR_IMAGE_DECODE_FAILED") from exc
     raise RuntimeError("OCR_IMAGE_DECODER_UNAVAILABLE")
@@ -253,12 +359,6 @@ def _build_ocr_engine() -> tuple[Any, str]:
     if not det_dir and not rec_dir:
         modern["ocr_version"] = os.environ.get("PADDLEOCR_VERSION", "PP-OCRv4").strip() or "PP-OCRv4"
     if det_dir:
-        # PaddleOCR 3.x requires the model name and local directory to agree.
-        # Passing only a v4/v6 directory makes the pipeline keep its default
-        # model name (for example PP-OCRv5_server_det), which then fails with
-        # a misleading "Model name mismatch" assertion. Derive the name from
-        # the staged directory by default, while allowing custom deployments
-        # to override it explicitly.
         modern["text_detection_model_name"] = (
             os.environ.get("PADDLEOCR_TEXT_DET_MODEL_NAME", "").strip()
             or Path(det_dir).name
@@ -274,9 +374,6 @@ def _build_ocr_engine() -> tuple[Any, str]:
     try:
         return factory(**modern), "PaddleOCR 本地 CPU（3.x API）"
     except TypeError:
-        # PaddleOCR 2.x uses the older constructor names. Keep this fallback
-        # so the adapter can be tested on a prepared enterprise image without
-        # tying the project to one minor release.
         legacy = {
             "lang": language,
             "use_angle_cls": True,
@@ -301,7 +398,7 @@ def _get_ocr_engine() -> tuple[Any, str]:
             _OCR_ENGINE, _OCR_ENGINE_LABEL = _build_ocr_engine()
             _OCR_INIT_ERROR = ""
         except Exception as exc:  # pragma: no cover - depends on local model setup
-            _OCR_INIT_ERROR = str(exc).split(":", 1)[0] or "PADDLEOCR_INIT_FAILED"
+            _OCR_INIT_ERROR = _safe_runtime_error(exc)
             raise RuntimeError("PADDLEOCR_NOT_READY") from exc
     return _OCR_ENGINE, _OCR_ENGINE_LABEL
 
@@ -469,8 +566,7 @@ def _video_candidate_summary(temporal: dict[str, dict[str, Any]]) -> list[dict[s
     )[:8]
 
 
-def _analyze_video(video_data: str) -> dict[str, Any]:
-    metadata, raw = upload_video_metadata(video_data)
+def _analyze_video(metadata: dict[str, Any], raw: bytes) -> dict[str, Any]:
     if cv2 is None:
         raise RuntimeError("VIDEO_DECODER_UNAVAILABLE")
 
@@ -498,13 +594,21 @@ def _analyze_video(video_data: str) -> dict[str, Any]:
         fps = max(1.0, min(fps, 120.0))
         frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0) or None
         frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0) or None
+        if frame_width and frame_height and frame_width * frame_height > MAX_IMAGE_PIXELS:
+            raise ValueError("VIDEO_DIMENSIONS_TOO_LARGE")
         sample_every = max(1, int(round(fps / VIDEO_SAMPLE_FPS)))
         max_decode_frames = max(1, int(math.ceil(VIDEO_MAX_SECONDS * fps)))
 
         while frames_decoded < max_decode_frames:
+            if time.perf_counter() - started > VIDEO_WALL_CLOCK_TIMEOUT_SECONDS:
+                raise RuntimeError("VIDEO_OCR_TIMEOUT")
             ok, frame = capture.read()
             if not ok:
                 break
+            if frame is not None and hasattr(frame, "shape") and len(frame.shape) >= 2:
+                h, w = int(frame.shape[0]), int(frame.shape[1])
+                if h * w > MAX_IMAGE_PIXELS:
+                    raise ValueError("VIDEO_DIMENSIONS_TOO_LARGE")
             frame_index = frames_decoded
             frames_decoded += 1
             if frame_index % sample_every != 0:
@@ -593,9 +697,7 @@ def _analyze_video(video_data: str) -> dict[str, Any]:
             ],
             "dataBoundary": "本次仅支持短视频抽帧车牌 OCR；未执行实时摄像头、车辆检测、车位检测或真实支付",
         }
-    except OcrBusyError:
-        raise
-    except RuntimeError:
+    except (OcrBusyError, ValueError, RuntimeError):
         raise
     except Exception as exc:
         raise RuntimeError("VIDEO_OCR_FAILED") from exc
@@ -662,10 +764,10 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if mode == "video":
         video_data = str(payload.get("videoData") or "")
-        metadata, _raw = upload_video_metadata(video_data)
+        metadata, raw = upload_video_metadata(video_data)
         try:
-            return _analyze_video(video_data)
-        except OcrBusyError:
+            return _analyze_video(metadata, raw)
+        except (OcrBusyError, ValueError):
             raise
         except RuntimeError as exc:
             return {
@@ -688,7 +790,7 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
                 "confidenceType": None,
                 "evidence": [
                     "视频格式已通过校验，但本次没有完成视频抽帧 OCR",
-                    f"本地运行条件：{str(exc).split(':', 1)[0]}",
+                    f"本地运行条件：{_safe_runtime_error(exc)}",
                     "未返回车牌号，也未生成支付结果",
                 ],
                 "dataBoundary": "本次视频未完成视觉推理，不能把结果当作识别结论",
@@ -697,10 +799,7 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("UNSUPPORTED_CV_MODE")
 
     image_data = str(payload.get("imageData") or "")
-    metadata = upload_metadata(image_data)
-    match = IMAGE_RE.match(image_data)
-    assert match is not None
-    raw = base64.b64decode(match.group(2))
+    metadata, raw = _parse_upload_image(image_data)
     result = _base_upload_result(metadata)
     try:
         image = _decode_image(raw)
@@ -734,7 +833,7 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
             ],
         })
         return result
-    except OcrBusyError:
+    except (OcrBusyError, ValueError):
         raise
     except RuntimeError as exc:
         result.update({
@@ -746,7 +845,7 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
             "evidence": [
                 "图片格式和内容已通过校验",
                 "本次没有完成 PaddleOCR 推理，因此没有返回车牌号",
-                f"本地运行条件：{str(exc).split(':', 1)[0]}",
+                f"本地运行条件：{_safe_runtime_error(exc)}",
             ],
         })
         return result
@@ -764,6 +863,13 @@ def analyze(payload: dict[str, Any]) -> dict[str, Any]:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "FlowTwinCV/0.2"
+    timeout = SOCKET_TIMEOUT_SECONDS
+
+    def setup(self) -> None:
+        self.timeout = SOCKET_TIMEOUT_SECONDS
+        if getattr(self, "connection", None) is not None and hasattr(self.connection, "settimeout"):
+            self.connection.settimeout(SOCKET_TIMEOUT_SECONDS)
+        super().setup()
 
     def _send(self, status: int, payload: dict[str, Any]) -> None:
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -785,18 +891,31 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/analyze":
             self._send(404, {"error": "NOT_FOUND"})
             return
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._send(415, {"ok": False, "error": "UNSUPPORTED_MEDIA_TYPE"})
+            return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
+            raw_length = (self.headers.get("Content-Length") or "0").strip()
+            if not raw_length.isdigit():
+                raise ValueError("INVALID_REQUEST")
+            length = int(raw_length)
             if length <= 0 or length > MAX_REQUEST_BYTES:
                 raise ValueError("REQUEST_TOO_LARGE")
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            raw_body = self.rfile.read(length)
+            try:
+                body = json.loads(raw_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("INVALID_JSON") from exc
             if not isinstance(body, dict):
                 raise ValueError("INVALID_JSON_OBJECT")
             self._send(200, analyze(body))
-        except OcrBusyError as exc:
-            self._send(429, {"ok": False, "error": str(exc), "retryAfterSeconds": 2})
+        except OcrBusyError:
+            self._send(429, {"ok": False, "error": "OCR_BUSY", "retryAfterSeconds": 2})
         except ValueError as exc:
-            self._send(400, {"ok": False, "error": str(exc)})
+            code = _safe_client_error(exc)
+            status = 413 if code == "REQUEST_TOO_LARGE" else 400
+            self._send(status, {"ok": False, "error": code})
         except Exception:
             self._send(500, {"ok": False, "error": "CV_INTERNAL_ERROR"})
 

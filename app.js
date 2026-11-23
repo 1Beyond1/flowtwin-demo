@@ -2531,7 +2531,7 @@
     if (pointsGroup) pointsGroup.innerHTML = p90.map((value, index) => {
       const x = 24 + (240 * index / Math.max(1, p90.length - 1));
       const y = 98 - (76 * Math.min(maxValue, Math.max(0, value)) / maxValue);
-      return `<circle class="forecast-point" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3"><title>${displayCopy(`+${points[index].minute || 0} 分钟 · P90 ${value.toFixed(1)} 分钟`)}</title></circle>`;
+      return `<circle class="forecast-point" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3"><title>${escapeHtml(displayCopy(`+${Number(points[index].minute) || 0} 分钟 · P90 ${value.toFixed(1)} 分钟`))}</title></circle>`;
     }).join("");
     const status = byId("forecastStatus");
     if (status) {
@@ -3585,8 +3585,9 @@
 
   function markerContent(name, risk, type, selected, role) {
     const iconName = type === "加油站" ? "fuel" : "zap";
-    const classes = ["station-marker", risk ? "risk" : "", selected ? "selected" : "", role ? `operator-${role}` : ""].filter(Boolean).join(" ");
-    return `<span class="${classes}" title="${String(name).replace(/"/g, "&quot;")}"><i data-lucide="${iconName}"></i></span>`;
+    const safeRole = role === "source" || role === "target" ? `operator-${role}` : "";
+    const classes = ["station-marker", risk ? "risk" : "", selected ? "selected" : "", safeRole].filter(Boolean).join(" ");
+    return `<span class="${classes}" title="${escapeHtml(name)}"><i data-lucide="${iconName}"></i></span>`;
   }
 
   function addFallbackMarkers() {
@@ -3633,7 +3634,7 @@
     const make = (position, className, iconName, title) => {
       const marker = new AMap.Marker({
         position,
-        content: `<span class="${className}" title="${title}"><i data-lucide="${iconName}"></i></span>`,
+        content: `<span class="${escapeHtml(className)}" title="${escapeHtml(title)}"><i data-lucide="${escapeHtml(iconName)}"></i></span>`,
         offset: new AMap.Pixel(-12, -12),
         zIndex: 140,
         title
@@ -5623,15 +5624,20 @@
     }
     if (name) name.textContent = displayCopy(record.displayName || { fastest: "最快到达", reliable: "最稳妥", cheapest: "最低成本" }[record.key]);
     if (strong) strong.textContent = formatJourneyClock(record.arrival);
-    const serviceName = record.servicePlan?.name || "";
+    const serviceName = escapeHtml(record.servicePlan?.name || "");
+    const safeArrivalSoc = escapeHtml(record.arrivalSoc);
+    const safeTargetArrivalSoc = escapeHtml(record.targetArrivalSoc);
+    const safeStopCount = escapeHtml(record.stopCount);
+    const safeP50Wait = escapeHtml(record.p50Wait ?? record.station?.p50 ?? "—");
+    const safeP90Wait = escapeHtml(record.p90Wait ?? record.station?.p90 ?? "—");
     if (metrics) {
       metrics.innerHTML = displayCopy(record.directTrip
-        ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>直达 <b>无需补能</b></span><span>到达 <b>${record.arrivalSoc}%</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span>`
+        ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>直达 <b>无需补能</b></span><span>到达 <b>${safeArrivalSoc}%</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span>`
         : record.serviceOnly
-          ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>服务 <b>${serviceName || "已加入"}</b></span><span>到达 <b>${record.arrivalSoc}%</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
+          ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>服务 <b>${serviceName || "已加入"}</b></span><span>到达 <b>${safeArrivalSoc}%</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`
         : record.multiStop
-            ? `<span>用时 <b>${formatDuration(record.total)}</b></span><span>补能 <b>${record.stopCount} 次</b></span><span>停靠 <b>${formatDuration(record.totalStopMinutesP50 || 0)}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>排队 P90 <b>${record.p90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`
-            : `<span>用时 <b>${formatDuration(record.total)}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>停靠 <b>${formatDuration(record.totalStopMinutesP50 || 0)}</b></span><span>排队 P50 <b>${record.p50Wait ?? record.station?.p50 ?? "—"}分</b></span><span>排队 P90 <b>${record.p90Wait ?? record.station?.p90 ?? "—"}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${record.targetArrivalSoc}%`}</b></span>`);
+            ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>补能 <b>${safeStopCount} 次</b></span><span>停靠 <b>${escapeHtml(formatDuration(record.totalStopMinutesP50 || 0))}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>排队 P90 <b>${safeP90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`
+            : `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span>${serviceName ? `<span>服务 <b>${serviceName}</b></span>` : ""}<span>停靠 <b>${escapeHtml(formatDuration(record.totalStopMinutesP50 || 0))}</b></span><span>排队 P50 <b>${safeP50Wait}分</b></span><span>排队 P90 <b>${safeP90Wait}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`);
     }
     if (tag) {
       const objectiveBadgeText = record.feasible && Array.isArray(record.objectiveBadges) && record.objectiveBadges.length > 1
@@ -6086,7 +6092,7 @@
     wrapper.hidden = !action.visible;
     if (!action.visible) return;
     button.disabled = Boolean(action.disabled);
-    button.innerHTML = `<i data-lucide="${action.icon || "arrow-right"}"></i><span>${action.label}</span>`;
+    button.innerHTML = `<i data-lucide="${escapeHtml(action.icon || "arrow-right")}"></i><span>${escapeHtml(action.label)}</span>`;
     if (note) note.textContent = action.note || "";
   }
 
@@ -6140,7 +6146,7 @@
         }
         if (skippedCount > 0) items.push(["skip-forward", `跳过补能演示：${skippedCount} 个节点`]);
       }
-      list.innerHTML = items.map(([icon, label]) => `<div class="simulation-completion-item"><i data-lucide="${icon}"></i><span>${label}</span></div>`).join("");
+      list.innerHTML = items.map(([icon, label]) => `<div class="simulation-completion-item"><i data-lucide="${escapeHtml(icon)}"></i><span>${escapeHtml(label)}</span></div>`).join("");
     }
     renderSimulationSceneAction(phase);
   }
@@ -6172,10 +6178,10 @@
     const eta = formatJourneyClock(Number(phase.stop?.arrivalMinute ?? state.departureMinutes));
     const station = escapeHtml(phase.stop?.name || "下一补能站");
     panel.innerHTML = [
-      `<div class="simulation-reservation-evidence-row"><strong>触发条件</strong><span>车辆预计 ${eta} 到达「${station}」，系统在接近站点前预先写入预约状态。</span></div>`,
-       `<div class="simulation-reservation-evidence-row"><strong>输入快照</strong><span>当前可用补能位 ${available} · 预计到站可用 ${arrivalAvailable} · 充电中 ${numberText(snapshot.charging, " 个")} · 已预约 ${numberText(snapshot.reserved, " 个")} · 已到站等待 ${queue} · 预约队列前方 ${reservationAhead}。</span></div>`,
+      `<div class="simulation-reservation-evidence-row"><strong>触发条件</strong><span>车辆预计 ${escapeHtml(eta)} 到达「${station}」，系统在接近站点前预先写入预约状态。</span></div>`,
+       `<div class="simulation-reservation-evidence-row"><strong>输入快照</strong><span>当前可用补能位 ${escapeHtml(available)} · 预计到站可用 ${escapeHtml(arrivalAvailable)} · 充电中 ${escapeHtml(numberText(snapshot.charging, " 个"))} · 已预约 ${escapeHtml(numberText(snapshot.reserved, " 个"))} · 已到站等待 ${escapeHtml(queue)} · 预约队列前方 ${escapeHtml(reservationAhead)}。</span></div>`,
       `<div class="simulation-reservation-evidence-row"><strong>计算过程</strong><span>把本车预计到站时刻加入端口离散事件队列，按端口释放时间、平均服务时长和预约队列前方车辆重新排程，再输出等待 P50/P90。</span></div>`,
-      `<div class="simulation-reservation-evidence-row"><strong>本次结果</strong><span>${beforeAfter}</span></div>`,
+      `<div class="simulation-reservation-evidence-row"><strong>本次结果</strong><span>${escapeHtml(beforeAfter)}</span></div>`,
       `<div class="simulation-reservation-evidence-row"><strong>数据边界</strong><span>${escapeHtml(String(snapshot.source || "FlowTwin 演示仿真"))}；这是本地演示/企业需求先验推演，不是实时站点经营数据。</span></div>`
     ].join("");
     const expanded = Boolean(simulation.reservationEvidenceOpen);
@@ -7200,15 +7206,15 @@
         : branch.stops === 0
           ? "无需补能，可直达"
           : `需补能 ${branch.stops} 次 · 约 ${branch.stopMinutes} 分钟`;
-    return `<button type="button" class="hybrid-branch${active ? " active" : ""}" data-hybrid-branch="${branch.kind}" aria-pressed="${active}">
+    return `<button type="button" class="hybrid-branch${active ? " active" : ""}" data-hybrid-branch="${escapeHtml(branch.kind)}" aria-pressed="${active}">
       <div class="hybrid-branch-head">
-        <span class="hybrid-branch-name"><i data-lucide="${branch.kind === "fuel" ? "fuel" : "zap"}"></i>${branch.label}</span>
+        <span class="hybrid-branch-name"><i data-lucide="${branch.kind === "fuel" ? "fuel" : "zap"}"></i>${escapeHtml(branch.label)}</span>
         ${recommended ? '<span class="hybrid-badge">推荐</span>' : ""}
       </div>
       <div class="hybrid-branch-cost">¥${branch.energyCost.toFixed(0)}<span>能耗成本</span></div>
-      <div class="hybrid-branch-meta">${branch.costPerKm.toFixed(2)} 元/km · ${branch.price.toFixed(2)} 元/${branch.unit}</div>
-      <div class="hybrid-branch-meta">${stopText}</div>
-      <div class="hybrid-branch-meta">当前 ${branch.level}% · 可续驶约 ${branch.rangeKm} km</div>
+      <div class="hybrid-branch-meta">${branch.costPerKm.toFixed(2)} 元/km · ${branch.price.toFixed(2)} 元/${escapeHtml(branch.unit)}</div>
+      <div class="hybrid-branch-meta">${escapeHtml(stopText)}</div>
+      <div class="hybrid-branch-meta">当前 ${escapeHtml(branch.level)}% · 可续驶约 ${escapeHtml(branch.rangeKm)} km</div>
     </button>`;
   }
 
@@ -7267,10 +7273,10 @@
     }
     host.innerHTML = `<div class="hybrid-compare-head">
         <div class="hybrid-compare-title"><i data-lucide="git-compare-arrows"></i>油电划算度对比</div>
-        <div class="hybrid-compare-note">同一条已核验路线 · 时间按 ¥${comparison.timeValuePerHour}/小时折算</div>
+        <div class="hybrid-compare-note">同一条已核验路线 · 时间按 ¥${escapeHtml(comparison.timeValuePerHour)}/小时折算</div>
       </div>
       <div class="hybrid-branches">${branchCardMarkup(comparison.electric, comparison)}${branchCardMarkup(comparison.fuel, comparison)}</div>
-      <div class="hybrid-verdict">${verdict}<span>点击卡片可切换按哪条能源路径生成完整路线</span></div>`;
+      <div class="hybrid-verdict">${escapeHtml(verdict)}<span>点击卡片可切换按哪条能源路径生成完整路线</span></div>`;
     Array.from(host.querySelectorAll("[data-hybrid-branch]")).forEach((button) => {
       button.addEventListener("click", () => applyHybridBranch(button.dataset.hybridBranch, { touched: true }));
     });
@@ -7362,12 +7368,22 @@
     const noun = isFuelActive() ? "加油" : "补能";
 
     setText("paymentReceiptTime", formatClock(Number(target.station.arrivalMinute) || state.departureMinutes));
-    setText("paymentReceiptStation", `车牌 <b>${state.vehiclePlate}</b> · ${escapeHtml(station.name)}`);
+    const receiptStation = byId("paymentReceiptStation");
+    if (receiptStation) {
+      const plateNode = document.createElement("b");
+      plateNode.textContent = String(state.vehiclePlate || "");
+      receiptStation.replaceChildren(
+        document.createTextNode("车牌 "),
+        plateNode,
+        document.createTextNode(` · ${station.name || ""}`)
+      );
+    }
+    const safeUnit = escapeHtml(unit);
     const rows = byId("paymentReceiptRows");
     if (rows) {
       rows.innerHTML = `
-        <div class="payment-receipt-row"><span>${noun}量</span><b>${energyAmount.toFixed(1)} ${unit}</b></div>
-        <div class="payment-receipt-row"><span>单价</span><b>¥${unitPrice.toFixed(2)}/${unit}</b></div>
+        <div class="payment-receipt-row"><span>${noun}量</span><b>${energyAmount.toFixed(1)} ${safeUnit}</b></div>
+        <div class="payment-receipt-row"><span>单价</span><b>¥${unitPrice.toFixed(2)}/${safeUnit}</b></div>
         <div class="payment-receipt-row"><span>能源费</span><b>¥${energyFee.toFixed(1)}</b></div>
         ${discount > 0 ? `<div class="payment-receipt-row discount"><span>运营引流优惠</span><b>−¥${discount.toFixed(1)}</b></div>` : ""}`;
     }
@@ -7418,27 +7434,28 @@
     const summary = byId("activeRouteSummary");
     const record = state.routeRecords[state.selectedRoute];
     if (!summary || !record) return;
+    const safeDisplayName = escapeHtml(record.displayName || "推荐方案");
     if (record.directTrip) {
-      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>直达 · 无需补能</strong><small>${formatJourneyClock(record.arrival)} 到达 · 余量 ${record.arrivalSoc}%</small>`;
+      summary.innerHTML = `<span>${safeDisplayName}</span><strong>直达 · 无需补能</strong><small>${escapeHtml(formatJourneyClock(record.arrival))} 到达 · 余量 ${escapeHtml(record.arrivalSoc)}%</small>`;
       return;
     }
     if (record.serviceOnly) {
-      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>已加入 · ${escapeHtml(record.servicePlan?.name || "沿线服务")}</strong><small>${formatJourneyClock(record.arrival)} 到达 · 额外 ${record.servicePlan?.extraMinutes || 0} 分钟</small>`;
+      summary.innerHTML = `<span>${safeDisplayName}</span><strong>已加入 · ${escapeHtml(record.servicePlan?.name || "沿线服务")}</strong><small>${escapeHtml(formatJourneyClock(record.arrival))} 到达 · 额外 ${escapeHtml(record.servicePlan?.extraMinutes || 0)} 分钟</small>`;
       return;
     }
     if (record.multiStop) {
       const serviceNote = record.servicePlan?.name ? ` · 含 ${escapeHtml(record.servicePlan.name)}` : "";
-      summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>连续补能 ${record.stopCount} 次${serviceNote}</strong><small>${formatJourneyClock(record.arrival)} 到达 · 余量 ${record.arrivalSoc}%</small>`;
+      summary.innerHTML = `<span>${safeDisplayName}</span><strong>连续补能 ${escapeHtml(record.stopCount)} 次${serviceNote}</strong><small>${escapeHtml(formatJourneyClock(record.arrival))} 到达 · 余量 ${escapeHtml(record.arrivalSoc)}%</small>`;
       return;
     }
     if (!record.station) {
       const title = record.planningFailure ? "未生成虚假的长途补能路线" : "未找到安全可达补能站";
       const hint = record.planningFailure || `请提高当前${isFuelActive() ? "油量" : "电量"}或放宽绕行约束`;
-      summary.innerHTML = `<span>${record.displayName || "方案不可执行"}</span><strong>${title}</strong><small>${escapeHtml(hint)}</small>`;
+      summary.innerHTML = `<span>${escapeHtml(record.displayName || "方案不可执行")}</span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(hint)}</small>`;
       return;
     }
     const serviceNote = record.servicePlan?.name ? ` · 含 ${escapeHtml(record.servicePlan.name)}` : "";
-    summary.innerHTML = `<span>${record.displayName || "推荐方案"}</span><strong>途经 · ${record.station.name}${serviceNote}</strong><small>${formatJourneyClock(record.arrival)} ${record.feasible ? "到达" : `· 超时 ${record.lateMinutes} 分`}</small>`;
+    summary.innerHTML = `<span>${safeDisplayName}</span><strong>途经 · ${escapeHtml(record.station.name)}${serviceNote}</strong><small>${escapeHtml(formatJourneyClock(record.arrival))} ${record.feasible ? "到达" : `· 超时 ${escapeHtml(record.lateMinutes)} 分`}</small>`;
   }
 
   function renderStopTimeline(record) {
@@ -7456,7 +7473,7 @@
       : String(record.source || "").includes("多途经点")
         ? "全程途经点已核验 · 道路折线分段"
         : "逐段路线已核验";
-     timeline.innerHTML = `<div class="stop-timeline-head"><strong>分段补能账本</strong><span>${verificationNote}</span></div>${record.stops.map((stop) => `<div class="stop-timeline-item"><b>${stop.sequence}</b><div><strong title="${escapeHtml(stop.name)}">${escapeHtml(stop.name)}</strong><small>到站 ${stop.arrivalSoc}% → 补至 ${stop.targetSoc}% · ${stop.legDistanceKm} km · 停靠 P50 ${stop.stopMinutesP50 ?? "—"} 分（排队 ${stop.plannedP50 ?? stop.p50 ?? "—"} + 服务 ${stop.chargeMinutes ?? "—"} + 支付驶离缓冲 ${stop.paymentExitMinutes ?? "—"}）${stop.provisionalCorridor ? " · 设备待确认" : ""}</small></div><span>+${stop.energyAmount}${record.energyUnit}</span></div>`).join("")}`;
+     timeline.innerHTML = `<div class="stop-timeline-head"><strong>分段补能账本</strong><span>${escapeHtml(verificationNote)}</span></div>${record.stops.map((stop) => `<div class="stop-timeline-item"><b>${escapeHtml(stop.sequence)}</b><div><strong title="${escapeHtml(stop.name)}">${escapeHtml(stop.name)}</strong><small>到站 ${escapeHtml(stop.arrivalSoc)}% → 补至 ${escapeHtml(stop.targetSoc)}% · ${escapeHtml(stop.legDistanceKm)} km · 停靠 P50 ${escapeHtml(stop.stopMinutesP50 ?? "—")} 分（排队 ${escapeHtml(stop.plannedP50 ?? stop.p50 ?? "—")} + 服务 ${escapeHtml(stop.chargeMinutes ?? "—")} + 支付驶离缓冲 ${escapeHtml(stop.paymentExitMinutes ?? "—")}）${stop.provisionalCorridor ? " · 设备待确认" : ""}</small></div><span>+${escapeHtml(stop.energyAmount)}${escapeHtml(record.energyUnit)}</span></div>`).join("")}`;
   }
 
   function syncInsightDisplayCopy() {
@@ -7524,7 +7541,7 @@
   function setInsightBadge(label, risk) {
     const badge = byId("stationState");
     if (!badge) return;
-    badge.innerHTML = `<i data-lucide="${risk ? "triangle-alert" : "check-circle-2"}"></i>${label}`;
+    badge.innerHTML = `<i data-lucide="${risk ? "triangle-alert" : "check-circle-2"}"></i>${escapeHtml(label)}`;
     badge.classList.toggle("risk", Boolean(risk));
   }
 
@@ -7533,13 +7550,13 @@
     highlightSelectedStation();
     setText("stationTitle", "本次行程无需补能");
     const subtitle = byId("stationSubtitle");
-    if (subtitle) subtitle.innerHTML = `当前${isFuelActive() ? "油量" : "电量"}可直达 ${state.destinationName}<span class="source-badge"> · 真实路线 / 能耗模型计算</span>`;
+    if (subtitle) subtitle.innerHTML = `当前${isFuelActive() ? "油量" : "电量"}可直达 ${escapeHtml(state.destinationName)}<span class="source-badge"> · 真实路线 / 能耗模型计算</span>`;
     setInsightBadge("直达可行", false);
     const wait = byId("waitValue");
     if (wait) wait.innerHTML = `0 <small>分钟</small>`;
     setText("energyAdviceLabel", "到达余量");
     const advice = byId("energyAdviceValue");
-    if (advice) advice.innerHTML = `${record.arrivalSoc} <small>%</small>`;
+    if (advice) advice.innerHTML = `${escapeHtml(record.arrivalSoc)} <small>%</small>`;
     const price = byId("stationPriceValue");
     if (price) price.innerHTML = "— <small>无需补能</small>";
     const forecastCard = byId("forecastChart")?.closest(".forecast-card");
@@ -7563,13 +7580,13 @@
     highlightSelectedStation();
     setText("stationTitle", record.servicePlan?.name || "沿线服务停靠");
     const subtitle = byId("stationSubtitle");
-    if (subtitle) subtitle.innerHTML = `已加入预计 ${record.servicePlan?.durationMinutes || 0} 分钟的服务停靠<span class="source-badge"> · ${record.servicePlan?.source || "高德真实 POI / 演示服务时长"}</span>`;
+    if (subtitle) subtitle.innerHTML = `已加入预计 ${escapeHtml(record.servicePlan?.durationMinutes || 0)} 分钟的服务停靠<span class="source-badge"> · ${escapeHtml(record.servicePlan?.source || "高德真实 POI / 演示服务时长")}</span>`;
     setInsightBadge("服务已加入", false);
     const wait = byId("waitValue");
-    if (wait) wait.innerHTML = `${record.servicePlan?.extraMinutes || 0} <small>额外分钟</small>`;
+    if (wait) wait.innerHTML = `${escapeHtml(record.servicePlan?.extraMinutes || 0)} <small>额外分钟</small>`;
     setText("energyAdviceLabel", "到达余量");
     const advice = byId("energyAdviceValue");
-    if (advice) advice.innerHTML = `${record.arrivalSoc} <small>%</small>`;
+    if (advice) advice.innerHTML = `${escapeHtml(record.arrivalSoc)} <small>%</small>`;
     const price = byId("stationPriceValue");
     if (price) price.innerHTML = "— <small>服务停靠</small>";
     const forecastCard = byId("forecastChart")?.closest(".forecast-card");
@@ -7588,7 +7605,7 @@
     const hasLongTripFailure = Boolean(record.planningFailure);
     setText("stationTitle", hasLongTripFailure ? "未生成可执行长途方案" : "未找到安全可达补能站");
     const subtitle = byId("stationSubtitle");
-    if (subtitle) subtitle.innerHTML = `${record.planningFailure || "当前约束下没有通过首段可达性校验的站点"}<span class="source-badge"> · 已阻止生成虚假可行方案</span>`;
+    if (subtitle) subtitle.innerHTML = `${escapeHtml(record.planningFailure || "当前约束下没有通过首段可达性校验的站点")}<span class="source-badge"> · 已阻止生成虚假可行方案</span>`;
     setInsightBadge("需调整出行条件", true);
     const wait = byId("waitValue");
     if (wait) wait.innerHTML = `— <small>分钟</small>`;
@@ -7955,7 +7972,7 @@
       const description = estimated
         ? "已加入行程；当前按高德 POI 与主路线的绕行估算，待路线接口二次核验"
         : "已加入行程，路线与 ETA 已按服务停靠重新计算";
-      container.innerHTML = `<div class="service-card selected"><i data-lucide="${state.activeServicePlan.icon || "utensils"}"></i><span><strong>${escapeHtml(state.activeServicePlan.name)}</strong><small>${description}</small></span><span>+${state.activeServicePlan.extraMinutes || 0}分</span></div>`;
+      container.innerHTML = `<div class="service-card selected"><i data-lucide="${escapeHtml(state.activeServicePlan.icon || "utensils")}"></i><span><strong>${escapeHtml(state.activeServicePlan.name)}</strong><small>${escapeHtml(description)}</small></span><span>+${escapeHtml(state.activeServicePlan.extraMinutes || 0)}分</span></div>`;
       if (serviceButton) { serviceButton.disabled = false; serviceButton.textContent = "模拟完成服务"; }
       setText("serviceStatus", "服务已加入到站计划");
       refreshIcons();
@@ -7984,7 +8001,7 @@
     const requestedName = String(suggestion.requestedServiceName || "").trim();
     const hasExact = Boolean(suggestion.exactMatchFound);
     container.innerHTML = options.length
-      ? options.map((service) => `<button type="button" class="service-card ${state.selectedService === service.id ? "selected" : ""}" data-service="${escapeHtml(service.id)}"><i data-lucide="${service.icon}"></i><span><strong>${escapeHtml(service.name)}</strong><small>${escapeHtml(service.reason)}</small></span><span>约${service.durationMinutes}分</span></button>`).join("")
+      ? options.map((service) => `<button type="button" class="service-card ${state.selectedService === service.id ? "selected" : ""}" data-service="${escapeHtml(service.id)}"><i data-lucide="${escapeHtml(service.icon)}"></i><span><strong>${escapeHtml(service.name)}</strong><small>${escapeHtml(service.reason)}</small></span><span>约${escapeHtml(service.durationMinutes)}分</span></button>`).join("")
       : `<div class="service-card"><i data-lucide="${excludedByDeadline ? "clock-alert" : "map-pin-off"}"></i><span><strong>${requestedName ? (suggestion.exactMatchLocated ? `“${escapeHtml(requestedName)}”当前不可安全加入` : `未找到“${escapeHtml(requestedName)}”`) : (excludedByDeadline ? "当前约束下不建议增加服务停靠" : "附近未检索到合适服务")}</strong><small>${requestedName ? "没有静默替换为其他商家；可调整路线约束后重试。" : excludedByDeadline ? "候选服务会超出当前绕行或到达时间余量，已自动隐藏；可调整约束后重新查看。" : "可继续行驶，系统会在下一个时间窗口再次评估。"}</small></span></div>`;
     if (serviceButton) { serviceButton.disabled = true; serviceButton.textContent = "选择服务后继续"; }
     setText("serviceStatus", options.length
@@ -8876,10 +8893,10 @@
     const adviceLabel = byId("energyAdviceLabel");
     const adviceValue = byId("energyAdviceValue");
     if (title) title.textContent = station.name;
-    if (wait) wait.innerHTML = `${station.p90} <small>分钟</small>`;
-    if (subtitle) subtitle.innerHTML = `额外里程 ${station.detour} km · ${station.type === "加油站" ? "油品服务" : "直流快充"}<span class="source-badge"> · ${station.source} · 演示预测状态</span>`;
+    if (wait) wait.innerHTML = `${escapeHtml(station.p90)} <small>分钟</small>`;
+    if (subtitle) subtitle.innerHTML = `额外里程 ${escapeHtml(station.detour)} km · ${station.type === "加油站" ? "油品服务" : "直流快充"}<span class="source-badge"> · ${escapeHtml(station.source)} · 演示预测状态</span>`;
     if (badge) {
-      badge.innerHTML = `<i data-lucide="${station.status === "forecast-risk" ? "triangle-alert" : "check-circle-2"}"></i>${station.riskLabel}`;
+      badge.innerHTML = `<i data-lucide="${station.status === "forecast-risk" ? "triangle-alert" : "check-circle-2"}"></i>${escapeHtml(station.riskLabel)}`;
       badge.classList.toggle("risk", station.status === "forecast-risk");
     }
     if (adviceLabel) adviceLabel.textContent = isFuelActive() ? "建议加油" : "建议补能";
@@ -8895,11 +8912,11 @@
       .find(Number.isFinite);
     const suggestedUnit = matchedStop?.priceUnit || stationRecord?.energyUnit || station.priceUnit || (isFuelActive() ? "L" : "kWh");
     if (adviceValue) adviceValue.innerHTML = Number.isFinite(suggestedAmount)
-      ? `${Number(suggestedAmount).toFixed(1)} <small>${suggestedUnit}</small>`
+      ? `${Number(suggestedAmount).toFixed(1)} <small>${escapeHtml(suggestedUnit)}</small>`
       : isFuelActive() ? "— <small>L</small>" : "— <small>kWh</small>";
     const priceValue = byId("stationPriceValue");
     if (priceValue) priceValue.innerHTML = Number.isFinite(Number(station.price))
-      ? `¥${Number(station.price).toFixed(2)} <small>/${station.priceUnit || (isFuelActive() ? "L" : "kWh")}</small>`
+      ? `¥${Number(station.price).toFixed(2)} <small>/${escapeHtml(station.priceUnit || (isFuelActive() ? "L" : "kWh"))}</small>`
        : "— <small>待确认</small>";
     renderReservationAction(station);
     const forecastEvidencePanel = byId("forecastEvidencePanel");
@@ -9399,7 +9416,7 @@
     const queueNote = byId("operatorQueueNote");
     const roiNote = byId("operatorRoiNote");
     const action = byId("operatorAction");
-    if (queue) queue.innerHTML = `${snapshot.peakQueue}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> 人</span>`;
+    if (queue) queue.innerHTML = `${escapeHtml(snapshot.peakQueue)}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> 人</span>`;
     const strategyAvailable = snapshot.strategyAvailable === true;
     if (discount) discount.innerHTML = strategyAvailable && Number.isFinite(Number(snapshot.discount))
       ? `¥${Number(snapshot.discount).toFixed(0)}<span style="font-size:13px;font-family:var(--sans);font-weight:500"> / 单</span>`
@@ -9553,23 +9570,27 @@
         const reason = payload.insufficientData
           ? "平台经济字段不完整，无法给出场景 ROI。"
           : "当前没有同时满足合作、可调控、可发券、商家接受的承接站。";
-        action.innerHTML = `<strong>未生成可执行沙盘建议：</strong>${reason} 全网站点仍保留导航和补能候选用途。`;
+        action.innerHTML = `<strong>未生成可执行沙盘建议：</strong>${escapeHtml(reason)} 全网站点仍保留导航和补能候选用途。`;
         action.classList.remove("strategy-risk", "strategy-unprofitable");
       } else {
         const risk = payload.recommendation === "risk";
         const unprofitable = payload.recommendation === "operationally-effective";
         const platformContribution = Number(payload.platformContribution ?? impact.platformContribution ?? 0);
         const merchantContribution = Number(payload.merchantContribution ?? impact.merchantContribution ?? 0);
+        const safeUnservedPressure = escapeHtml(payload.unservedPressure);
+        const safeTargetUser = escapeHtml(payload.targetUser || "目标用户");
+        const safeCoupon = escapeHtml(payload.platformCoupon ?? payload.discountAmount);
+        const safeRecommendedCoupon = escapeHtml(payload.recommendedPlatformCoupon);
         action.innerHTML = risk
           ? `<strong>系统否决当前方案：</strong>当前平台券会增加承接站尾部等待，不建议执行；请降低券档或更换承接站。场景 ROI ${scenarioRoi.toFixed(2)}x。`
           : unprofitable
             ? `<strong>系统否决当前发券方案：</strong>虽然仿真预计可引导 ${Math.round(impact.divertedVehicles || 0)} 人并改善排队，但场景 ROI ${scenarioRoi.toFixed(2)}x 未达到 1.00x 执行门槛，因此不建议下发。可改用低成本推荐引导或调度。${payload.capacityBound
-              ? `<br><span class="strategy-note">承接站窗口容量已是瓶颈：仍有约 ${payload.unservedPressure} 人的需求压力无法承接，继续加码平台券不能解决。</span>`
+              ? `<br><span class="strategy-note">承接站窗口容量已是瓶颈：仍有约 ${safeUnservedPressure} 人的需求压力无法承接，继续加码平台券不能解决。</span>`
               : ""}`
-            : `<strong>本次沙盘建议可进入人工复核：</strong>向${payload.targetUser || "目标用户"}提供 ¥${payload.platformCoupon ?? payload.discountAmount} 平台券，仿真预计可引导 ${Math.round(impact.divertedVehicles || 0)} 人（挽回 ${impact.retainedOrders?.toFixed?.(1) ?? "—"} 单，新增 ${Math.round(impact.incrementalOrders || 0)} 单），场景 ROI ${scenarioRoi.toFixed(2)}x；仿真收益假设：平台贡献 ¥${platformContribution.toFixed(2)}，商户贡献 ¥${merchantContribution.toFixed(2)}。${payload.recommendedPlatformCoupon != null
-              ? `仿真建议 ¥${payload.recommendedPlatformCoupon}（在场景 ROI ≥ 1 的券档中仿真预计可引导最多）。`
+            : `<strong>本次沙盘建议可进入人工复核：</strong>向${safeTargetUser}提供 ¥${safeCoupon} 平台券，仿真预计可引导 ${Math.round(impact.divertedVehicles || 0)} 人（挽回 ${impact.retainedOrders?.toFixed?.(1) ?? "—"} 单，新增 ${Math.round(impact.incrementalOrders || 0)} 单），场景 ROI ${scenarioRoi.toFixed(2)}x；仿真收益假设：平台贡献 ¥${platformContribution.toFixed(2)}，商户贡献 ¥${merchantContribution.toFixed(2)}。${payload.recommendedPlatformCoupon != null
+              ? `仿真建议 ¥${safeRecommendedCoupon}（在场景 ROI ≥ 1 的券档中仿真预计可引导最多）。`
               : "当前负载与成本假设下没有满足场景 ROI 约束的券档，建议改用推荐引导或调度。"}${payload.capacityBound
-              ? `<br><span class="strategy-note">承接站窗口容量已是瓶颈：仍有约 ${payload.unservedPressure} 人的需求压力无法承接，继续加码平台券不能解决。</span>`
+              ? `<br><span class="strategy-note">承接站窗口容量已是瓶颈：仍有约 ${safeUnservedPressure} 人的需求压力无法承接，继续加码平台券不能解决。</span>`
               : ""}`;
         action.classList.toggle("strategy-risk", risk);
         action.classList.toggle("strategy-unprofitable", unprofitable);

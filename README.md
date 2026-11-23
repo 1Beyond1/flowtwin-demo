@@ -137,11 +137,11 @@ PORT=4182
 
 浏览器当前位置需要用户主动授权，并且只在 `https://` 或 `localhost` 等安全上下文中可用。高德 JS Key 可用时，系统会把浏览器坐标转换为高德坐标并反向解析附近地址；解析失败不影响坐标规划，但页面会明确显示“地址未解析”。
 
-公开 Demo 建议设置 `FLOWTWIN_PUBLIC_DEMO=1`：路线、预测、运营仿真和视觉验证仍可使用，但飞书多维表格写入、飞书结果读取、策略写回和 Webhook 执行通知会降级为本地演示，避免匿名访问触发外部写操作。若需要在线展示飞书 AI，应在 VPS 侧先放到 Cloudflare Access 或其他后台鉴权之后，再关闭这个开关。`/api/cv/analyze`、运营仿真、1,000 次验证和飞书状态轮询均有独立的按客户端 IP 限流；可通过 `FLOWTWIN_RATE_LIMIT_*` 调整，默认十分钟窗口。
+公开 Demo 建议设置 `FLOWTWIN_PUBLIC_DEMO=1`：路线、预测、运营仿真和视觉验证仍可使用，但飞书多维表格写入、飞书结果读取、策略写回和 Webhook 执行通知会降级为本地演示，避免匿名访问触发外部写操作。若需要在线展示飞书 AI，应在 VPS 侧先放到 Cloudflare Access 或其他后台鉴权之后，再关闭这个开关。`/api/cv/analyze`、运营仿真、1,000 次验证和飞书状态轮询均有独立的按客户端 IP 限流；可通过 `FLOWTWIN_RATE_LIMIT_*` 调整，默认十分钟窗口。反向代理部署时可按拓扑设置 `FLOWTWIN_TRUST_PROXY`：默认 `0` 仅使用直连 socket IP；设为 `1`（或整数跳数 `N`）时，仅在直连来源为回环/内网代理的前提下从 `X-Forwarded-For` **右侧**第 `N` 跳提取真实客户端 IP（不盲信 `CF-Connecting-IP` 与最左端可伪造头）；若部署在 Cloudflare 代理之后，设为 `cloudflare` 并在可信回环/内网直连时采信 `CF-Connecting-IP`。
 
 ### 可选视觉服务
 
-Node 主服务不依赖 Python、OpenCV 或 Paddle。如需启用本地 PaddleOCR 车牌识别，可按 [`cv-service/README.md`](cv-service/README.md) 启动 `127.0.0.1:5099` 并在配置中设置 `CV_SERVICE_URL`。仓库不包含模型权重；上传图片仅在请求内存中处理，校验 PNG/JPEG/WebP 文件头。
+Node 主服务不依赖 Python、OpenCV 或 Paddle。如需启用本地 PaddleOCR 车牌识别，可按 [`cv-service/README.md`](cv-service/README.md) 启动 `127.0.0.1:5099` 并在配置中设置 `CV_SERVICE_URL`。仓库不包含模型权重；上传图片仅在请求内存中处理，校验 PNG/JPEG/WebP 文件头与像素上限，上传短视频仅在本地临时文件中解码并在处理结束后立即删除。
 
 高德文件缓存默认 TTL：路线 60 分钟、POI 24 小时、地点解析 7 天、地理编码 30 天、天气 10 分钟（上游不可用时在容忍窗口内回退缓存）。高德 Web Service Key 按主备顺序读取，仅在配额超限、限流、临时 HTTP 或网络错误时切换备用 Key。
 
@@ -173,7 +173,7 @@ runtime/enterprise-demand-prior.json
 - **站点与运营仿真**：站点占用率、到达率/服务率、端口快照、到站时刻排队预测、模拟预约、优惠与场景 ROI 由本地仿真模型生成。
 - **可复现实验集**：30 个合成补能节点与 1,000 次固定种子行程，用于四类策略对比。
 - **可选离线需求先验**：私有部署 `runtime/enterprise-demand-prior.json` 后，以“季节性基线 + HistGradientBoosting 残差回归”（留出集 WAPE ~17.85%，滚动验证均值 ~13.14%）调节到达强度与繁忙风险。
-- **可选视觉链路**：配置本地 PaddleOCR 服务后执行车牌识别，原始上传媒体仅在内存中处理，不落盘保存。
+- **可选视觉链路**：配置本地 PaddleOCR 服务后执行车牌识别，上传图片仅在内存中处理，短视频仅通过临时文件解码并在使用后立即删除，不做持久化留存。
 
 ## 演示流程
 

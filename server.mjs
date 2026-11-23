@@ -4,14 +4,14 @@ import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./lib/config.mjs";
 import { parseTripIntent, formatPlanResponse, planLimits } from "./lib/plan.mjs";
-import { forecastStations } from "./lib/forecast.mjs";
+import { forecastStations, MAX_FORECAST_STATIONS } from "./lib/forecast.mjs";
 import { simulateOperator } from "./lib/operator.mjs";
 import { validateStrategies } from "./lib/validate.mjs";
 import { executeFeishu } from "./lib/feishu.mjs";
 import { buildLongTripPlans } from "./lib/longtrip.mjs";
 import { createLongTripPlanCache } from "./lib/longtrip-cache.mjs";
 import { API_CONTRACTS } from "./lib/contracts.mjs";
-import { cleanTranscriptText, polishTranscriptText } from "./lib/stt.mjs";
+import { polishTranscriptText } from "./lib/stt.mjs";
 import { hasAmapServiceKey, requestAmapJson } from "./lib/amap.mjs";
 import {
   feishuConfigSummary,
@@ -24,6 +24,7 @@ import { AMAP_CACHE_TTLS, createAmapFileCache } from "./lib/amap-cache.mjs";
 import { createRateLimiter, readRateLimitConfig } from "./lib/rate-limit.mjs";
 import { localVisionFallback, validateVisionResult, visionHealthSummary } from "./lib/cv.mjs";
 import { enterprisePriorHealth, enrichStationsWithEnterprisePrior, loadEnterpriseDemandPrior } from "./lib/enterprise-prior.mjs";
+import { parseOptionalNumber } from "./lib/number.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 let config = null;
@@ -36,10 +37,112 @@ const EXECUTION_CACHE_MAX = 1_000;
 let cvInFlight = 0;
 const MAX_CV_IN_FLIGHT = 1;
 const longTripPlanCache = createLongTripPlanCache();
-const rateLimiter = createRateLimiter({
+let rateLimiter = createRateLimiter({
   ...readRateLimitConfig(),
-  trustProxy: process.env.FLOWTWIN_TRUST_PROXY === "1"
+  trustProxy: process.env.FLOWTWIN_TRUST_PROXY
 });
+
+export const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://webapi.amap.com https://*.amap.com https://*.autonavi.com",
+  "style-src 'self' 'unsafe-inline' https://*.amap.com",
+  "img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com https://*.is.autonavi.com",
+  "media-src 'self' data: blob:",
+  "font-src 'self' data: https://*.amap.com",
+  "connect-src 'self' https://*.amap.com https://*.autonavi.com",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+  "form-action 'self'"
+].join("; ");
+
+export const SECURITY_HEADERS = Object.freeze({
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Frame-Options": "DENY",
+  "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+  // The entry flow can request browser location after an explicit user click.
+  // Keep camera/microphone scoped to this origin and do not grant geolocation
+  // to embedded third parties.
+  "Permissions-Policy": "camera=(self), microphone=(self), geolocation=(self)"
+});
+
+const SAFE_BAD_REQUEST_CODES = new Set([
+  "INVALID_JSON",
+  "INVALID_REQUEST_URL",
+  "INVALID_URI_ENCODING",
+  "BAD_REQUEST"
+]);
+
+export function parseRequestUrl(request) {
+  const rawHost = request?.headers?.host;
+  const host = rawHost === undefined ? "localhost" : String(rawHost).trim();
+  if (!host || /[\s\\/@\u0000-\u001f\u007f]/.test(host)) {
+    throw Object.assign(new Error("INVALID_REQUEST_URL"), { statusCode: 400 });
+  }
+  const rawUrl = request?.url || "/";
+  if (/[\u0000-\u001f\u007f]/.test(String(rawUrl))) {
+    throw Object.assign(new Error("INVALID_REQUEST_URL"), { statusCode: 400 });
+  }
+  try {
+    const parsed = new URL(rawUrl, `http://${host}`);
+    if (parsed.host.toLowerCase() !== host.toLowerCase()) {
+      throw new Error("HOST_MISMATCH");
+    }
+    return parsed;
+  } catch {
+    throw Object.assign(new Error("INVALID_REQUEST_URL"), { statusCode: 400 });
+  }
+}
+
+function safeDecodeUriComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw Object.assign(new Error("INVALID_URI_ENCODING"), { statusCode: 400 });
+  }
+}
+
+export function validatePostRequestSecurity(request, requestUrl, { allowNonJson = false } = {}) {
+  const headers = request?.headers || {};
+  const secFetchSite = String(headers["sec-fetch-site"] || "").trim().toLowerCase();
+  if (secFetchSite && secFetchSite !== "same-origin" && secFetchSite !== "none") {
+    return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
+  }
+
+  const rawOrigin = headers.origin;
+  if (rawOrigin !== undefined && String(rawOrigin).trim() !== "") {
+    const originText = String(rawOrigin).trim();
+    if (originText.toLowerCase() === "null") {
+      return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
+    }
+    let originUrl;
+    try {
+      originUrl = new URL(originText);
+    } catch {
+      return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
+    }
+    if (!["http:", "https:"].includes(originUrl.protocol)) {
+      return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
+    }
+    if (originUrl.host.toLowerCase() !== requestUrl.host.toLowerCase()) {
+      return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
+    }
+    const forwardedProto = String(headers["x-forwarded-proto"] || "").split(",", 1)[0].trim().toLowerCase();
+    if (forwardedProto === "https" && originUrl.protocol === "http:") {
+      return { ok: false, status: 403, error: "CSRF_FORBIDDEN" };
+    }
+  }
+
+  if (!allowNonJson) {
+    const mediaType = String(headers["content-type"] || "").split(";", 1)[0].trim().toLowerCase();
+    if (mediaType !== "application/json") {
+      return { ok: false, status: 415, error: "UNSUPPORTED_MEDIA_TYPE" };
+    }
+  }
+  return { ok: true };
+}
 
 export function rateLimitScopeForRequest(method, pathname) {
   const normalizedMethod = String(method || "").toUpperCase();
@@ -65,7 +168,7 @@ export function rateLimitScopeForRequest(method, pathname) {
 export function applyRateLimit(request, response, limiter = rateLimiter, requestUrl = null) {
   const method = String(request?.method || "").toUpperCase();
   if (method === "OPTIONS") return true;
-  const url = requestUrl || new URL(request?.url || "/", `http://${request?.headers?.host || "localhost"}`);
+  const url = requestUrl || parseRequestUrl(request);
   const scope = rateLimitScopeForRequest(method, url.pathname);
   if (!scope) return true;
   const decision = limiter.check(scope, request);
@@ -104,16 +207,6 @@ const mimeTypes = {
   ".svg": "image/svg+xml"
 };
 
-const SECURITY_HEADERS = Object.freeze({
-  "X-Content-Type-Options": "nosniff",
-  "Referrer-Policy": "strict-origin-when-cross-origin",
-  "X-Frame-Options": "SAMEORIGIN",
-  // The entry flow can request browser location after an explicit user click.
-  // Keep camera/microphone scoped to this origin and do not grant geolocation
-  // to embedded third parties.
-  "Permissions-Policy": "camera=(self), microphone=(self), geolocation=(self)"
-});
-
 function json(response, status, body, headers = {}) {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -150,6 +243,14 @@ export function parseRouteWaypoints(value, maxWaypoints = 16) {
   return points.every(Boolean) ? points : null;
 }
 
+function pickAddressText(value) {
+  if (Array.isArray(value)) {
+    const first = value.find((item) => typeof item === "string" && item.trim());
+    return first ? first.trim() : "";
+  }
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function normalizePath(path, key, station) {
   const steps = Array.isArray(path.steps) ? path.steps : [];
   const points = steps.flatMap((step) => String(step.polyline || "").split(";")).map((point) => point.split(",").map(Number)).filter((point) => point.length === 2 && point.every(Number.isFinite));
@@ -178,8 +279,8 @@ export function isPublicDemoMode(source = {}) {
     || ["1", "true", "yes", "on"].includes(String(source?.FLOWTWIN_PUBLIC_DEMO || "").trim().toLowerCase());
 }
 
-function remoteWriteDisabled() {
-  return isPublicDemoMode(config || {}) || isPublicDemoMode(process.env);
+function remoteWriteDisabled(activeConfig = config) {
+  return isPublicDemoMode(activeConfig || {}) || isPublicDemoMode(process.env);
 }
 
 function publicWriteDisabledResponse(response, code, message) {
@@ -198,7 +299,7 @@ export function routeSourceLabel(cacheState) {
   return "高德 Web 服务路线规划 2.0";
 }
 
-async function routeApi(requestUrl, response) {
+async function routeApi(requestUrl, response, runtime) {
   const origin = parseCoordinate(requestUrl.searchParams.get("origin"));
   const destination = parseCoordinate(requestUrl.searchParams.get("destination"));
   const legacyWaypoint = parseCoordinate(requestUrl.searchParams.get("waypoint"));
@@ -226,7 +327,7 @@ async function routeApi(requestUrl, response) {
     cached = await requestCachedAmap("route", "https://restapi.amap.com/v5/direction/driving", params, {
       timeoutMs: 15000,
       staleIfErrorMs: 2 * 60 * 60 * 1000
-    });
+    }, runtime);
   } catch (error) {
     return errorResponseForAmap(error, response, "AMAP_ROUTE_FAILED");
   }
@@ -273,17 +374,20 @@ function amapError(result, fallback = "AMAP_REQUEST_FAILED") {
  * returned only when the upstream request fails; its response metadata makes
  * that boundary visible to the browser.
  */
-async function requestCachedAmap(kind, endpoint, params, options = {}) {
+async function requestCachedAmap(kind, endpoint, params, options = {}, runtime = {}) {
+  const activeConfig = runtime.config || config || {};
+  const fetchImpl = runtime.fetchImpl || fetch;
   const load = async () => {
     const result = await requestAmapJson(endpoint, params, {
-      config,
+      config: activeConfig,
+      fetchImpl,
       timeoutMs: options.timeoutMs || 10000
     });
     if (!result.ok) throw amapError(result);
     return result.payload || {};
   };
-  if (!config?.amapCache) return { payload: await load(), cache: { state: "bypass" } };
-  const cached = await config.amapCache.getOrLoad(kind, params.toString(), load, {
+  if (!activeConfig?.amapCache) return { payload: await load(), cache: { state: "bypass" } };
+  const cached = await activeConfig.amapCache.getOrLoad(kind, params.toString(), load, {
     ttlMs: options.ttlMs || AMAP_CACHE_TTLS[kind] || AMAP_CACHE_TTLS.route,
     staleIfErrorMs: options.staleIfErrorMs
   });
@@ -334,7 +438,7 @@ export function buildPoiSearchRequest({ location, type, keyword } = {}) {
 // return sparse results for motorway points far from a city centre. Query the
 // same AMap Web Service from the local server for route-corridor POIs so the
 // web-service key stays server-side and cross-province sampling is stable.
-async function poiApi(requestUrl, response) {
+async function poiApi(requestUrl, response, runtime) {
   const search = buildPoiSearchRequest({
     location: requestUrl.searchParams.get("location"),
     type: requestUrl.searchParams.get("type"),
@@ -347,13 +451,10 @@ async function poiApi(requestUrl, response) {
     around = await requestCachedAmap("poi", "https://restapi.amap.com/v5/place/around", params, {
       timeoutMs: 15000,
       staleIfErrorMs: 7 * 24 * 60 * 60 * 1000
-    });
+    }, runtime);
   } catch (error) {
     const failure = error?.amapResult;
     if (failure?.error === "AMAP_WEB_SERVICE_KEY_MISSING") return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
-    // POI discovery is an optional enrichment layer. A temporary quota or
-    // upstream failure should let the browser use its SDK/fallback candidates
-    // without turning the normal planning flow into a wall of 502 errors.
     return json(response, 200, {
       pois: [],
       source: "高德 POI 暂不可用 · 已进入候选降级",
@@ -367,11 +468,6 @@ async function poiApi(requestUrl, response) {
   const result = around.payload || {};
   let pois = Array.isArray(result.pois) ? result.pois : [];
   if (result.status !== "1") {
-    // POI discovery is an optional enrichment layer. A temporary quota or
-    // upstream failure should let the browser use its SDK/fallback candidates
-    // without turning the normal planning flow into a wall of 502 console
-    // errors. The response remains explicit and never claims that POI data was
-    // retrieved successfully.
     return json(response, 200, {
       pois: [],
       source: "高德 POI 暂不可用 · 已进入候选降级",
@@ -384,28 +480,26 @@ async function poiApi(requestUrl, response) {
   }
   let source = "高德周边 POI";
   // Motorway samples often sit outside an urban POI radius even though the
-  // nearest city has public charging stations. When the around-search is
-  // empty, resolve the city first and perform a constrained city text search.
-  // The returned POIs still go through the browser's route-corridor and detour
-  // filters; this only broadens data discovery, not the safety judgement.
+  // nearest city has public charging stations. For China's four direct-controlled
+  // municipalities AMap returns `city: []` and places the city name in `province`.
   if (!pois.length) {
     try {
       const reverseParams = new URLSearchParams({ location, radius: "1000", extensions: "base" });
       const reverse = await requestCachedAmap("regeo", "https://restapi.amap.com/v3/geocode/regeo", reverseParams, {
         timeoutMs: 10000,
         staleIfErrorMs: 30 * 24 * 60 * 60 * 1000
-      });
+      }, runtime);
       const reversePayload = reverse.payload || {};
-      const cityValue = reversePayload?.regeocode?.addressComponent?.city;
-      const city = Array.isArray(cityValue) ? cityValue.find(Boolean) : cityValue;
-      if (reversePayload.status === "1" && typeof city === "string" && city.trim()) {
+      const component = reversePayload?.regeocode?.addressComponent || {};
+      const city = pickAddressText(component.city) || pickAddressText(component.province);
+      if (reversePayload.status === "1" && city) {
         const textParams = new URLSearchParams({
-          keywords: keyword, city: city.trim(), citylimit: "true", offset: "25", page: "1", extensions: "base"
+          keywords: keyword, city, citylimit: "true", offset: "25", page: "1", extensions: "base"
         });
         const text = await requestCachedAmap("place", "https://restapi.amap.com/v3/place/text", textParams, {
           timeoutMs: 10000,
           staleIfErrorMs: 30 * 24 * 60 * 60 * 1000
-        });
+        }, runtime);
         const textPayload = text.payload || {};
         if (textPayload.status === "1" && Array.isArray(textPayload.pois)) {
           pois = textPayload.pois;
@@ -432,8 +526,9 @@ async function poiApi(requestUrl, response) {
   });
 }
 
-async function runtimeConfig(response) {
-  const { amapKey, securityJsCode, sttApiKey } = config;
+async function runtimeConfig(response, runtime) {
+  const activeConfig = runtime.config || config || {};
+  const { amapKey, securityJsCode, sttApiKey } = activeConfig;
   // Only browser-safe map settings leave the server. STT keys stay server-side;
   // expose a boolean so the mic button can show a clear "not configured" state.
   const body = `window.FLOWTWIN_CONFIG=${JSON.stringify({
@@ -486,35 +581,42 @@ function extractMultipartFile(buffer, contentType) {
   return null;
 }
 
-async function sttApi(request, response) {
+async function sttApi(request, response, runtime) {
+  const activeConfig = runtime.config || config || {};
+  const fetchImpl = runtime.fetchImpl || fetch;
   // Keys stay server-side; never log Authorization or audio payloads.
-  if (!config.sttApiKey || !config.sttBaseUrl) return json(response, 503, { error: "STT_NOT_CONFIGURED" });
+  if (!activeConfig.sttApiKey || !activeConfig.sttBaseUrl) return json(response, 503, { error: "STT_NOT_CONFIGURED" });
   const contentType = String(request.headers["content-type"] || "");
+  const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
+  if (!mediaType || mediaType === "application/json") {
+    return json(response, 400, { error: "AUDIO_BODY_REQUIRED" });
+  }
+  if (mediaType === "text/plain" || mediaType === "application/x-www-form-urlencoded") {
+    return json(response, 415, { error: "UNSUPPORTED_MEDIA_TYPE" });
+  }
   const raw = await readRawBody(request, 8_000_000);
   if (!raw.length) return json(response, 400, { error: "STT_EMPTY_AUDIO" });
 
   let fileBuffer = raw;
   let filename = "audio.webm";
-  let mime = contentType.split(";")[0].trim() || "application/octet-stream";
+  let mime = mediaType || "application/octet-stream";
 
-  if (contentType.toLowerCase().includes("multipart/form-data")) {
+  if (mediaType === "multipart/form-data") {
     const file = extractMultipartFile(raw, contentType);
     if (!file?.data?.length) return json(response, 400, { error: "AUDIO_FILE_REQUIRED" });
     fileBuffer = file.data;
     filename = file.filename || filename;
     mime = file.mime || mime;
-  } else if (!contentType || contentType.toLowerCase().includes("application/json")) {
-    return json(response, 400, { error: "AUDIO_BODY_REQUIRED" });
   }
 
   const form = new FormData();
-  form.append("model", config.sttModel || "FunAudioLLM/SenseVoiceSmall");
+  form.append("model", activeConfig.sttModel || "FunAudioLLM/SenseVoiceSmall");
   form.append("file", new Blob([fileBuffer], { type: mime }), filename);
 
   try {
-    const upstream = await fetch(`${config.sttBaseUrl}/audio/transcriptions`, {
+    const upstream = await fetchImpl(`${activeConfig.sttBaseUrl}/audio/transcriptions`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${config.sttApiKey}` },
+      headers: { Authorization: `Bearer ${activeConfig.sttApiKey}` },
       body: form,
       signal: AbortSignal.timeout(45000)
     });
@@ -526,10 +628,9 @@ async function sttApi(request, response) {
     }
     const rawText = String(payload.text || "").trim();
     if (!rawText) return json(response, 502, { error: "STT_EMPTY_TRANSCRIPT" });
-    // SenseVoice embeds emotion/language tags; strip them, then optionally
-    // ask the plan model to polish into a clean travel sentence.
-    const stripped = cleanTranscriptText(rawText);
-    const text = await polishTranscriptText(stripped || rawText, config);
+    // Pass rawText directly so polishTranscriptText can detect SenseVoice tags
+    // before stripping them and decide whether LLM cleanup is warranted.
+    const text = await polishTranscriptText(rawText, activeConfig, fetchImpl);
     if (!text) return json(response, 502, { error: "STT_EMPTY_TRANSCRIPT" });
     return json(response, 200, {
       text,
@@ -570,11 +671,8 @@ function own(source, key) {
 }
 
 function safeNumber(value, min, max, { integer = false, clamp = true } = {}) {
-  if (value === null || value === undefined || typeof value === "boolean") return undefined;
-  if (typeof value !== "number" && typeof value !== "string") return undefined;
-  if (typeof value === "string" && !value.trim()) return undefined;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return undefined;
+  const parsed = parseOptionalNumber(value);
+  if (parsed === null) return undefined;
   if (!clamp && (parsed < min || parsed > max)) return undefined;
   const bounded = clamp ? Math.max(min, Math.min(max, parsed)) : parsed;
   return integer ? Math.floor(bounded) : bounded;
@@ -687,20 +785,24 @@ export function buildForecastApiScenario(scenario = {}) {
   return target;
 }
 
-async function planApi(request, response) {
+async function planApi(request, response, runtime) {
+  const activeConfig = runtime.config || config || {};
+  const fetchImpl = runtime.fetchImpl || fetch;
   const body = await readJsonBody(request, 32768);
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message || message.length > planLimits.MAX_MESSAGE_LENGTH) return json(response, 400, { error: "MESSAGE_REQUIRED_OR_TOO_LONG", maxLength: planLimits.MAX_MESSAGE_LENGTH });
   const context = body.context && typeof body.context === "object" && !Array.isArray(body.context) ? body.context : {};
-  const result = await parseTripIntent({ message, context, config });
+  const result = await parseTripIntent({ message, context, config: activeConfig, fetchImpl });
   return json(response, 200, formatPlanResponse(result));
 }
 
-async function forecastApi(request, response) {
+async function forecastApi(request, response, runtime) {
+  const activePrior = runtime.enterprisePrior ?? enterprisePrior;
   const body = await readJsonBody(request, 128000);
   if (body.stations !== undefined && !Array.isArray(body.stations)) return json(response, 400, { error: "STATIONS_MUST_BE_ARRAY" });
   const scenario = buildForecastApiScenario(body.scenario);
-  const stations = enrichStationsWithEnterprisePrior(enterprisePrior, body.stations || [], scenario);
+  const boundedStations = Array.isArray(body.stations) ? body.stations.slice(0, MAX_FORECAST_STATIONS) : [];
+  const stations = enrichStationsWithEnterprisePrior(activePrior, boundedStations, scenario);
   const result = forecastStations(stations, scenario);
   // Keep the model's existing response shape while making the accepted
   // departure/arrival scenario auditable to API callers. Only normalized
@@ -729,10 +831,11 @@ function weatherImpactFor(condition) {
   return { weatherFactor: 1, severe: false };
 }
 
-async function weatherApi(requestUrl, response) {
+async function weatherApi(requestUrl, response, runtime) {
+  const activeConfig = runtime.config || config || {};
   const location = parseCoordinate(requestUrl.searchParams.get("location"));
   if (!location) return json(response, 400, { error: "INVALID_LOCATION" });
-  if (!hasAmapServiceKey(config)) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
+  if (!hasAmapServiceKey(activeConfig)) return json(response, 503, { error: "AMAP_WEB_SERVICE_KEY_MISSING" });
 
   // 天气按 adcode 查；先逆地理拿到坐标所在区县的 adcode。
   const regeoParams = new URLSearchParams({ location, extensions: "base" });
@@ -742,11 +845,11 @@ async function weatherApi(requestUrl, response) {
     const regeo = await requestCachedAmap("regeo", "https://restapi.amap.com/v3/geocode/regeo", regeoParams, {
       timeoutMs: 10000,
       staleIfErrorMs: 30 * 24 * 60 * 60 * 1000
-    });
+    }, runtime);
     const regeoJson = regeo.payload || {};
     const component = regeoJson?.regeocode?.addressComponent;
     adcode = component?.adcode ? String(component.adcode) : null;
-    cityName = component?.city ? String(component.city) : (component?.province ? String(component.province) : null);
+    cityName = pickAddressText(component?.city) || pickAddressText(component?.province) || null;
   } catch { /* 落到下面的报错 */ }
   if (!adcode) return json(response, 502, { error: "AMAP_REGEO_FAILED" });
 
@@ -756,7 +859,7 @@ async function weatherApi(requestUrl, response) {
     weather = await requestCachedAmap("weather", "https://restapi.amap.com/v3/weather/weatherInfo", weatherParams, {
       timeoutMs: 10000,
       staleIfErrorMs: 2 * 60 * 60 * 1000
-    });
+    }, runtime);
   } catch {
     return json(response, 502, { error: "AMAP_WEATHER_UNREACHABLE" });
   }
@@ -769,7 +872,7 @@ async function weatherApi(requestUrl, response) {
     adcode,
     city: live.city || cityName || null,
     condition: live.weather,
-    temperature: Number(live.temperature) || null,
+    temperature: parseOptionalNumber(live.temperature),
     humidity: live.humidity || null,
     wind: `${live.winddirection || ""} ${live.windpower || ""}`.trim(),
     reporttime: live.reporttime || null,
@@ -781,24 +884,21 @@ async function weatherApi(requestUrl, response) {
   return json(response, 200, data);
 }
 
-async function longTripApi(request, response) {
+async function longTripApi(request, response, runtime) {
+  const activePrior = runtime.enterprisePrior ?? enterprisePrior;
+  const activePlanCache = runtime.longTripPlanCache || longTripPlanCache;
   const body = await readJsonBody(request, 128000);
   if (!Array.isArray(body.stations)) return json(response, 400, { error: "STATIONS_REQUIRED" });
   const scenario = buildForecastApiScenario(body);
   const enrichedBody = {
     ...body,
-    stations: enrichStationsWithEnterprisePrior(enterprisePrior, body.stations, scenario)
+    stations: enrichStationsWithEnterprisePrior(activePrior, body.stations, scenario)
   };
   const input = buildLongTripApiInput(enrichedBody);
   if (!Number.isFinite(input.distanceKm)) {
     return json(response, 400, { error: "INVALID_DISTANCE" });
   }
-  // Reuse only an equivalent decision snapshot. Station pressure, forecast
-  // values, price, vehicle state and route constraints are all part of the
-  // key; changing any of them triggers a fresh calculation. Display timestamps
-  // and one-minute clock ticks are collapsed to the forecast's five-minute
-  // sampling cadence, so they cannot defeat an otherwise unchanged plan.
-  const cached = await longTripPlanCache.getOrLoad(input, () => buildLongTripPlans(input));
+  const cached = await activePlanCache.getOrLoad(input, () => buildLongTripPlans(input));
   return json(response, 200, { ...cached.value, cache: cached.cache });
 }
 
@@ -820,21 +920,23 @@ async function validateApi(request, response) {
   return json(response, 200, validateStrategies({ seed: body.seed, trips: body.trips, stations: body.stations }));
 }
 
-async function cvHealthApi(response) {
-  const summary = visionHealthSummary(config);
-  if (!config.cvServiceUrl) return json(response, 200, summary);
+async function cvHealthApi(response, runtime) {
+  const activeConfig = runtime.config || config || {};
+  const fetchImpl = runtime.fetchImpl || fetch;
+  const summary = visionHealthSummary(activeConfig);
+  if (!activeConfig.cvServiceUrl) return json(response, 200, summary);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
   try {
-    const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/health`, {
+    const upstream = await fetchImpl(`${activeConfig.cvServiceUrl.replace(/\/$/, "")}/health`, {
       headers: { Accept: "application/json" },
       signal: controller.signal
     });
     const payload = await upstream.json().catch(() => null);
     const localServiceOk = upstream.ok && payload?.ok === true;
-    const runtime = payload?.runtime && typeof payload.runtime === "object" ? payload.runtime : null;
-    const runtimeAvailable = localServiceOk && runtime?.ocrAvailable === true;
-    const modelLoaded = localServiceOk && runtime?.ocrLoaded === true;
+    const runtimeInfo = payload?.runtime && typeof payload.runtime === "object" ? payload.runtime : null;
+    const runtimeAvailable = localServiceOk && runtimeInfo?.ocrAvailable === true;
+    const modelLoaded = localServiceOk && runtimeInfo?.ocrLoaded === true;
     return json(response, 200, {
       ...summary,
       serviceReachable: localServiceOk,
@@ -849,7 +951,7 @@ async function cvHealthApi(response) {
             ? "ready"
             : "warming",
       localServiceOk,
-      localRuntime: runtime
+      localRuntime: runtimeInfo
     });
   } catch {
     return json(response, 200, {
@@ -875,14 +977,23 @@ export function isCompletedVisionInference(result) {
 export function isTransientVisionResult(result) {
   if (!validateVisionResult(result)) return false;
   if (!["not-run", "error"].includes(String(result.inferenceStatus || ""))) return false;
-  return ["local-ocr-unavailable", "local-ocr-error"].includes(String(result.mode || ""));
+  return [
+    "local-ocr-unavailable",
+    "local-ocr-error",
+    "local-video-ocr-unavailable"
+  ].includes(String(result.mode || ""));
 }
 
 export function isRetryableVisionStatus(status) {
   return [408, 429, 502, 503, 504].includes(Number(status));
 }
 
-async function cvAnalyzeApi(request, response) {
+async function cvAnalyzeApi(request, response, runtime) {
+  const activeConfig = runtime.config || config || {};
+  const fetchImpl = runtime.fetchImpl || fetch;
+  // Finish reading and validating the JSON body BEFORE taking the single-flight
+  // CV slot so a slow or invalid upload cannot starve other CV requests.
+  const body = await readJsonBody(request, 36 * 1024 * 1024);
   if (cvInFlight >= MAX_CV_IN_FLIGHT) {
     return json(response, 503, {
       error: "CV_BUSY",
@@ -891,9 +1002,6 @@ async function cvAnalyzeApi(request, response) {
   }
   cvInFlight += 1;
   try {
-    // A 24 MB video becomes roughly 32 MB after base64 encoding. Keep the
-    // envelope bounded so one request cannot exhaust the small VPS heap.
-    const body = await readJsonBody(request, 36 * 1024 * 1024);
     // A built-in sample is still an image input. Normalize it to the same upload
     // path so the local OCR model, rather than a synthetic result generator,
     // decides whether a plate is actually present.
@@ -901,7 +1009,7 @@ async function cvAnalyzeApi(request, response) {
     const upstreamBody = requestedMode === "sample" && body?.imageData
       ? { ...body, mode: "upload" }
       : body;
-    if (config.cvServiceUrl && ["upload", "video"].includes(String(upstreamBody?.mode || "").toLowerCase())) {
+    if (activeConfig.cvServiceUrl && ["upload", "video"].includes(String(upstreamBody?.mode || "").toLowerCase())) {
       // PaddleOCR may load local weights on the first request. Video sampling
       // also needs more time than a single image, but must remain bounded.
       const maxAttempts = 3;
@@ -912,7 +1020,7 @@ async function cvAnalyzeApi(request, response) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), upstreamBody.mode === "video" ? 120000 : 60000);
         try {
-          const upstream = await fetch(`${config.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
+          const upstream = await fetchImpl(`${activeConfig.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "application/json" },
             body: JSON.stringify(upstreamBody),
@@ -936,9 +1044,6 @@ async function cvAnalyzeApi(request, response) {
         await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
       }
       if (lastResult && typeof lastResult === "object" && validateVisionResult(lastResult)) {
-        // Preserve an honest local not-run/error response after bounded retries;
-        // do not replace it with a synthetic success or mislabel every failure
-        // as HTTP 429.
         return json(response, lastStatus === 429 ? 429 : 200, lastResult);
       }
       if (lastStatus === 429 && lastResult && typeof lastResult === "object") {
@@ -955,8 +1060,10 @@ async function cvAnalyzeApi(request, response) {
   }
 }
 
-async function executionApi(request, response) {
-  if (remoteWriteDisabled()) {
+async function executionApi(request, response, runtime) {
+  const activeConfig = runtime.config || config || {};
+  const fetchImpl = runtime.fetchImpl || fetch;
+  if (remoteWriteDisabled(activeConfig)) {
     return publicWriteDisabledResponse(response, "PUBLIC_DEMO_EXECUTION_DISABLED", "公开 Demo 已关闭飞书执行通知，当前保留本地执行演示。");
   }
   const body = await readJsonBody(request, 16000);
@@ -972,7 +1079,7 @@ async function executionApi(request, response) {
     const cached = executionCache.get(key);
     if (cached) return json(response, 200, { ...cached.result, idempotent: true });
   }
-  const result = await executeFeishu({ payload: body, config });
+  const result = await executeFeishu({ payload: body, config: activeConfig, fetchImpl });
   if (key && result?.mode !== "error") {
     if (executionCache.size >= EXECUTION_CACHE_MAX) executionCache.delete(executionCache.keys().next().value);
     executionCache.set(key, { result, expiresAt: now + EXECUTION_CACHE_TTL_MS });
@@ -980,34 +1087,42 @@ async function executionApi(request, response) {
   return json(response, 200, result);
 }
 
-async function feishuSyncApi(request, response) {
-  if (remoteWriteDisabled()) {
+async function feishuSyncApi(request, response, runtime) {
+  const activeConfig = runtime.config || config || {};
+  const fetchImpl = runtime.fetchImpl || fetch;
+  if (remoteWriteDisabled(activeConfig)) {
     return publicWriteDisabledResponse(response, "PUBLIC_DEMO_FEISHU_SYNC_DISABLED", "公开 Demo 已关闭飞书写入，当前保留本地运营策略演示。");
   }
   const body = await readJsonBody(request, 128000);
-  const result = await startFeishuSync({ payload: body, config });
+  const result = await startFeishuSync({ payload: body, config: activeConfig, fetchImpl });
   return json(response, 200, result);
 }
 
-async function feishuStatusApi(syncId, response) {
-  if (remoteWriteDisabled()) {
+async function feishuStatusApi(syncId, response, runtime) {
+  const activeConfig = runtime.config || config || {};
+  const fetchImpl = runtime.fetchImpl || fetch;
+  if (remoteWriteDisabled(activeConfig)) {
     return publicWriteDisabledResponse(response, "PUBLIC_DEMO_FEISHU_STATUS_DISABLED", "公开 Demo 已关闭飞书结果读取，当前保留本地运营策略演示。");
   }
-  const result = await getFeishuSyncStatus({ syncId, config });
+  const result = await getFeishuSyncStatus({ syncId, config: activeConfig, fetchImpl });
   return json(response, result.mode === "error" && result.code !== "FEISHU_SYNC_NOT_FOUND" ? 502 : 200, result);
 }
 
-async function feishuApproveApi(request, response, strategyRecordId) {
-  if (remoteWriteDisabled()) {
+async function feishuApproveApi(request, response, strategyRecordId, runtime) {
+  const activeConfig = runtime.config || config || {};
+  const fetchImpl = runtime.fetchImpl || fetch;
+  if (remoteWriteDisabled(activeConfig)) {
     return publicWriteDisabledResponse(response, "PUBLIC_DEMO_FEISHU_APPROVE_DISABLED", "公开 Demo 已关闭飞书策略写回，当前保留本地审批演示。");
   }
   const body = await readJsonBody(request, 8192);
   const result = await approveFeishuStrategy({
     strategyRecordId,
-    status: body.status || "已确认",
-    config
+    status: body.status ?? "已确认",
+    config: activeConfig,
+    fetchImpl
   });
-  return json(response, 200, result);
+  const badInput = result.code === "INVALID_STRATEGY_RECORD_ID" || result.code === "INVALID_APPROVAL_STATUS";
+  return json(response, badInput ? 400 : 200, result);
 }
 
 export function isBlockedStaticRequest(requestedPath) {
@@ -1033,16 +1148,17 @@ async function staticFile(pathname, response) {
   try {
     requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
   } catch {
-    response.writeHead(404).end();
+    response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS });
+    response.end("Bad Request");
     return;
   }
   if (isBlockedStaticRequest(requested)) {
-    response.writeHead(404).end();
+    response.writeHead(404, { ...SECURITY_HEADERS }).end();
     return;
   }
   const target = normalize(join(root, requested));
   if (!target.startsWith(normalize(root))) {
-    response.writeHead(404).end();
+    response.writeHead(404, { ...SECURITY_HEADERS }).end();
     return;
   }
   try {
@@ -1061,107 +1177,137 @@ async function staticFile(pathname, response) {
     });
     response.end(content);
   } catch {
-    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS });
     response.end("Not found");
   }
 }
 
-async function requestHandler(request, response) {
-  try {
-    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
-    if (request.method === "OPTIONS") return json(response, 204, {});
-    if (!applyRateLimit(request, response, rateLimiter, requestUrl)) return;
-    const versionRoute = await resolveVersionRoute({
-      method: request.method,
-      pathname: requestUrl.pathname,
-      versionInfo,
-      checkVersion: () => versionChecker.check()
-    });
-    if (versionRoute) return json(response, versionRoute.status, versionRoute.body);
-    if (requestUrl.pathname === "/api/health") {
-      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-      return json(response, 200, {
-        ok: true,
-        service: "FlowTwin",
-        dependencies: {
-          amapConfigured: hasAmapServiceKey(config),
-          ai: buildAiHealthSummary(config),
-          feishu: { ...feishuConfigSummary(config), publicWriteEnabled: !remoteWriteDisabled() },
-          cv: visionHealthSummary(config),
-          enterprisePrior: enterprisePriorHealth(enterprisePrior)
-        },
-        amapCache: config.amapCache?.getStats?.() || null,
-        longTripPlanCache: longTripPlanCache.getStats()
+export function createRequestHandler(overrides = {}) {
+  return async function handleRequest(request, response) {
+    const runtime = {
+      config: overrides.config ?? config ?? {},
+      enterprisePrior: overrides.enterprisePrior ?? enterprisePrior,
+      versionInfo: overrides.versionInfo ?? versionInfo,
+      versionChecker: overrides.versionChecker ?? versionChecker,
+      rateLimiter: overrides.rateLimiter ?? rateLimiter,
+      longTripPlanCache: overrides.longTripPlanCache ?? longTripPlanCache,
+      fetchImpl: overrides.fetchImpl ?? fetch
+    };
+    try {
+      const requestUrl = parseRequestUrl(request);
+      if (request.method === "OPTIONS") return json(response, 204, {});
+      if (!applyRateLimit(request, response, runtime.rateLimiter, requestUrl)) return;
+      const versionRoute = await resolveVersionRoute({
+        method: request.method,
+        pathname: requestUrl.pathname,
+        versionInfo: runtime.versionInfo,
+        checkVersion: () => runtime.versionChecker?.check?.()
       });
+      if (versionRoute) return json(response, versionRoute.status, versionRoute.body);
+      if (requestUrl.pathname === "/api/health") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        return json(response, 200, {
+          ok: true,
+          service: "FlowTwin",
+          dependencies: {
+            amapConfigured: hasAmapServiceKey(runtime.config),
+            ai: buildAiHealthSummary(runtime.config),
+            feishu: { ...feishuConfigSummary(runtime.config), publicWriteEnabled: !remoteWriteDisabled(runtime.config) },
+            cv: visionHealthSummary(runtime.config),
+            enterprisePrior: enterprisePriorHealth(runtime.enterprisePrior)
+          },
+          amapCache: runtime.config.amapCache?.getStats?.() || null,
+          longTripPlanCache: runtime.longTripPlanCache.getStats()
+        });
+      }
+      if (requestUrl.pathname === "/api/contracts") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        return json(response, 200, API_CONTRACTS);
+      }
+      if (["/api/route", "/api/poi", "/api/weather"].includes(requestUrl.pathname)) {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response, runtime);
+        if (requestUrl.pathname === "/api/poi") return await poiApi(requestUrl, response, runtime);
+        return await weatherApi(requestUrl, response, runtime);
+      }
+      const postOnlyPaths = new Set([
+        "/api/plan",
+        "/api/forecast",
+        "/api/longtrip",
+        "/api/operator/simulate",
+        "/api/validate",
+        "/api/cv/analyze",
+        "/api/execution",
+        "/api/feishu/sync",
+        "/api/stt"
+      ]);
+      const isFeishuApprovePath = requestUrl.pathname.startsWith("/api/feishu/strategy/")
+        && requestUrl.pathname.endsWith("/approve");
+      if (postOnlyPaths.has(requestUrl.pathname) && request.method !== "POST") {
+        return methodNotAllowed(response, ["POST"]);
+      }
+      if (isFeishuApprovePath && request.method !== "POST") {
+        return methodNotAllowed(response, ["POST"]);
+      }
+      if (request.method === "POST" && (postOnlyPaths.has(requestUrl.pathname) || isFeishuApprovePath)) {
+        const securityCheck = validatePostRequestSecurity(request, requestUrl, {
+          allowNonJson: requestUrl.pathname === "/api/stt"
+        });
+        if (!securityCheck.ok) {
+          return json(response, securityCheck.status, { error: securityCheck.error });
+        }
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/plan") return await planApi(request, response, runtime);
+      if (request.method === "POST" && requestUrl.pathname === "/api/forecast") return await forecastApi(request, response, runtime);
+      if (request.method === "POST" && requestUrl.pathname === "/api/longtrip") return await longTripApi(request, response, runtime);
+      if (request.method === "POST" && requestUrl.pathname === "/api/operator/simulate") return await operatorApi(request, response);
+      if (request.method === "POST" && requestUrl.pathname === "/api/validate") return await validateApi(request, response);
+      if (requestUrl.pathname === "/api/cv/health") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        return await cvHealthApi(response, runtime);
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/cv/analyze") return await cvAnalyzeApi(request, response, runtime);
+      if (request.method === "POST" && requestUrl.pathname === "/api/execution") return await executionApi(request, response, runtime);
+      if (requestUrl.pathname === "/api/feishu/health") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        return json(response, 200, { ok: true, ...feishuConfigSummary(runtime.config), publicWriteEnabled: !remoteWriteDisabled(runtime.config) });
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/feishu/sync") return await feishuSyncApi(request, response, runtime);
+      if (requestUrl.pathname.startsWith("/api/feishu/sync/")) {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        return await feishuStatusApi(safeDecodeUriComponent(requestUrl.pathname.slice("/api/feishu/sync/".length)), response, runtime);
+      }
+      if (request.method === "POST" && isFeishuApprovePath) {
+        const strategyRecordId = requestUrl.pathname.slice("/api/feishu/strategy/".length, -"/approve".length);
+        return await feishuApproveApi(request, response, safeDecodeUriComponent(strategyRecordId), runtime);
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/stt") return await sttApi(request, response, runtime);
+      if (requestUrl.pathname === "/runtime-config.js") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        return await runtimeConfig(response, runtime);
+      }
+      return await staticFile(requestUrl.pathname, response);
+    } catch (error) {
+      const status = Number(error?.statusCode) || 500;
+      if (status >= 500) console.error("FlowTwin request failed without logging request data or credentials");
+      const code = status === 413
+        ? "REQUEST_TOO_LARGE"
+        : status === 400
+          ? (SAFE_BAD_REQUEST_CODES.has(error?.message) ? error.message : "INVALID_JSON")
+          : "INTERNAL_SERVER_ERROR";
+      return json(response, status, { error: code });
     }
-    if (requestUrl.pathname === "/api/contracts") {
-      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-      return json(response, 200, API_CONTRACTS);
-    }
-    if (["/api/route", "/api/poi", "/api/weather"].includes(requestUrl.pathname)) {
-      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-      if (requestUrl.pathname === "/api/route") return await routeApi(requestUrl, response);
-      if (requestUrl.pathname === "/api/poi") return await poiApi(requestUrl, response);
-      return await weatherApi(requestUrl, response);
-    }
-    const postOnlyPaths = new Set([
-      "/api/plan",
-      "/api/forecast",
-      "/api/longtrip",
-      "/api/operator/simulate",
-      "/api/validate",
-      "/api/cv/analyze",
-      "/api/execution",
-      "/api/feishu/sync",
-      "/api/stt"
-    ]);
-    if (postOnlyPaths.has(requestUrl.pathname) && request.method !== "POST") {
-      return methodNotAllowed(response, ["POST"]);
-    }
-    if (requestUrl.pathname.startsWith("/api/feishu/strategy/")
-      && requestUrl.pathname.endsWith("/approve")
-      && request.method !== "POST") {
-      return methodNotAllowed(response, ["POST"]);
-    }
-    if (request.method === "POST" && requestUrl.pathname === "/api/plan") return await planApi(request, response);
-    if (request.method === "POST" && requestUrl.pathname === "/api/forecast") return await forecastApi(request, response);
-    if (request.method === "POST" && requestUrl.pathname === "/api/longtrip") return await longTripApi(request, response);
-    if (request.method === "POST" && requestUrl.pathname === "/api/operator/simulate") return await operatorApi(request, response);
-    if (request.method === "POST" && requestUrl.pathname === "/api/validate") return await validateApi(request, response);
-    if (requestUrl.pathname === "/api/cv/health") {
-      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-      return await cvHealthApi(response);
-    }
-    if (request.method === "POST" && requestUrl.pathname === "/api/cv/analyze") return await cvAnalyzeApi(request, response);
-    if (request.method === "POST" && requestUrl.pathname === "/api/execution") return await executionApi(request, response);
-    if (requestUrl.pathname === "/api/feishu/health") {
-      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-      return json(response, 200, { ok: true, ...feishuConfigSummary(config), publicWriteEnabled: !remoteWriteDisabled() });
-    }
-    if (request.method === "POST" && requestUrl.pathname === "/api/feishu/sync") return await feishuSyncApi(request, response);
-    if (requestUrl.pathname.startsWith("/api/feishu/sync/")) {
-      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-      return await feishuStatusApi(decodeURIComponent(requestUrl.pathname.slice("/api/feishu/sync/".length)), response);
-    }
-    if (request.method === "POST" && requestUrl.pathname.startsWith("/api/feishu/strategy/") && requestUrl.pathname.endsWith("/approve")) {
-      const strategyRecordId = requestUrl.pathname.slice("/api/feishu/strategy/".length, -"/approve".length);
-      return await feishuApproveApi(request, response, decodeURIComponent(strategyRecordId));
-    }
-    if (request.method === "POST" && requestUrl.pathname === "/api/stt") return await sttApi(request, response);
-    if (requestUrl.pathname === "/runtime-config.js") {
-      if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-      return await runtimeConfig(response);
-    }
-    return await staticFile(requestUrl.pathname, response);
-  } catch (error) {
-    const status = Number(error?.statusCode) || 500;
-    if (status >= 500) console.error("FlowTwin request failed without logging request data or credentials");
-    return json(response, status, { error: status === 413 ? "REQUEST_TOO_LARGE" : status === 400 ? "INVALID_JSON" : "INTERNAL_SERVER_ERROR" });
-  }
+  };
 }
+
+const requestHandler = createRequestHandler();
 
 async function startServer() {
   config = await loadConfig({ root });
+  rateLimiter = createRateLimiter({
+    ...readRateLimitConfig(config.rateLimitEnv || process.env),
+    trustProxy: config.trustProxy || config.rateLimitEnv?.FLOWTWIN_TRUST_PROXY || process.env.FLOWTWIN_TRUST_PROXY
+  });
   enterprisePrior = await loadEnterpriseDemandPrior({ root, filePath: join(root, "runtime", "enterprise-demand-prior.json") });
   // Disk cache is ignored by Git and blocked from static serving. It lowers
   // repeated-demo quota use without replacing live route verification.

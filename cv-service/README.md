@@ -63,7 +63,7 @@ PADDLEOCR_TEXT_REC_MODEL_NAME=PP-OCRv4_mobile_rec
 
 ### Windows 本地启动说明
 
-项目目录含中文时，Paddle 的底层推理组件在少数 Windows 环境中可能无法稳定读取模型文件。推荐把已预置的模型副本同步到 `%TEMP%\flowtwin-cv-models`（ASCII 路径），再将上述两个 `*_MODEL_DIR` 指向该目录；完整的可直接执行脚本见项目根目录的 `本地启动说明.md`。这不会下载模型，也不会把模型权重提交到 Git。
+项目目录含中文时，Paddle 的底层推理组件在少数 Windows 环境中可能无法稳定读取模型文件。推荐把已预置的模型副本同步到 `%TEMP%\flowtwin-cv-models`（ASCII 路径），再将 `PADDLEOCR_TEXT_DET_MODEL_DIR` 与 `PADDLEOCR_TEXT_REC_MODEL_DIR` 指向该目录（配合上方的 `PADDLEOCR_LOCAL_ONLY=1` 与 `CV_SERVICE_URL=http://127.0.0.1:5099` 启动）。这不会下载模型，也不会把模型权重提交到 Git。
 
 ## 启动与测试
 

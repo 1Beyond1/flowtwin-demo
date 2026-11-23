@@ -83,8 +83,8 @@ test("IPv4, mapped IPv6, and compressed IPv6 identities normalize consistently",
   assert.equal(normalizeClientIp("192.0.2.10:443"), null);
 });
 
-test("proxy headers are ignored by default and trusted only with the explicit switch", () => {
-  const request = makeRequest({
+test("proxy headers are ignored by default and hardened across hop and cloudflare modes", () => {
+  const fromPublicPeer = makeRequest({
     ip: "::ffff:192.0.2.10",
     headers: {
       "cf-connecting-ip": "2001:0db8:0:0:0:0:0:1",
@@ -92,17 +92,42 @@ test("proxy headers are ignored by default and trusted only with the explicit sw
       "x-real-ip": "203.0.113.30"
     }
   });
-  assert.equal(getClientIdentity(request, { trustProxy: false }), "192.0.2.10");
-  assert.equal(getClientIdentity(request, { trustProxy: "0" }), "192.0.2.10");
-  assert.equal(getClientIdentity(request, { trustProxy: true }), "2001:db8::1");
+  // Direct public socket peers are never trusted as reverse proxies even when
+  // FLOWTWIN_TRUST_PROXY is enabled.
+  assert.equal(getClientIdentity(fromPublicPeer, { trustProxy: false }), "192.0.2.10");
+  assert.equal(getClientIdentity(fromPublicPeer, { trustProxy: "0" }), "192.0.2.10");
+  assert.equal(getClientIdentity(fromPublicPeer, { trustProxy: "1" }), "192.0.2.10");
+  assert.equal(getClientIdentity(fromPublicPeer, { trustProxy: "cloudflare" }), "192.0.2.10");
 
-  const forwardedOnly = makeRequest({
-    ip: "192.0.2.10",
-    headers: { "cf-connecting-ip": "not-an-ip", "x-forwarded-for": "2001:0db8::2, 198.51.100.20" }
+  // Behind a loopback/private proxy in standard hop mode ("1"), spoofed
+  // CF-Connecting-IP and leftmost X-Forwarded-For entries are ignored; only the
+  // rightmost hop appended by the trusted proxy is used.
+  const fromLoopbackProxy = makeRequest({
+    ip: "::ffff:127.0.0.1",
+    headers: {
+      "cf-connecting-ip": "2001:0db8::99",
+      "x-forwarded-for": "2001:0db8::2, 198.51.100.20",
+      "x-real-ip": "203.0.113.30"
+    }
   });
-  assert.equal(getClientIdentity(forwardedOnly, { trustProxy: true }), "2001:db8::2");
-  const arbitraryOnly = makeRequest({ ip: "192.0.2.10", headers: { "x-real-ip": "203.0.113.30" } });
-  assert.equal(getClientIdentity(arbitraryOnly, { trustProxy: true }), "192.0.2.10");
+  assert.equal(getClientIdentity(fromLoopbackProxy, { trustProxy: "0" }), "127.0.0.1");
+  assert.equal(getClientIdentity(fromLoopbackProxy, { trustProxy: "1" }), "198.51.100.20");
+  assert.equal(getClientIdentity(fromLoopbackProxy, { trustProxy: true }), "198.51.100.20");
+  // Two-hop mode reads the second entry from the right.
+  assert.equal(getClientIdentity(fromLoopbackProxy, { trustProxy: "2" }), "2001:db8::2");
+  // Cloudflare mode trusts CF-Connecting-IP only from a trusted proxy peer.
+  assert.equal(getClientIdentity(fromLoopbackProxy, { trustProxy: "cloudflare" }), "2001:db8::99");
+
+  // Private RFC1918 proxy with a malformed rightmost XFF falls back to peer IP
+  // rather than trusting an attacker-controlled leftmost entry.
+  const malformedRightmost = makeRequest({
+    ip: "10.0.0.5",
+    headers: { "x-forwarded-for": "198.51.100.1, not-an-ip" }
+  });
+  assert.equal(getClientIdentity(malformedRightmost, { trustProxy: "1" }), "10.0.0.5");
+
+  const arbitraryOnly = makeRequest({ ip: "::1", headers: { "x-real-ip": "203.0.113.30" } });
+  assert.equal(getClientIdentity(arbitraryOnly, { trustProxy: "1" }), "::1");
 });
 
 test("a scope reaches its threshold, returns a retry window, and recovers", () => {
