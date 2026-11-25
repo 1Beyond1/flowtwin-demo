@@ -16,9 +16,42 @@
 
   // 必须和 lib/config.mjs 的 DEFAULT_ORIGIN.name 一致：后端用这个名字判断
   // "用户没说起点"，前端用它判断"这个起点是默认值，不是用户要求的"。
-  const DEFAULT_ORIGIN_NAME = "能链北京总部";
-  const DEFAULT_ORIGIN_NOTE = "北京市朝阳区姚家园南路 1 号 · 演示默认起点";
+  const DEFAULT_ORIGIN_NAME = "北京国贸 CBD";
+  const DEFAULT_ORIGIN_NOTE = "北京市朝阳区建国门外大街 · 默认起点";
   const DEFAULT_ORIGIN_CITY = "北京";
+  const DEFAULT_ORIGIN_COORDINATE = [116.461, 39.909];
+  const DEFAULT_ORIGIN = {
+    name: DEFAULT_ORIGIN_NAME,
+    note: DEFAULT_ORIGIN_NOTE,
+    city: DEFAULT_ORIGIN_CITY,
+    coordinate: DEFAULT_ORIGIN_COORDINATE.slice()
+  };
+
+  function resolveConfiguredDefaultOrigin(rawConfig = window.FLOWTWIN_CONFIG || config) {
+    const raw = rawConfig?.defaultOrigin && typeof rawConfig.defaultOrigin === "object"
+      ? rawConfig.defaultOrigin
+      : null;
+    const rawName = typeof raw?.name === "string" ? raw.name.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 80) : "";
+    const name = rawName || DEFAULT_ORIGIN_NAME;
+    const rawCoord = Array.isArray(raw?.coordinate) ? raw.coordinate
+      : (Array.isArray(raw?.location) ? raw.location : null);
+    const lng = rawCoord && rawCoord.length >= 2 ? Number(rawCoord[0]) : Number.NaN;
+    const lat = rawCoord && rawCoord.length >= 2 ? Number(rawCoord[1]) : Number.NaN;
+    const hasCustomCoord = Number.isFinite(lng) && Number.isFinite(lat)
+      && lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
+    const coordinate = hasCustomCoord ? [lng, lat] : DEFAULT_ORIGIN_COORDINATE.slice();
+    const isCustom = name !== DEFAULT_ORIGIN_NAME
+      || coordinate[0] !== DEFAULT_ORIGIN_COORDINATE[0]
+      || coordinate[1] !== DEFAULT_ORIGIN_COORDINATE[1];
+    const rawNote = typeof raw?.note === "string" ? raw.note.trim().slice(0, 120) : "";
+    const rawAddress = typeof raw?.address === "string" ? raw.address.trim().slice(0, 100) : "";
+    const note = rawNote || (isCustom ? `${rawAddress || name} · 默认起点` : DEFAULT_ORIGIN_NOTE);
+    const rawCity = typeof raw?.city === "string" ? raw.city.trim().slice(0, 40) : "";
+    const city = rawCity || (isCustom ? "" : DEFAULT_ORIGIN_CITY);
+    return { name, note, city, coordinate, isCustom };
+  }
+
+  Object.assign(DEFAULT_ORIGIN, resolveConfiguredDefaultOrigin(config));
   // 标准正态的 90 分位，用于在 p50/p90 和标准差之间换算。与 lib/longtrip.mjs
   // 的同名常量保持一致，两边算的是同一条路线的同一个 P90。
   const Z90 = 1.2816;
@@ -26,7 +59,7 @@
   const ADAPTIVE_LONG_TRIP_MAX_STOPS = 12;
   const COMPLETED_ROUTE_PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
   const COMPLETED_ROUTE_PLAN_STORAGE_KEY = "flowtwin:completed-route-plan:v2";
-  const DEFAULT_VISION_SAMPLE_URL = "/assets/vision/default-camera-scene.png";
+  const DEFAULT_VISION_SAMPLE_URL = "/assets/vision/default-camera-scene.jpg";
   // 地图/演示输入没有支付与驶离事件时间。单独保留一个透明的缓冲项，
   // 避免把这段时间偷偷塞进“排队”等字段；后续企业适配器可以按站点覆盖。
   const DEFAULT_PAYMENT_EXIT_MINUTES = Object.freeze({ fuel: 3, electric: 5 });
@@ -36,12 +69,12 @@
   // presentation evidence, not a camera feed and not a source of OCR truth.
   const SIMULATION_ASSETS = Object.freeze({
     fuel: Object.freeze({
-      day: Object.freeze({ arrival: "/assets/simulation/fuel-front-day.png", station: "/assets/simulation/fuel-overhead-day.png" }),
-      night: Object.freeze({ arrival: "/assets/simulation/fuel-front-night.png", station: "/assets/simulation/fuel-overhead-night.png" })
+      day: Object.freeze({ arrival: "/assets/simulation/fuel-front-day.jpg", station: "/assets/simulation/fuel-overhead-day.jpg" }),
+      night: Object.freeze({ arrival: "/assets/simulation/fuel-front-night.jpg", station: "/assets/simulation/fuel-overhead-night.jpg" })
     }),
     electric: Object.freeze({
-      day: Object.freeze({ arrival: "/assets/simulation/ev-front-day.png", station: "/assets/simulation/ev-overhead-day.png" }),
-      night: Object.freeze({ arrival: "/assets/simulation/ev-front-night.png", station: "/assets/simulation/ev-overhead-night.png" })
+      day: Object.freeze({ arrival: "/assets/simulation/ev-front-day.jpg", station: "/assets/simulation/ev-overhead-day.jpg" }),
+      night: Object.freeze({ arrival: "/assets/simulation/ev-front-night.jpg", station: "/assets/simulation/ev-overhead-night.jpg" })
     })
   });
   // The walkthrough is a review surface, not a race.  Stage changes are
@@ -62,63 +95,63 @@
   }
 
   const FALLBACK = {
-    origin: [116.491, 39.951],
-    destination: [116.410, 39.509],
+    origin: [116.461, 39.909],
+    destination: [116.3789, 39.865],
     routes: {
       fastest: [
-        [116.491, 39.951], [116.523, 39.907], [116.531, 39.844], [116.514, 39.777],
-        [116.482, 39.708], [116.454, 39.637], [116.426, 39.566], [116.410, 39.509]
+        [116.461, 39.909], [116.449, 39.900], [116.435, 39.892], [116.418, 39.884],
+        [116.401, 39.877], [116.389, 39.870], [116.3789, 39.865]
       ],
       reliable: [
-        [116.491, 39.951], [116.515, 39.912], [116.505, 39.852], [116.489, 39.789],
-        [116.466, 39.715], [116.444, 39.648], [116.425, 39.585], [116.410, 39.509]
+        [116.461, 39.909], [116.453, 39.896], [116.437, 39.885], [116.420, 39.876],
+        [116.404, 39.870], [116.390, 39.867], [116.3789, 39.865]
       ],
       cheapest: [
-        [116.491, 39.951], [116.472, 39.913], [116.451, 39.852], [116.436, 39.790],
-        [116.421, 39.721], [116.411, 39.652], [116.405, 39.581], [116.410, 39.509]
+        [116.461, 39.909], [116.442, 39.904], [116.425, 39.896], [116.408, 39.888],
+        [116.394, 39.879], [116.385, 39.871], [116.3789, 39.865]
       ]
     },
     stations: [
       {
         id: "fallback-1",
-        name: "亦庄能源驿站",
-        address: "北京市大兴区荣华南路",
-        location: [116.492, 39.789],
+        name: "双井超级充电中心",
+        address: "北京市朝阳区广渠路沿线",
+        location: [116.446, 39.894],
         type: "充电站"
       },
       {
         id: "fallback-2",
-        name: "大兴榆垡综合能源站",
-        address: "北京市大兴区榆垡镇",
-        location: [116.445, 39.648],
+        name: "方庄综合能源驿站",
+        address: "北京市丰台区蒲黄榆路",
+        location: [116.421, 39.877],
         type: "充电站"
       },
       {
         id: "fallback-3",
-        name: "机场东侧补能站",
-        address: "北京大兴国际机场东侧",
-        location: [116.421, 39.556],
+        name: "南站东广场超充站",
+        address: "北京市丰台区北京南站东侧",
+        location: [116.392, 39.868],
         type: "充电站"
       },
       {
         id: "fallback-4",
-        name: "南城综合能源服务站",
-        address: "北京市大兴区黄村镇",
-        location: [116.350, 39.725],
+        name: "广渠门综合加油站",
+        address: "北京市东城区广渠门外大街",
+        location: [116.441, 39.896],
         type: "加油站"
       },
       {
         id: "fallback-5",
-        name: "亦庄东侧加油站",
-        address: "北京市大兴区荣华南路",
-        location: [116.496, 39.790],
+        name: "左安门能源服务站",
+        address: "北京市丰台区左安门外大街",
+        location: [116.428, 39.878],
         type: "加油站"
       },
       {
         id: "fallback-6",
-        name: "机场南路加油站",
-        address: "北京市大兴区机场南路",
-        location: [116.422, 39.584],
+        name: "开阳路综合加油站",
+        address: "北京市丰台区开阳路南段",
+        location: [116.388, 39.869],
         type: "加油站"
       }
     ]
@@ -141,7 +174,7 @@
     displayMode: "reviewer",
     selectedRoute: "reliable",
     routeSelectionTouched: false,
-    origin: FALLBACK.origin,
+    origin: DEFAULT_ORIGIN.coordinate.slice(),
     destination: FALLBACK.destination,
     routeRecords: {},
     // Reuses a completed *demo-simulation* plan during the same short forecast
@@ -179,14 +212,24 @@
     // 后端 formatPlanResponse 一直在返回 originLocation，但前端过去只取了
     // destinationLocation。结果是"从上海去杭州"照样从北京总部起算——画出来的
     // 折线是真的，却是另一趟行程的。起点必须和终点一样被解析、被显示、被校验。
-    originName: DEFAULT_ORIGIN_NAME,
-    originNote: DEFAULT_ORIGIN_NOTE,
-    originCity: DEFAULT_ORIGIN_CITY,
-    originSource: "演示默认起点",
+    originName: DEFAULT_ORIGIN.name,
+    originNote: DEFAULT_ORIGIN.note,
+    originCity: DEFAULT_ORIGIN.city,
+    originSource: "default",
     originAccuracy: null,
-    destinationName: "北京大兴国际机场",
+    destinationName: "北京南站",
     destinationCity: "北京",
     energyType: "electric",
+    sttConfigured: Boolean(config.sttEnabled),
+    feishuConfigured: false,
+    amapLoading: false,
+    energySwitchVersion: 0,
+    validationRequestVersion: 0,
+    operatorSimRequestVersion: 0,
+    serviceApplyVersion: 0,
+    visionHealthVersion: 0,
+    weatherRequestVersion: 0,
+    simulationSessionId: 0,
     // A hybrid carries two independent levels. `hybridLevels` is the source of
     // truth for both; `energyPercent` mirrors whichever branch is being planned,
     // so every existing single-level calculation keeps working unchanged.
@@ -285,11 +328,10 @@
     }
   };
 
-  // The first-run example intentionally leaves arrival time and reserve open.
-  // Those are optional controls: pinning them in a static demo sentence makes
-  // the experience depend on the viewer's local clock and can turn a useful
-  // meal recommendation into an artificial "late" failure.
-  const DEFAULT_DEMO_INTENT = "从能链北京总部前往上海东方明珠广播电视塔，优先准时";
+  // Default trip prompt works reliably in both live AMap and offline sandbox
+  // modes so users can immediately inspect route comparison, forecast curves,
+  // simulation driving, operator strategy, and reproducible validation.
+  const DEFAULT_DEMO_INTENT = "去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时";
 
   const ENERGY_PROFILES = {
     // Keep the browser mirror identical to lib/energy.mjs: the demo EV is
@@ -308,6 +350,145 @@
 
   const ENERGY_TYPES = ["electric", "fuel", "hybrid"];
   const VOICE_AUTO_PLAN_STORAGE_KEY = "FLOWTWIN_VOICE_AUTO_PLAN";
+  const DISPLAY_MODE_STORAGE_KEY = "FLOWTWIN_DISPLAY_MODE";
+  const SAFE_IMAGE_SRC_RE = /^(?:data:image\/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=\s]+|\/assets\/(?!.*\.\.)[A-Za-z0-9._/-]+)$/i;
+  const SAFE_VIDEO_SRC_RE = /^(?:blob:[^\s"'<>]+|data:video\/(?:mp4|webm|quicktime);base64,[A-Za-z0-9+/=\s]+|\/assets\/(?!.*\.\.)[A-Za-z0-9._/-]+)$/i;
+
+  // Complete local inline SVG icon set (24x24 stroke icons) so zero buttons or
+  // badges depend on external CDNs and everything renders crisply offline.
+  const LUCIDE_ICON_PATHS = Object.freeze({
+    activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+    "alert-circle": '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
+    armchair: '<path d="M19 9V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v3"/><path d="M3 16a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5a2 2 0 0 0-4 0v2H7v-2a2 2 0 0 0-4 0Z"/><path d="M5 18v2"/><path d="M19 18v2"/>',
+    "arrow-right": '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+    "arrow-right-circle": '<circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="m12 16 4-4-4-4"/>',
+    "arrow-up": '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+    "bar-chart-3": '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+    "battery-charging": '<path d="M15 7h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-2"/><path d="M6 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1"/><path d="m11 7-3 5h4l-3 5"/><line x1="22" x2="22" y1="11" y2="13"/>',
+    "battery-medium": '<rect width="16" height="10" x="2" y="7" rx="2" ry="2"/><line x1="22" x2="22" y1="11" y2="13"/><line x1="6" x2="6" y1="11" y2="13"/><line x1="10" x2="10" y1="11" y2="13"/>',
+    "book-open-check": '<path d="M12 21V7"/><path d="m16 12 2 2 4-4"/><path d="M22 6V4a1 1 0 0 0-1-1h-5a4 4 0 0 0-4 4 4 4 0 0 0-4-4H3a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h6a3 3 0 0 1 3 3 3 3 0 0 1 3-3h6a1 1 0 0 0 1-1v-1.3"/>',
+    "building-2": '<path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/>',
+    calculator: '<rect width="16" height="20" x="4" y="2" rx="2"/><line x1="8" x2="16" y1="6" y2="6"/><line x1="16" x2="16" y1="14" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/>',
+    "calendar-clock": '<path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h5"/><path d="M17.5 17.5 16 16.3V14"/><circle cx="16" cy="16" r="6"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    "check-circle-2": '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+    "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+    "chevron-up": '<path d="m18 15-6-6-6 6"/>',
+    "circle-dot": '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2"/>',
+    "clock-3": '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16.5 12"/>',
+    "clock-alert": '<path d="M12 6v6l4 2"/><path d="M16 21.16a10 10 0 1 1 5-13.516"/><path d="M20 11.5v6"/><path d="M20 21.5h.01"/>',
+    cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+    "cloud-fog": '<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M16 17H7"/><path d="M17 21H9"/>',
+    "cloud-lightning": '<path d="M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973"/><path d="m13 12-3 5h4l-3 5"/>',
+    "cloud-rain": '<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M16 14v6"/><path d="M8 14v6"/><path d="M12 16v6"/>',
+    "cloud-sun": '<path d="M12 2v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="M20 12h2"/><path d="m19.07 4.93-1.41 1.41"/><path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/>',
+    coffee: '<path d="M10 2v2"/><path d="M14 2v2"/><path d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/><path d="M6 2v2"/>',
+    database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+    "external-link": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+    "flask-conical": '<path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2"/><path d="M6.453 15h11.094"/><path d="M8.5 2h7"/>',
+    fuel: '<line x1="3" x2="15" y1="22" y2="22"/><line x1="4" x2="14" y1="9" y2="9"/><path d="M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18"/><path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2 2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5"/>',
+    "git-compare-arrows": '<circle cx="5" cy="6" r="3"/><path d="M12 6h5a2 2 0 0 1 2 2v7"/><path d="m15 9-3-3 3-3"/><circle cx="19" cy="18" r="3"/><path d="M12 18H7a2 2 0 0 1-2-2V9"/><path d="m9 15 3 3-3 3"/>',
+    hand: '<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+    info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+    "loader-circle": '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+    "locate-fixed": '<line x1="2" x2="5" y1="12" y2="12"/><line x1="19" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="5"/><line x1="12" x2="12" y1="19" y2="22"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/>',
+    "log-out": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>',
+    map: '<path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"/><path d="M15 5.764v15"/><path d="M9 3.236v15"/>',
+    "map-pin": '<path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/>',
+    "map-pin-off": '<path d="M12.75 7.09a3 3 0 0 1 2.16 2.16"/><path d="M17.072 17.072c-1.634 2.17-3.527 3.912-4.471 4.727a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 1.432-4.568"/><path d="m2 2 20 20"/><path d="M8.475 2.818A8 8 0 0 1 20 10c0 1.183-.31 2.377-.81 3.533"/><path d="M9.13 9.13a3 3 0 0 0 3.74 3.74"/>',
+    "messages-square": '<path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/>',
+    navigation: '<polygon points="3 11 22 2 13 21 11 13 3 11"/>',
+    "panel-left-close": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/>',
+    "panel-left-open": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/>',
+    "panel-right-close": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m8 9 3 3-3 3"/>',
+    "panel-right-open": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/>',
+    pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+    play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+    receipt: '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/>',
+    "refresh-cw": '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+    "rotate-ccw": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+    "rotate-cw": '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+    route: '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+    "scan-face": '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01"/><path d="M15 9h.01"/>',
+    "scan-line": '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/>',
+    "scan-search": '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/><path d="m16 16-1.9-1.9"/>',
+    settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+    "shield-check": '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+    "skip-forward": '<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/>',
+    snowflake: '<line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
+    sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/>',
+    store: '<path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/><path d="M2 7h20"/><path d="M22 7v3a2 2 0 0 1-2 2a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12a2 2 0 0 1-2-2V7"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+    "trending-down": '<polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>',
+    "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
+    utensils: '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
+    "wallet-cards": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2"/><path d="M3 11h3c.8 0 1.6.3 2.1.9l1.1.9c1.6 1.6 4.1 1.6 5.7 0l1.1-.9c.5-.5 1.3-.9 2.1-.9H21"/>',
+    wifi: '<path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/>',
+    "wifi-off": '<path d="M12 20h.01"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/><path d="M5 12.859a10 10 0 0 1 5.17-2.69"/><path d="M19 12.859a10 10 0 0 0-2.007-1.523"/><path d="M2 8.82a15 15 0 0 1 4.177-2.643"/><path d="M22 8.82a15 15 0 0 0-11.288-3.764"/><path d="m2 2 20 20"/>',
+    wind: '<path d="M12.8 19.6A2 2 0 1 0 14 16H2"/><path d="M17.5 8a2.5 2.5 0 1 1 2 4H2"/><path d="M9.8 4.4A2 2 0 1 1 11 8H2"/>',
+    wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+    x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>'
+  });
+
+  function isSafeImageSrc(value) {
+    return typeof value === "string" && SAFE_IMAGE_SRC_RE.test(value.trim());
+  }
+
+  function isSafeVideoSrc(value) {
+    return typeof value === "string" && SAFE_VIDEO_SRC_RE.test(value.trim());
+  }
+
+  async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  function renderIcons(root = document, attrs = { "stroke-width": 1.9 }) {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    const strokeWidth = attrs?.["stroke-width"] ?? 1.9;
+    const nodes = root.querySelectorAll("[data-lucide]");
+    nodes.forEach((node) => {
+      const name = String(node.getAttribute("data-lucide") || "").trim();
+      const paths = LUCIDE_ICON_PATHS[name] || LUCIDE_ICON_PATHS.info;
+      if (node.tagName && node.tagName.toLowerCase() === "svg" && node.dataset.renderedIcon === name) return;
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      svg.setAttribute("width", "24");
+      svg.setAttribute("height", "24");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", String(strokeWidth));
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      svg.setAttribute("aria-hidden", "true");
+      svg.setAttribute("data-lucide", name);
+      svg.dataset.renderedIcon = name;
+      for (const attr of Array.from(node.attributes || [])) {
+        if (attr.name === "data-lucide" || attr.name === "data-rendered-icon") continue;
+        if (attr.name === "class") {
+          svg.setAttribute("class", `lucide lucide-${name} ${attr.value}`.trim());
+        } else {
+          svg.setAttribute(attr.name, attr.value);
+        }
+      }
+      if (!svg.hasAttribute("class")) svg.setAttribute("class", `lucide lucide-${name}`);
+      svg.innerHTML = paths;
+      node.replaceWith(svg);
+    });
+  }
+
+  window.__FLOWTWIN_ICONS__ = LUCIDE_ICON_PATHS;
+  window.lucide = {
+    createIcons: (options = {}) => renderIcons(options.root || document, options.attrs || { "stroke-width": 1.9 })
+  };
 
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -315,6 +496,15 @@
 
   function normalizeDisplayMode(value) {
     return value === "user" ? "user" : "reviewer";
+  }
+
+  function readDisplayMode() {
+    try {
+      const saved = window.localStorage.getItem(DISPLAY_MODE_STORAGE_KEY);
+      return saved ? normalizeDisplayMode(saved) : "reviewer";
+    } catch (_) {
+      return "reviewer";
+    }
   }
 
   function readVoiceAutoPlan() {
@@ -368,6 +558,9 @@
   function setDisplayMode(mode, options = {}) {
     const next = normalizeDisplayMode(mode);
     state.displayMode = next;
+    if (options.persist !== false) {
+      try { window.localStorage.setItem(DISPLAY_MODE_STORAGE_KEY, next); } catch (_) { /* ignore */ }
+    }
     if (document.body) document.body.dataset.displayMode = next;
     byId("app")?.setAttribute("data-display-mode", next);
     $$('[data-display-mode-option]').forEach((button) => {
@@ -376,17 +569,15 @@
       button.setAttribute("aria-checked", String(active));
     });
     syncStaticDisplayCopy();
-    // User mode never leaves an operations/evidence view open after the entry
-    // points are hidden. Returning to driver keeps the safety and route panels
-    // available without duplicating a second DOM tree.
+    // Simplified mode never leaves an operations/evidence view open after the
+    // entry points are hidden. Returning to driver keeps the safety and route
+    // panels available without duplicating a second DOM tree.
     if (next === "user" && state.mode !== "driver") setMode("driver");
     if (state.hasPlannedRoute) renderRouteCards();
   }
 
-  function refreshIcons() {
-    if (window.lucide && typeof window.lucide.createIcons === "function") {
-      window.lucide.createIcons({ attrs: { "stroke-width": 1.9 } });
-    }
+  function refreshIcons(root = document) {
+    renderIcons(root, { "stroke-width": 1.9 });
   }
 
   function initDemoNotice() {
@@ -410,6 +601,7 @@
   let modeChoicePreviousFocus = null;
   let originChoicePreviousFocus = null;
   let originChoiceBusy = false;
+  let originChoiceToken = 0;
   let versionInfoLoading = null;
 
   function modeChoiceFocusableElements() {
@@ -433,20 +625,40 @@
     status.dataset.tone = tone;
   }
 
+  function syncDefaultOriginFromConfig() {
+    const resolved = resolveConfiguredDefaultOrigin(window.FLOWTWIN_CONFIG || config);
+    const previousDefaultName = DEFAULT_ORIGIN.name;
+    DEFAULT_ORIGIN.name = resolved.name;
+    DEFAULT_ORIGIN.note = resolved.note;
+    DEFAULT_ORIGIN.city = resolved.city || (resolved.isCustom ? extractRegionCity(resolved.name) || "" : DEFAULT_ORIGIN_CITY);
+    DEFAULT_ORIGIN.coordinate = resolved.coordinate.slice();
+    FALLBACK.origin = resolved.coordinate.slice();
+    if (state.originSource === "default" || !state.originSource || state.originName === previousDefaultName) {
+      state.origin = DEFAULT_ORIGIN.coordinate.slice();
+      state.originName = DEFAULT_ORIGIN.name;
+      state.originNote = DEFAULT_ORIGIN.note;
+      state.originCity = DEFAULT_ORIGIN.city;
+      state.originSource = "default";
+    }
+    const settingsDefaultTitle = document.querySelector('[data-settings-origin="default"] strong');
+    if (settingsDefaultTitle) settingsDefaultTitle.textContent = DEFAULT_ORIGIN.name;
+    const modalDefaultTitle = document.querySelector('[data-origin-choice="default"] strong');
+    if (modalDefaultTitle) modalDefaultTitle.textContent = DEFAULT_ORIGIN.name;
+    updateOriginSurface();
+    renderSettingsOrigin();
+  }
+
   function updateOriginSurface() {
-    const displayName = state.originName === DEFAULT_ORIGIN_NAME
-      ? "能链中心 · 北京总部"
+    const displayName = state.originName === DEFAULT_ORIGIN.name
+      ? DEFAULT_ORIGIN.name
       : (state.originName || "当前位置");
     setText("originName", displayName);
     setText("originMeta", state.originNote || "起点已按本次选择更新");
     const input = byId("intentInput");
     if (input) {
       const current = input.value.trim();
-      // The initial prompt explicitly contains the demo headquarters. Once a
-      // reviewer chooses the browser location, keeping that old phrase would
-      // make the parser treat the headquarters as a new, explicit origin.
-      if (!current || current === DEFAULT_DEMO_INTENT || current.startsWith(`从${DEFAULT_ORIGIN_NAME}`)) {
-        input.value = (current || DEFAULT_DEMO_INTENT).replaceAll(DEFAULT_ORIGIN_NAME, state.originName || DEFAULT_ORIGIN_NAME);
+      if (current && current.startsWith(`从${DEFAULT_ORIGIN.name}`) && state.originName && state.originName !== DEFAULT_ORIGIN.name) {
+        input.value = current.replaceAll(DEFAULT_ORIGIN.name, state.originName);
         fitIntentInput();
       }
     }
@@ -468,11 +680,11 @@
   }
 
   function setDefaultOrigin(options = {}) {
-    state.origin = FALLBACK.origin.slice();
-    state.originName = DEFAULT_ORIGIN_NAME;
-    state.originNote = DEFAULT_ORIGIN_NOTE;
-    state.originCity = DEFAULT_ORIGIN_CITY;
-    state.originSource = "演示默认起点";
+    state.origin = DEFAULT_ORIGIN.coordinate.slice();
+    state.originName = DEFAULT_ORIGIN.name;
+    state.originNote = DEFAULT_ORIGIN.note;
+    state.originCity = DEFAULT_ORIGIN.city;
+    state.originSource = "default";
     state.originAccuracy = null;
     updateOriginSurface();
     if (!options.deferMapRefresh) refreshOriginMapSurface();
@@ -480,10 +692,16 @@
 
   function waitForAmap(timeoutMs = 2600) {
     if (state.AMap) return Promise.resolve(state.AMap);
+    // In offline/fallback mode, AMap is not configured and will never load.
+    // Return immediately instead of burning 2.6s * 2 waiting on geolocation.
+    if (config.mapMode !== "live" || !config.amapKey || (!state.live && !state.amapLoading)) {
+      return Promise.resolve(null);
+    }
     return new Promise((resolve) => {
       const startedAt = Date.now();
       const check = () => {
         if (state.AMap) return resolve(state.AMap);
+        if (!state.amapLoading && !state.live) return resolve(null);
         if (Date.now() - startedAt >= timeoutMs) return resolve(null);
         window.setTimeout(check, 100);
       };
@@ -560,7 +778,7 @@
     state.originName = name;
     state.originNote = [address, `用户当前位置 · ${accuracyText}`, address ? "地址已解析" : "地址解析暂不可用"].filter(Boolean).join(" · ");
     state.originCity = normalizeRegionCity(city || district || township || extractRegionCity(address)) || null;
-    state.originSource = "用户当前位置（浏览器定位）";
+    state.originSource = "browser";
     state.originAccuracy = Number.isFinite(accuracy) ? accuracy : null;
     updateOriginSurface();
     if (!options.deferMapRefresh) refreshOriginMapSurface();
@@ -575,6 +793,7 @@
     const previous = originChoicePreviousFocus;
     originChoicePreviousFocus = null;
     originChoiceBusy = false;
+    $$('[data-origin-choice]').forEach((button) => { button.disabled = false; });
     if (previous && typeof previous.focus === "function" && document.contains(previous) && previous.offsetParent !== null) {
       previous.focus();
     } else {
@@ -583,28 +802,33 @@
   }
 
   async function handleOriginChoice(choice) {
-    if (originChoiceBusy) return;
     if (choice === "default") {
+      // Allow immediate cancellation/fallback even if geolocation is still pending.
+      originChoiceToken += 1;
+      originChoiceBusy = false;
       setDefaultOrigin();
       finishOriginChoice();
       return;
     }
-    if (choice !== "location") return;
+    if (originChoiceBusy || choice !== "location") return;
+    const token = ++originChoiceToken;
     originChoiceBusy = true;
     const buttons = $$('[data-origin-choice]');
-    buttons.forEach((button) => { button.disabled = true; });
-    setOriginChoiceStatus("正在请求浏览器定位权限……", "loading");
+    buttons.forEach((button) => { if (button.dataset.originChoice === "location") button.disabled = true; });
+    setOriginChoiceStatus("正在请求浏览器定位权限……（按 Esc 可直接使用默认起点）", "loading");
     try {
-      const result = await chooseBrowserOrigin();
-      setOriginChoiceStatus("已获取当前位置，正在进入体验……", "success");
-      showToast("起点已切换为用户当前位置", 2600);
+      await chooseBrowserOrigin();
+      if (token !== originChoiceToken) return;
+      setOriginChoiceStatus("已获取当前位置，正在进入工作台……", "success");
+      showToast("起点已切换为用户当前位置", 2600, "success");
       window.setTimeout(finishOriginChoice, 180);
     } catch (error) {
+      if (token !== originChoiceToken) return;
       originChoiceBusy = false;
       buttons.forEach((button) => { button.disabled = false; });
       const message = browserLocationError(error);
-      setOriginChoiceStatus(`${message}，仍可选择能链总部继续。`, "error");
-      showToast(`${message}，已保留能链总部`, 3600);
+      setOriginChoiceStatus(`${message}，仍可选择 ${DEFAULT_ORIGIN.name} 继续。`, "error");
+      showToast(`${message}，已保留 ${DEFAULT_ORIGIN.name}`, 3600, "warning");
     }
   }
 
@@ -613,18 +837,13 @@
     if (!backdrop || backdrop.hidden) return;
     setDisplayMode(mode);
     backdrop.hidden = true;
-    // The display mode is only the first part of the entry flow. Continue
-    // directly to the origin decision instead of returning focus to the page.
-    openOriginChoice();
+    document.body.classList.remove("mode-choice-open");
   }
 
   function openModeChoice() {
     const backdrop = byId("modeChoiceBackdrop");
     const panel = byId("modeChoicePanel");
     if (!backdrop || !panel) return;
-    // Every page visit starts from the reviewer view. The choice is a session
-    // decision only; it is deliberately not persisted between visits.
-    setDisplayMode("reviewer", { persist: false });
     modeChoicePreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     backdrop.hidden = false;
     document.body.classList.add("mode-choice-open");
@@ -640,7 +859,7 @@
     if (!backdrop || backdrop.hidden) return;
     if (event.key === "Escape") {
       event.preventDefault();
-      closeModeChoice("reviewer");
+      closeModeChoice(state.displayMode || "reviewer");
       return;
     }
     if (event.key !== "Tab") return;
@@ -669,7 +888,7 @@
     }
     originChoicePreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : modeChoicePreviousFocus;
     modeChoicePreviousFocus = null;
-    setOriginChoiceStatus("本次访问默认使用能链北京总部。", "");
+    setOriginChoiceStatus(`当前默认起点为 ${DEFAULT_ORIGIN.name}。`, "");
     backdrop.hidden = false;
     document.body.classList.add("mode-choice-open");
     window.setTimeout(() => {
@@ -703,14 +922,15 @@
 
   function initModeChoice() {
     const backdrop = byId("modeChoiceBackdrop");
-    if (!backdrop) return;
-    $$('[data-display-mode-choice]').forEach((button) => {
-      button.addEventListener("click", () => closeModeChoice(button.dataset.displayModeChoice));
-    });
-    backdrop.addEventListener("click", (event) => {
-      if (event.target === backdrop) closeModeChoice("reviewer");
-    });
-    document.addEventListener("keydown", handleModeChoiceKeydown);
+    if (backdrop) {
+      $$('[data-display-mode-choice]').forEach((button) => {
+        button.addEventListener("click", () => closeModeChoice(button.dataset.displayModeChoice));
+      });
+      backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop) closeModeChoice(state.displayMode || "reviewer");
+      });
+      document.addEventListener("keydown", handleModeChoiceKeydown);
+    }
     $$('[data-origin-choice]').forEach((button) => {
       button.addEventListener("click", () => void handleOriginChoice(button.dataset.originChoice));
     });
@@ -721,7 +941,8 @@
       });
       document.addEventListener("keydown", handleOriginChoiceKeydown);
     }
-    openModeChoice();
+    // Boot directly into the workspace using persisted preferences without
+    // trapping users behind forced entry modals.
   }
 
   function settingsFocusableElements() {
@@ -841,8 +1062,8 @@
   }
 
   function renderSettingsOrigin() {
-    const isDefault = state.originName === DEFAULT_ORIGIN_NAME;
-    setText("settingsOriginCurrent", isDefault ? "能链中心 · 北京总部" : (state.originName || "当前位置"));
+    const isDefault = state.originSource !== "browser" && state.originName === DEFAULT_ORIGIN.name;
+    setText("settingsOriginCurrent", isDefault ? DEFAULT_ORIGIN.name : (state.originName || "当前位置"));
     setText("settingsOriginMeta", state.originNote || "起点已按本次选择更新");
     $$('[data-settings-origin]').forEach((button) => {
       const active = (button.dataset.settingsOrigin === "default") === isDefault;
@@ -885,13 +1106,15 @@
       invalidatePlanForOriginChange();
       renderSettingsOrigin();
       setSettingsOriginStatus(
-        choice === "location" ? "已切换为当前位置；如已有路线，请重新提交规划。" : "已切换为能链总部；如已有路线，请重新提交规划。",
+        choice === "location"
+          ? "已切换为当前位置；如已有路线，请重新提交规划。"
+          : `已切换为 ${DEFAULT_ORIGIN.name}；如已有路线，请重新提交规划。`,
         "success"
       );
-      showToast(choice === "location" ? "起点已切换为用户当前位置" : "起点已切换为能链总部", 2800);
+      showToast(choice === "location" ? "起点已切换为用户当前位置" : `起点已切换为 ${DEFAULT_ORIGIN.name}`, 2800, "success");
     } catch (error) {
       setSettingsOriginStatus(`${browserLocationError(error)}，仍保留当前起点。`, "error");
-      showToast(`${browserLocationError(error)}，未修改起点`, 3600);
+      showToast(`${browserLocationError(error)}，未修改起点`, 3600, "warning");
     } finally {
       originChoiceBusy = false;
       buttons.forEach((button) => { button.disabled = false; });
@@ -914,7 +1137,11 @@
     }, 0);
     renderSettingsOrigin();
     setSettingsOriginStatus(
-      state.originName === DEFAULT_ORIGIN_NAME ? "当前使用能链总部" : "当前使用用户当前位置",
+      state.originSource === "browser"
+        ? "当前使用用户当前位置"
+        : state.originName === DEFAULT_ORIGIN.name
+          ? `当前使用 ${DEFAULT_ORIGIN.name}`
+          : `当前起点：${state.originName || DEFAULT_ORIGIN.name}`,
       ""
     );
     loadVersionInfo();
@@ -991,10 +1218,31 @@
     }
   }
 
-  function showToast(message, duration) {
+  function inferToastTone(message, explicitTone) {
+    if (explicitTone && ["success", "info", "warning", "error"].includes(explicitTone)) return explicitTone;
+    const text = String(message || "");
+    if (/失败|错误|异常|未能定位|未生成虚假/.test(text)) return "error";
+    if (/未配置|暂不可用|无法|不支持|未找到|未识别|未获得|未检测到|超时|拒绝|未采集|请先|请稍候/.test(text)) return "warning";
+    return "success";
+  }
+
+  function showToast(message, duration, tone) {
     const toast = byId("toast");
     const text = byId("toastText");
     if (!toast || !text) return;
+    const resolvedTone = inferToastTone(message, tone);
+    const iconName = {
+      error: "alert-circle",
+      warning: "triangle-alert",
+      info: "info",
+      success: "check-circle-2"
+    }[resolvedTone] || "check-circle-2";
+    toast.dataset.tone = resolvedTone;
+    const iconSlot = byId("toastIcon");
+    if (iconSlot) {
+      iconSlot.innerHTML = `<i data-lucide="${iconName}"></i>`;
+      renderIcons(iconSlot);
+    }
     text.textContent = message;
     toast.classList.add("visible");
     window.clearTimeout(showToast.timer);
@@ -1004,12 +1252,8 @@
   function fitIntentInput() {
     const input = byId("intentInput");
     if (!input || input.tagName !== "TEXTAREA") return;
-    // Keep the expanded post-plan composer the same 58px capsule as the
-    // initial input.  Longer text scrolls inside the capsule instead of
-    // pushing the route sheet and its hint label down the page.
-    const compactHeight = window.matchMedia?.("(max-width: 760px)").matches ? 46 : 44;
-    const minHeight = compactHeight;
-    const maxHeight = compactHeight;
+    const minHeight = 44;
+    const maxHeight = window.matchMedia?.("(max-width: 760px)").matches ? 80 : 84;
     input.style.height = "auto";
     const next = Math.min(Math.max(input.scrollHeight, minHeight), maxHeight);
     input.style.height = `${next}px`;
@@ -1146,9 +1390,9 @@
     const location = candidate.location || candidate.coordinate || null;
     const input = byId("intentInput");
     const current = input ? input.value.trim() : "";
-    // 起点用当前行程的实际起点，而不是写死"能链北京总部"--否则用户已经从上海出发
-    // 规划，点选目的地候选时输入框会突然跳回"从能链北京总部前往…"。
-    const originForSuggestion = state.originName || DEFAULT_ORIGIN_NAME;
+    // 起点用当前行程的实际起点，而不是写死默认起点——否则用户已经从其他城市出发
+    // 规划，点选目的地候选时输入框会突然跳回默认起点。
+    const originForSuggestion = state.originName || DEFAULT_ORIGIN.name;
     const nextMessage = current
       ? replaceDestinationInIntent(current, name)
       : `从${originForSuggestion}前往${name}`;
@@ -1168,12 +1412,14 @@
 
   const voiceIntent = {
     recorder: null,
+    recognition: null,
     stream: null,
     chunks: [],
-    active: false
+    active: false,
+    busy: false
   };
 
-  function setVoiceRecordingState(active) {
+  function setVoiceRecordingState(active, statusOverride) {
     voiceIntent.active = Boolean(active);
     const button = byId("voiceIntentButton");
     if (!button) return;
@@ -1182,10 +1428,18 @@
     button.setAttribute("aria-label", voiceIntent.active ? "正在录音，再次点击结束" : "开始语音输入");
     button.title = voiceIntent.active ? "正在录音 · 再次点击结束" : "语音输入";
     button.dataset.recording = voiceIntent.active ? "true" : "false";
-    setAiStatus(voiceIntent.active ? "正在录音" : "正在识别语音", voiceIntent.active ? "recording" : "loading");
+    if (statusOverride !== false) {
+      setAiStatus(voiceIntent.active ? "正在录音" : "正在识别语音", voiceIntent.active ? "recording" : "loading");
+    }
   }
 
   async function stopVoiceIntent() {
+    if (voiceIntent.recognition) {
+      try { voiceIntent.recognition.stop(); } catch (_) { /* ignore */ }
+      voiceIntent.recognition = null;
+      setVoiceRecordingState(false, false);
+      setAiStatus("等待出行需求", "idle");
+    }
     if (voiceIntent.recorder && voiceIntent.recorder.state !== "inactive") {
       try { voiceIntent.recorder.stop(); } catch (_) { /* ignore */ }
     }
@@ -1195,62 +1449,126 @@
     }
   }
 
+  async function applyVoiceTranscript(rawText) {
+    const text = String(rawText || "")
+      .replace(/((?:前往|去|抵达|目的地(?:是)?|到(?!达)|导航(?:到|去)))\s*[。！？!?]+\s*/g, "$1 ")
+      .trim();
+    if (!text) {
+      setAiStatus("未识别到语音", "unresolved");
+      showToast("未识别到有效文本，请重试", 2800, "warning");
+      return;
+    }
+    const input = byId("intentInput");
+    if (input) {
+      input.value = text;
+      fitIntentInput();
+      state.manualDeadlineOverride = null;
+      state.manualArrivalReserveOverride = null;
+    }
+    if (state.voiceAutoPlan) {
+      showToast("语音已识别，正在自动规划", 2200, "success");
+      await parseIntent({ source: "voice", force: true });
+    } else {
+      setAiStatus("语音已识别", "idle");
+      setAiReply("语音内容已写入输入框，请检查后提交。");
+      showToast("语音已写入输入框，可检查后提交", 3000, "info");
+    }
+  }
+
   async function submitVoiceIntent(blob) {
     if (!blob || !blob.size) {
       setAiStatus("等待出行需求", "idle");
-      showToast("未采集到有效语音，请重试", 2800);
+      showToast("未采集到有效语音，请重试", 2800, "warning");
       return;
     }
+    if (voiceIntent.busy) return;
+    voiceIntent.busy = true;
     const form = new FormData();
     const extension = (blob.type || "").includes("ogg") ? "ogg" : (blob.type || "").includes("mp4") ? "m4a" : "webm";
     form.append("file", blob, `intent.${extension}`);
     form.append("audio", blob, `intent.${extension}`);
     try {
-      const response = await fetch("/api/stt", { method: "POST", body: form, headers: { Accept: "application/json" } });
+      const response = await fetchWithTimeout("/api/stt", { method: "POST", body: form, headers: { Accept: "application/json" } }, 30000);
       const payload = await response.json().catch(() => ({}));
       if (response.status === 503 || payload.error === "STT_NOT_CONFIGURED" || payload.code === "STT_NOT_CONFIGURED") {
+        state.sttConfigured = false;
         setAiStatus("语音识别未配置", "unresolved");
-        showToast("未配置语音识别", 3200);
+        showToast("当前未配置云端语音服务，请直接输入文字", 3600, "warning");
         return;
       }
       if (!response.ok) throw new Error(payload.error || `HTTP_${response.status}`);
-      const text = String(payload.text || payload.transcript || payload.result || "")
-        .replace(/((?:前往|去|抵达|目的地(?:是)?|到(?!达)|导航(?:到|去)))\s*[。！？!?]+\s*/g, "$1 ")
-        .trim();
-      if (!text) {
-        setAiStatus("未识别到语音", "unresolved");
-        showToast("未识别到有效文本，请重试", 2800);
-        return;
-      }
-      const input = byId("intentInput");
-      if (input) {
-        input.value = text;
-        fitIntentInput();
-        state.manualDeadlineOverride = null;
-        state.manualArrivalReserveOverride = null;
-      }
-      if (state.voiceAutoPlan) {
-        showToast("语音已识别，正在自动规划", 2200);
-        await parseIntent({ source: "voice", force: true });
-      } else {
-        setAiStatus("语音已识别", "idle");
-        setAiReply("语音内容已写入输入框，请检查后提交。 ");
-        showToast("语音已写入输入框，可检查后提交", 3000);
-      }
+      await applyVoiceTranscript(payload.text || payload.transcript || payload.result || "");
     } catch (error) {
       setAiStatus("语音识别失败", "unresolved");
-      if (String(error?.message || "").includes("STT_NOT_CONFIGURED")) showToast("未配置语音识别", 3200);
-      else showToast("语音识别失败，请稍后重试", 3200);
+      if (error?.name === "AbortError") showToast("语音识别请求超时，请重试或直接输入文字", 3600, "warning");
+      else if (String(error?.message || "").includes("STT_NOT_CONFIGURED")) showToast("未配置云端语音识别", 3200, "warning");
+      else showToast("语音识别失败，请稍后重试", 3200, "error");
+    } finally {
+      voiceIntent.busy = false;
+    }
+  }
+
+  function startNativeSpeechRecognition() {
+    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (typeof SpeechRecognitionCtor !== "function") return false;
+    try {
+      const recognition = new SpeechRecognitionCtor();
+      recognition.lang = "zh-CN";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      voiceIntent.recognition = recognition;
+      let handledResult = false;
+      recognition.onstart = () => {
+        setVoiceRecordingState(true);
+        showToast("已开启浏览器本地语音听写，请直接说出行程", 2400, "info");
+      };
+      recognition.onresult = (event) => {
+        handledResult = true;
+        const transcript = event?.results?.[0]?.[0]?.transcript || "";
+        voiceIntent.recognition = null;
+        setVoiceRecordingState(false, false);
+        void applyVoiceTranscript(transcript);
+      };
+      recognition.onerror = (event) => {
+        voiceIntent.recognition = null;
+        setVoiceRecordingState(false, false);
+        setAiStatus("等待出行需求", "idle");
+        const code = String(event?.error || "");
+        if (code === "not-allowed" || code === "service-not-allowed") {
+          showToast("未获得浏览器麦克风权限，请直接输入文字", 3400, "warning");
+        } else if (code !== "aborted") {
+          showToast("本地语音识别未能完成，请重试或直接输入文字", 3400, "warning");
+        }
+      };
+      recognition.onend = () => {
+        if (voiceIntent.recognition === recognition) {
+          voiceIntent.recognition = null;
+          setVoiceRecordingState(false, false);
+          if (!handledResult) setAiStatus("等待出行需求", "idle");
+        }
+      };
+      recognition.start();
+      return true;
+    } catch (_) {
+      voiceIntent.recognition = null;
+      return false;
     }
   }
 
   async function toggleVoiceIntent() {
+    if (voiceIntent.busy) return;
     if (voiceIntent.active) {
       await stopVoiceIntent();
       return;
     }
+    if (state.sttConfigured !== true) {
+      if (startNativeSpeechRecognition()) return;
+      showToast("当前未配置云端语音服务，且浏览器不支持本地语音识别，请直接输入文字", 4200, "warning");
+      return;
+    }
     if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
-      showToast("当前环境不支持语音输入", 3200);
+      if (startNativeSpeechRecognition()) return;
+      showToast("当前环境不支持语音输入，请直接输入文字", 3200, "warning");
       return;
     }
     try {
@@ -1276,22 +1594,18 @@
       });
       recorder.start();
       setVoiceRecordingState(true);
-      showToast("正在听写，再次点击结束", 2200);
+      showToast("正在听写，再次点击结束", 2200, "info");
     } catch (error) {
-      setVoiceRecordingState(false);
+      setVoiceRecordingState(false, false);
       if (voiceIntent.stream) {
         voiceIntent.stream.getTracks().forEach((track) => track.stop());
         voiceIntent.stream = null;
       }
-      // setVoiceRecordingState(false) intentionally enters the short
-      // “正在识别语音” state after a normal recording stop. Permission or
-      // device errors never reach STT, so return to an actionable idle state
-      // instead of leaving the composer looking permanently busy.
       setAiStatus("等待出行需求", "idle");
       const name = String(error?.name || "");
-      if (name === "NotAllowedError" || name === "PermissionDeniedError") showToast("未获得麦克风权限", 3200);
-      else if (name === "NotFoundError") showToast("未检测到可用麦克风", 3200);
-      else showToast("无法启动语音输入", 3200);
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") showToast("未获得麦克风权限", 3200, "warning");
+      else if (name === "NotFoundError") showToast("未检测到可用麦克风", 3200, "warning");
+      else showToast("无法启动语音输入", 3200, "warning");
     }
   }
 
@@ -1336,13 +1650,25 @@
     }
   }
 
+  function updateConnectionStatus(stateName, label, iconName) {
+    const container = byId("connectionStatus");
+    const text = byId("connectionStatusText");
+    if (container) container.dataset.state = stateName;
+    if (text) text.textContent = label;
+    const currentIcon = byId("connectionStatusIcon");
+    if (currentIcon && iconName) {
+      currentIcon.outerHTML = `<i data-lucide="${iconName}" id="connectionStatusIcon"></i>`;
+      if (container) renderIcons(container);
+    }
+  }
+
   function aiHealthLabel(stateName) {
     return {
       checking: "正在检查解析能力",
-      configured: "AI 已配置 · 规则校验可用",
-      "not-configured": "规则解析可用 · AI 未配置",
-      unknown: "规则解析可用 · AI 状态未知"
-    }[stateName] || "规则解析可用 · AI 状态未知";
+      configured: "AI 已配置 · 规则校验就绪",
+      "not-configured": "本地规则解析就绪",
+      unknown: "本地规则解析就绪"
+    }[stateName] || "本地规则解析就绪";
   }
 
   function setAiHealthStatus(stateName) {
@@ -1361,8 +1687,23 @@
       const payload = await getJson("/api/health", 8000);
       const configured = payload?.dependencies?.ai?.configured;
       setAiHealthStatus(configured === true ? "configured" : configured === false ? "not-configured" : "unknown");
+      const amapConfigured = payload?.dependencies?.amapConfigured === true;
+      updateConnectionStatus(
+        amapConfigured ? "online" : "offline",
+        amapConfigured ? "实况在线" : "离线沙盒",
+        amapConfigured ? "wifi" : "database"
+      );
+      const sttConfigured = payload?.dependencies?.stt?.configured ?? payload?.stt?.configured;
+      if (typeof sttConfigured === "boolean") state.sttConfigured = sttConfigured;
+      const feishuConfigured = payload?.dependencies?.feishu?.configured === true;
+      state.feishuConfigured = feishuConfigured;
+      const feishuDetails = byId("feishuAiDetails");
+      const feishuBadge = byId("feishuSummaryBadge");
+      if (feishuDetails) feishuDetails.open = feishuConfigured;
+      if (feishuBadge) feishuBadge.textContent = feishuConfigured ? "已接入 · 等待仿真" : "未配置 · 可展开查看说明";
     } catch (_) {
       setAiHealthStatus("unknown");
+      updateConnectionStatus("error", "服务异常", "triangle-alert");
     }
   }
 
@@ -1409,12 +1750,12 @@
       fallback: "本地规则已完成规划",
       rules: "规则校验已完成",
       checking: "正在检查解析能力",
-      configured: "配置状态已确认",
-      "not-configured": "规则解析仍可用",
-      unknown: "规则解析仍可用",
+      configured: "外部模型已接入",
+      "not-configured": "未接入外部模型，自动走规则校验",
+      unknown: "按本地规则校验出行约束",
       unresolved: "等待有效目的地"
     };
-    if (meta) meta.textContent = metaByState[stateName] || "规则解析可用";
+    if (meta) meta.textContent = metaByState[stateName] || "本地规则校验";
     const thinking = byId("aiThinking");
     if (thinking) thinking.hidden = stateName !== "loading";
   }
@@ -1544,7 +1885,7 @@
         note = plannedStopCount === 0
           ? "当前能源余量可覆盖全程；系统不会为了展示而插入预约、OCR 或扣款节点。"
           : isFuelActive()
-            ? "燃油路线不执行充电站提前预约；到站后的识别、排队、服务与演示扣款仍由评委手动查看。"
+            ? "燃油路线不执行充电站提前预约；到站后的识别、排队、服务与演示扣款可手动逐步查看。"
             : "路线自动推进；进入补能站后会切换为手动查看，不把后续业务流程一闪而过。";
       } else if (type === "reservation") {
         statuses.reservation = simulation.reservationPending ? "active" : "pass";
@@ -1564,7 +1905,7 @@
           ? (ocrFallbackUsed
             ? "本轮使用了明确标注的预置样例托底，不把预置文字冒充本地推理结果。"
             : "车牌识别结果来自本地 OCR 服务；识别失败时不会伪造成功。")
-          : "中央卡片会暂停在识别阶段，评委可以先看到本地调用结果再继续。";
+          : "中央卡片会暂停在识别阶段，可先查看本地调用结果再继续。";
       } else if (type === "queue" || type === "service") {
         statuses.reservation = simulation.reservedStops?.size > 0 ? "pass" : "idle";
         statuses.ocr = simulation.recognitionResolved ? resolvedOcrState : "active";
@@ -1765,10 +2106,40 @@
     setText("routeDecisionText", text);
   }
 
+  function syncDesktopComposerClearance() {
+    const appEl = byId("app");
+    if (!appEl) return;
+    const sheet = byId("routeSheet");
+    const isDesktop = Number(window.innerWidth || 0) >= 901;
+    const sheetVisible = Boolean(
+      state.hasPlannedRoute
+      && state.mode === "driver"
+      && sheet
+      && !sheet.hidden
+      && !sheet.classList.contains("collapsed")
+      && sheet.style.display !== "none"
+    );
+    if (!isDesktop || !sheetVisible) {
+      appEl.style.removeProperty("--ft-composer-clearance");
+      return;
+    }
+    const rect = sheet.getBoundingClientRect?.();
+    if (!rect || rect.height <= 0) {
+      appEl.style.removeProperty("--ft-composer-clearance");
+      return;
+    }
+    const viewportHeight = Number(window.innerHeight || 860);
+    const sheetBottomGap = Math.max(14, viewportHeight - rect.bottom);
+    const desired = Math.ceil(sheetBottomGap + rect.height + 16);
+    const maxClearance = Math.max(260, viewportHeight - 170);
+    appEl.style.setProperty("--ft-composer-clearance", `${Math.min(desired, maxClearance)}px`);
+  }
+
   function setPlanningVisibility(hasPlan) {
     byId("app")?.classList.toggle("has-plan", Boolean(hasPlan));
     byId("aiComposer")?.classList.remove("force-expanded");
     updateIntentInputHint(Boolean(hasPlan));
+    window.requestAnimationFrame(syncDesktopComposerClearance);
     if (hasPlan) byId("intentInput")?.blur();
     const routeSheet = byId("routeSheet");
     const insightPanel = byId("insightPanel");
@@ -1800,9 +2171,11 @@
     if (parsedOutput) parsedOutput.hidden = !hasPlan;
     if (tripContext) tripContext.hidden = !hasPlan;
     if (serviceNudge && !hasPlan) serviceNudge.hidden = true;
-    $$('[data-mode]').filter((button) => !["driver", "vision"].includes(button.dataset.mode)).forEach((button) => {
-      button.disabled = !hasPlan;
-      button.title = hasPlan ? "" : "完成一次路线规划后可用";
+    // Keep operator and validation tabs clickable at all times; clicking them
+    // before a manual plan automatically initializes a baseline route.
+    $$('[data-mode]').forEach((button) => {
+      button.disabled = false;
+      button.title = "";
     });
     if (!hasPlan) {
       setAiReply("");
@@ -1884,9 +2257,14 @@
   function mergeSupplementIntent(parsed, payload, value) {
     const currentServices = Array.isArray(state.aiContext?.services) ? state.aiContext.services : [];
     const parsedServices = Array.isArray(parsed?.services) ? parsed.services : [];
-    const requestedServiceName = typeof serviceIntent.extractServiceKeyword === "function"
-      ? serviceIntent.extractServiceKeyword(value)
-      : null;
+    const extractedKeywords = typeof serviceIntent.extractServiceKeywords === "function"
+      ? serviceIntent.extractServiceKeywords(value)
+      : (typeof serviceIntent.extractServiceKeyword === "function"
+        ? [serviceIntent.extractServiceKeyword(value)].filter(Boolean)
+        : []);
+    const isConcrete = (name) => typeof serviceIntent.isConcreteServiceName === "function"
+      ? serviceIntent.isConcreteServiceName(name)
+      : Boolean(String(name || "").trim());
     const hasEnergyCue = /纯电|纯电动|电车|电动车|充电|燃油|油车|加油|混动|插混|油电/.test(String(value || ""));
     const hasPriorityCue = /不能迟到|准时|赶时间|最快|尽快|便宜|省钱|低成本|不想等|少等|等待/.test(String(value || ""));
     const hasDetourCue = /最多|不超过|不超|允许|绕行|绕路/.test(String(value || ""));
@@ -1904,18 +2282,32 @@
           : /餐|饭|吃|喝|咖啡/.test(text)
             ? "餐饮"
             : null;
-    let serviceActionFound = false;
+    const isDrinkKeyword = (kw) => /咖啡|星巴克|瑞幸|喜茶|奈雪|奶茶|茶/.test(String(kw || ""));
+    const assignedKeywords = new Set();
+    // Preserve every ADD_SERVICE action's own concrete keyword first instead
+    // of clobbering multiple service stops with a single brand name.
     const mergedActions = parsedActions.map((action) => {
-      if (action?.type !== "ADD_SERVICE" || !serviceLabel || action.service !== serviceLabel) return action;
-      serviceActionFound = true;
-      // The model may identify the category but omit or generalize the brand.
-      // Local text evidence is authoritative for this field.
-      return requestedServiceName
-        ? Object.assign({}, action, { service: serviceLabel, name: requestedServiceName })
-        : action;
+      if (action?.type !== "ADD_SERVICE") return action;
+      const existingName = String(action.name || "").trim();
+      if (existingName && isConcrete(existingName)) {
+        assignedKeywords.add(existingName);
+        return action;
+      }
+      const actionCategory = actionServiceLabel(action);
+      if (actionCategory !== "餐饮" && actionCategory !== serviceLabel) return action;
+      const prefersDrink = /咖啡|喝|茶/.test(String(action.service || action.target || ""));
+      const available = extractedKeywords.filter((kw) => !assignedKeywords.has(kw));
+      const matched = available.find((kw) => prefersDrink === isDrinkKeyword(kw)) || available[0] || null;
+      if (!matched) return action;
+      assignedKeywords.add(matched);
+      return Object.assign({}, action, { service: actionCategory || serviceLabel || "餐饮", name: matched });
     });
-    if (serviceLabel && requestedServiceName && !serviceActionFound) {
-      mergedActions.push({ type: "ADD_SERVICE", service: serviceLabel, name: requestedServiceName });
+    // Ensure every remaining concrete keyword mentioned in the user text gets
+    // its own ADD_SERVICE action when the parser omitted it.
+    for (const kw of extractedKeywords) {
+      if (assignedKeywords.has(kw)) continue;
+      assignedKeywords.add(kw);
+      mergedActions.push({ type: "ADD_SERVICE", service: serviceLabel || "餐饮", name: kw });
     }
     return Object.assign({}, parsed, {
       requestMode: "supplement",
@@ -2168,11 +2560,17 @@
     const text = String(value || "");
     if (Array.isArray(parsed.actions) && parsed.actions.length) return parsed.actions;
     const actions = [];
-    const serviceName = typeof serviceIntent.extractServiceKeyword === "function"
-      ? serviceIntent.extractServiceKeyword(text)
-      : null;
-    if (/(中途|途中|路上|顺便|另外|还想|再加|补充|加上)/.test(text) && /(吃|饭|餐|咖啡|休息|洗车)/.test(text)) {
-      actions.push({ type: "ADD_SERVICE", service: /咖啡/.test(text) ? "餐饮" : /休息/.test(text) ? "休息" : /洗车/.test(text) ? "洗车" : "餐饮", ...(serviceName ? { name: serviceName } : {}) });
+    const serviceNames = typeof serviceIntent.extractServiceKeywords === "function"
+      ? serviceIntent.extractServiceKeywords(text)
+      : (typeof serviceIntent.extractServiceKeyword === "function"
+        ? [serviceIntent.extractServiceKeyword(text)].filter(Boolean)
+        : []);
+    if (serviceNames.length) {
+      serviceNames.forEach((name) => {
+        actions.push({ type: "ADD_SERVICE", service: "餐饮", name });
+      });
+    } else if (/(中途|途中|路上|顺便|另外|还想|再加|补充|加上)/.test(text) && /(吃|饭|餐|咖啡|休息|洗车)/.test(text)) {
+      actions.push({ type: "ADD_SERVICE", service: /咖啡/.test(text) ? "餐饮" : /休息/.test(text) ? "休息" : /洗车/.test(text) ? "洗车" : "餐饮" });
     }
     const waypoint = text.match(/(?:途经|经过|路过)\s*([^，,。；;\s]{2,24})/);
     if (waypoint) actions.push({ type: "ADD_WAYPOINT", location: waypoint[1] });
@@ -2578,7 +2976,7 @@
       ["数据时间", entry?.asOf || snapshot.snapshotTime || "本次演示计算"],
       ["数据来源", entry?.dataSource || "FlowTwin 演示仿真"]
     ];
-    panel.innerHTML = `${lines.map(([label, value]) => `<div><strong>${escapeHtml(label)}：</strong>${escapeHtml(value)}</div>`).join("")}<div><strong>计算口径：</strong>先按到站时刻选择预测点，再用端口释放事件、已到站等待和预约队列估计排队，并从排队分布计算 P50/P90；路线 ETA 另行叠加补能服务时长和支付驶离缓冲。当前补能位与预约队列仍是演示输入，不是能链企业实时数据。</div>${entry?.explanation ? `<div><strong>解释：</strong>${escapeHtml(entry.explanation)}</div>` : ""}`;
+    panel.innerHTML = `${lines.map(([label, value]) => `<div><strong>${escapeHtml(label)}：</strong>${escapeHtml(value)}</div>`).join("")}<div><strong>计算口径：</strong>先按到站时刻选择预测点，再用端口释放事件、已到站等待和预约队列估计排队，并从排队分布计算 P50/P90；路线 ETA 另行叠加补能服务时长和支付驶离缓冲。当前补能位与预约队列为演示仿真输入，不代表实际站点实时状态。</div>${entry?.explanation ? `<div><strong>解释：</strong>${escapeHtml(entry.explanation)}</div>` : ""}`;
     panel.hidden = true;
     toggle.setAttribute("aria-expanded", "false");
   }
@@ -2600,16 +2998,30 @@
   async function loadWeather() {
     const origin = state.origin;
     if (!Array.isArray(origin) || origin.length < 2 || !Number.isFinite(origin[0])) return;
+    const requestId = ++state.weatherRequestVersion;
+    if (!state.live) {
+      state.weather = {
+        weather: "晴（离线默认）",
+        condition: "晴（离线默认）",
+        weatherFactor: 1,
+        severe: false,
+        offline: true
+      };
+      renderWeather();
+      return;
+    }
     const location = `${origin[0].toFixed(6)},${origin[1].toFixed(6)}`;
     try {
-      const response = await fetch(`/api/weather?${new URLSearchParams({ location })}`, { headers: { Accept: "application/json" } });
+      const response = await fetchWithTimeout(`/api/weather?${new URLSearchParams({ location })}`, { headers: { Accept: "application/json" } }, 15000);
       const payload = await response.json().catch(() => ({}));
+      if (requestId !== state.weatherRequestVersion) return;
       if (response.ok && payload && payload.condition) {
         state.weather = payload;
       } else {
         state.weather = null;
       }
     } catch {
+      if (requestId !== state.weatherRequestVersion) return;
       state.weather = null;
     }
     renderWeather();
@@ -2619,10 +3031,11 @@
     const host = byId("originWeather");
     if (!host) return;
     const w = state.weather;
-    if (!w || !w.condition) { host.hidden = true; host.textContent = ""; return; }
+    const conditionText = w?.condition || w?.weather || "";
+    if (!w || !conditionText) { host.hidden = true; host.textContent = ""; return; }
     const temp = Number.isFinite(w.temperature) ? `${w.temperature}°` : "";
-    const label = `${w.city || ""} ${w.condition} ${temp}`.trim();
-    host.innerHTML = `<i data-lucide="${weatherIcon(w.condition)}"></i>${escapeHtml(label)}`;
+    const label = `${w.city || ""} ${conditionText} ${temp}`.trim();
+    host.innerHTML = `<i data-lucide="${weatherIcon(conditionText)}"></i>${escapeHtml(label)}`;
     host.classList.toggle("severe", Boolean(w.severe));
     host.hidden = false;
     refreshIcons();
@@ -2682,11 +3095,10 @@
     ].join("|");
   }
 
-  // 企业端口/枪位数据暂未开放。为了让评委能看到“站点排队时间”不是一条
-  // 写死的数字，这里从已有演示占用率、容量和等待输入推导一份确定性的端口
-  // 快照，交给后端的 port-discrete-event 仿真。预约字段只表示演示队列，
-  // 必须明确标注为演示数据，不能伪装成能链实时站点状态；后续拿到脱敏
-  // 站点接口时，只替换这层输入。
+  // 实时端口/枪位数据暂未开放。为了让用户直观看到“站点排队时间”并非静态数值，
+  // 这里从已有演示占用率、容量和等待输入推导一份确定性的端口快照，交给后端的
+  // port-discrete-event 仿真。预约字段只表示演示队列，明确标注为仿真数据，
+  // 后续接入真实站点接口时只替换这层输入。
   function buildDemoPortSnapshot(station) {
     const totalPorts = Math.max(4, Math.min(60, Math.round(Number(station?.capacity) || 12)));
     const occupancy = Math.max(0, Math.min(0.96, Number(station?.occupancy) || 0));
@@ -2922,23 +3334,25 @@
     // 就如实报错——绝不能默默地从北京总部出发去规划一趟上海出发的行程。
     const requestedOrigin = String(parsed?.origin || "").trim();
     const normalizedOrigin = parseLocation(payload.originLocation || parsed.originLocation);
-    const originIsDefault = !requestedOrigin || requestedOrigin === DEFAULT_ORIGIN_NAME;
+    const originIsDefault = !requestedOrigin || requestedOrigin === DEFAULT_ORIGIN.name || requestedOrigin === DEFAULT_ORIGIN_NAME;
     if (normalizedOrigin) {
       state.origin = normalizedOrigin;
-      state.originName = originIsDefault ? DEFAULT_ORIGIN_NAME : requestedOrigin;
+      state.originName = originIsDefault ? DEFAULT_ORIGIN.name : requestedOrigin;
       const originSource = payload.locationSources?.origin || "高德定位";
       const browserOrigin = /当前位置|浏览器定位/.test(originSource);
       state.originNote = originIsDefault
-        ? DEFAULT_ORIGIN_NOTE
+        ? DEFAULT_ORIGIN.note
         : browserOrigin
           ? (state.originNote || `${originSource} · 浏览器定位起点`)
           : `${originSource} · 按你指定的出发地规划`;
       state.originSource = originIsDefault
-        ? "演示默认起点"
-        : (payload.locationSources?.origin || state.originSource || "用户指定起点");
+        ? "default"
+        : browserOrigin
+          ? "browser"
+          : "text";
       state.originCity = normalizeRegionCity(
         payload.locationMeta?.origin?.city
-          || (originIsDefault ? DEFAULT_ORIGIN_CITY : extractRegionCity(`${requestedOrigin} ${payload.locationMeta?.origin?.name || ""}`))
+          || (originIsDefault ? DEFAULT_ORIGIN.city : extractRegionCity(`${requestedOrigin} ${payload.locationMeta?.origin?.name || ""}`))
       );
     } else if (!originIsDefault) {
       return { ok: false, destination: requestedDestination, origin: requestedOrigin, originUnresolved: true };
@@ -2977,23 +3391,32 @@
     const destinationValue = document.querySelector(".route-field.destination-field .field-value");
     if (destinationValue) destinationValue.textContent = state.destinationName;
     updateOriginSurface();
-    const departureValue = byId("departureValue");
-    if (departureValue) departureValue.textContent = formatClock(state.departureMinutes);
     syncManualControls();
     return { ok: true, destination: requestedDestination };
   }
 
-  function syncManualControls() {
+  function syncManualControls(options = {}) {
+    const preserveActive = options.preserveActiveInput === true;
     const energyInput = byId("topEnergyPercentInput");
+    const settingsEnergyInput = byId("settingsEnergyPercentInput");
     const departureInput = byId("departureTimeInput");
+    const mobileDepartureInput = byId("mobileDepartureTimeInput");
+    const settingsDepartureInput = byId("settingsDepartureTimeInput");
     const deadlineInput = byId("deadlineInput");
     const minArrivalInput = byId("minArrivalSocInput");
-    if (energyInput) energyInput.value = String(Math.round(state.energyPercent));
-    if (departureInput) departureInput.value = formatClock(state.departureMinutes);
-    if (deadlineInput) deadlineInput.value = state.deadlineEnabled ? formatClock(state.deadlineMinutes) : "";
-    if (minArrivalInput) minArrivalInput.value = state.arrivalReserveEnabled ? String(Math.round(state.minArrivalSoc)) : "";
-    const arrivalValue = byId("arrivalValue");
-    if (arrivalValue) arrivalValue.textContent = state.deadlineEnabled ? formatClock(state.deadlineMinutes) : "不限";
+    const clockText = formatClock(state.departureMinutes);
+    const energyText = String(Math.round(state.energyPercent));
+    if (energyInput && (!preserveActive || document.activeElement !== energyInput)) energyInput.value = energyText;
+    if (settingsEnergyInput && (!preserveActive || document.activeElement !== settingsEnergyInput)) settingsEnergyInput.value = energyText;
+    if (departureInput && (!preserveActive || document.activeElement !== departureInput)) departureInput.value = clockText;
+    if (mobileDepartureInput && (!preserveActive || document.activeElement !== mobileDepartureInput)) mobileDepartureInput.value = clockText;
+    if (settingsDepartureInput && (!preserveActive || document.activeElement !== settingsDepartureInput)) settingsDepartureInput.value = clockText;
+    if (deadlineInput && (!preserveActive || document.activeElement !== deadlineInput)) {
+      deadlineInput.value = state.deadlineEnabled ? formatClock(state.deadlineMinutes) : "";
+    }
+    if (minArrivalInput && (!preserveActive || document.activeElement !== minArrivalInput)) {
+      minArrivalInput.value = state.arrivalReserveEnabled ? String(Math.round(state.minArrivalSoc)) : "";
+    }
     const destinationMeta = byId("destinationMeta");
     if (destinationMeta) {
       const timeText = state.deadlineEnabled ? `最晚 ${formatClock(state.deadlineMinutes)} 前到达` : "到达时间不限";
@@ -3003,27 +3426,38 @@
   }
 
   function readManualControls(options = {}) {
-    const energyInput = byId("topEnergyPercentInput");
-    const departureInput = byId("departureTimeInput");
+    const commit = options.commit !== false;
+    const energyInput = options.sourceInput?.id === "settingsEnergyPercentInput"
+      ? options.sourceInput
+      : byId("topEnergyPercentInput");
+    const departureInput = (options.sourceInput?.id === "mobileDepartureTimeInput" || options.sourceInput?.id === "settingsDepartureTimeInput")
+      ? options.sourceInput
+      : byId("departureTimeInput");
     const deadlineInput = byId("deadlineInput");
     const minArrivalInput = byId("minArrivalSocInput");
     const energy = Number(energyInput?.value);
     const rawMinArrival = String(minArrivalInput?.value || "").trim();
     const minArrival = rawMinArrival ? Number(rawMinArrival) : Number.NaN;
-    if (Number.isFinite(energy)) state.energyPercent = Math.max(5, Math.min(100, energy));
+    if (Number.isFinite(energy)) {
+      if (commit) state.energyPercent = Math.max(5, Math.min(100, energy));
+      else if (energy >= 5 && energy <= 100) state.energyPercent = energy;
+    }
     // 顶栏那一格在混动模式下编辑的是"当前分支"的能量，必须写回两级真值。
     syncHybridLevels("percent");
-    if (Number.isFinite(minArrival)) state.minArrivalSoc = Math.max(5, Math.min(100, minArrival));
+    if (Number.isFinite(minArrival)) {
+      if (commit) state.minArrivalSoc = Math.max(5, Math.min(100, minArrival));
+      else if (minArrival >= 5 && minArrival <= 100) state.minArrivalSoc = minArrival;
+    }
     if (departureInput?.value) state.departureMinutes = clockToMinutes(departureInput.value, state.departureMinutes);
     if (deadlineInput?.value) state.deadlineMinutes = clockToMinutes(deadlineInput.value, state.deadlineMinutes);
     if (options.markArrivalOverrides) {
       state.deadlineEnabled = Boolean(deadlineInput?.value);
-      state.arrivalReserveEnabled = Number.isFinite(minArrival);
+      state.arrivalReserveEnabled = rawMinArrival !== "" && Number.isFinite(minArrival);
       state.manualDeadlineOverride = state.deadlineEnabled;
       state.manualArrivalReserveOverride = state.arrivalReserveEnabled;
     }
-    syncManualControls();
-    updateEnergyControls();
+    syncManualControls({ preserveActiveInput: !commit });
+    if (commit) updateEnergyControls();
   }
 
   function stableHash(value) {
@@ -3324,7 +3758,7 @@
     return Number((band.base + (hash % band.spread) / 100).toFixed(2));
   }
 
-  // 运营侧不能把高德检索到的所有站点都当成能链可调控站点。真实的 POI
+  // 运营侧不能把高德检索到的所有站点都当成平台可调控站点。真实的 POI
   // 只回答“地图上有什么”，下面这组字段是为了演示平台边界而生成的固定
   // 种子配置：只有少量站点同时满足合作、可调控、可发券、商家接受四个条件。
   // 这不是企业签约表，也不是实时经营数据；请求运营接口时会再次显式携带
@@ -3416,8 +3850,14 @@
     const p90 = p50 + 5 + (hash % 11);
     const isRisk = p90 >= 20 || occupancy >= 0.82;
     const priceUnit = poi.type === "加油站" ? "L" : "kWh";
+    const explicitDetour = Number(poi.detourKm ?? poi.detour);
+    const detourKm = Number.isFinite(explicitDetour) && explicitDetour > 0
+      ? Number(explicitDetour.toFixed(1))
+      : Number((0.3 + (hash % 10) * 0.09).toFixed(1));
+    const isOfflineId = Boolean(poi.id && (String(poi.id).startsWith("fallback-") || String(poi.id).startsWith("offline-")));
+    const defaultSource = !state.live || isOfflineId ? "离线走廊站点" : "高德真实 POI";
     return Object.assign({}, poi, {
-      source: poi.sourceLabel || (poi.id && !String(poi.id).startsWith("fallback-") ? "高德真实 POI" : "固定场景 POI"),
+      source: poi.sourceLabel || poi.source || defaultSource,
       occupancy,
       p50,
       p90,
@@ -3430,7 +3870,8 @@
       estimatedRefuelRateLpm: Number((6 + (hash % 7) * 0.8).toFixed(1)),
       status: isRisk ? "forecast-risk" : "forecast-ready",
       riskLabel: isRisk ? "高峰风险" : "预测可用",
-      detour: (0.3 + (hash % 12) / 10).toFixed(1)
+      detourKm,
+      detour: detourKm.toFixed(1)
     });
   }
 
@@ -3492,23 +3933,518 @@
   }
 
   function fallbackSvgPoints(path) {
-    const startLat = FALLBACK.origin[1];
-    const endLat = FALLBACK.destination[1];
-    const startLng = FALLBACK.origin[0];
-    const endLng = FALLBACK.destination[0];
-    return path.map(([lng, lat]) => {
-      const progress = Math.max(0, Math.min(1, (startLat - lat) / (startLat - endLat)));
-      const expectedLng = startLng + (endLng - startLng) * progress;
-      const x = 590 + progress * 500 + (lng - expectedLng) * 2500;
-      const y = 170 + progress * 560;
+    const points = Array.isArray(path) && path.length >= 2 ? path : [state.origin || FALLBACK.origin, state.destination || FALLBACK.destination];
+    const start = points[0] || FALLBACK.origin;
+    const end = points[points.length - 1] || FALLBACK.destination;
+    const dLng = end[0] - start[0];
+    const dLat = end[1] - start[1];
+    const span = Math.hypot(dLng, dLat) || 0.001;
+    return points.map(([lng, lat]) => {
+      const along = ((lng - start[0]) * dLng + (lat - start[1]) * dLat) / (span * span);
+      const perp = (-(lng - start[0]) * dLat + (lat - start[1]) * dLng) / (span * span);
+      const progress = Math.max(-0.08, Math.min(1.08, along));
+      const x = 490 + progress * 460 + perp * 220;
+      const y = 185 + progress * 500 - perp * 160;
       return `${Math.round(x)},${Math.round(y)}`;
     }).join(" ");
+  }
+
+  function buildOfflineCorridorPath(origin, destination, bendFactor = 0, steps = 8) {
+    const start = parseLocation(origin) || FALLBACK.origin;
+    const end = parseLocation(destination) || FALLBACK.destination;
+    const dLng = end[0] - start[0];
+    const dLat = end[1] - start[1];
+    const norm = Math.hypot(dLng, dLat) || 0.01;
+    const perpLng = -dLat / norm;
+    const perpLat = dLng / norm;
+    const maxOffset = Math.min(0.45, Math.max(0.006, norm * 0.14)) * bendFactor;
+    return Array.from({ length: steps + 1 }, (_, index) => {
+      const t = index / steps;
+      const arc = Math.sin(Math.PI * t) * maxOffset;
+      return [
+        Number((start[0] + dLng * t + perpLng * arc).toFixed(6)),
+        Number((start[1] + dLat * t + perpLat * arc).toFixed(6))
+      ];
+    });
+  }
+
+  function pointOnPathWithOffset(path, progress, offsetKm = 0.08, sideSign = 1, metrics = null) {
+    if (!Array.isArray(path) || path.length < 2) return null;
+    const target = Math.max(0, Math.min(1, Number(progress) || 0));
+    const cached = metrics && Array.isArray(metrics.lengths) && metrics.lengths.length === path.length - 1
+      ? metrics
+      : buildPathMetrics(path);
+    const lengths = cached.lengths;
+    const total = cached.total;
+    if (!total) return path[0].slice();
+    const desired = target * total;
+    const segmentIndex = lengths.findIndex((length) => length >= desired);
+    const index = segmentIndex < 0 ? path.length - 1 : segmentIndex + 1;
+    const prev = path[Math.max(0, index - 1)];
+    const next = path[index];
+    const segmentStart = index <= 1 ? 0 : lengths[index - 2];
+    const segmentLength = Math.max(0.0001, lengths[index - 1] - segmentStart);
+    const fraction = Math.max(0, Math.min(1, (desired - segmentStart) / segmentLength));
+    const baseLng = prev[0] + (next[0] - prev[0]) * fraction;
+    const baseLat = prev[1] + (next[1] - prev[1]) * fraction;
+    const clampedOffsetKm = Math.max(0, Math.min(0.15, Number(offsetKm) || 0));
+    if (clampedOffsetKm <= 1e-6) {
+      return [Number(baseLng.toFixed(6)), Number(baseLat.toFixed(6))];
+    }
+    const refLatRad = (baseLat * Math.PI) / 180;
+    const scaleX = Math.max(1, 111 * Math.cos(refLatRad));
+    const scaleY = 111;
+    const dxKm = (next[0] - prev[0]) * scaleX;
+    const dyKm = (next[1] - prev[1]) * scaleY;
+    const segKm = Math.hypot(dxKm, dyKm) || 1;
+    const sign = sideSign < 0 ? -1 : 1;
+    const perpXKm = (-dyKm / segKm) * clampedOffsetKm * sign;
+    const perpYKm = (dxKm / segKm) * clampedOffsetKm * sign;
+    return [
+      Number((baseLng + perpXKm / scaleX).toFixed(6)),
+      Number((baseLat + perpYKm / scaleY).toFixed(6))
+    ];
+  }
+
+  function slicePathBetweenProgress(path, startProgress, endProgress, metrics = null) {
+    if (!Array.isArray(path) || path.length < 2) return [];
+    const start = Math.max(0, Math.min(1, Number(startProgress) || 0));
+    const end = Math.max(start, Math.min(1, Number(endProgress) || 0));
+    const cached = metrics && Array.isArray(metrics.lengths) && metrics.lengths.length === path.length - 1
+      ? metrics
+      : buildPathMetrics(path);
+    const total = cached.total;
+    const startPt = pointAtPathProgress(path, start, cached);
+    const endPt = pointAtPathProgress(path, end, cached);
+    if (!total || !startPt || !endPt) return [startPt, endPt].filter(Boolean);
+    const out = [[Number(startPt[0].toFixed(6)), Number(startPt[1].toFixed(6))]];
+    for (let index = 1; index < path.length - 1; index += 1) {
+      const vertexProgress = cached.lengths[index - 1] / total;
+      if (vertexProgress > start + 1e-4 && vertexProgress < end - 1e-4) {
+        out.push([Number(path[index][0].toFixed(6)), Number(path[index][1].toFixed(6))]);
+      }
+    }
+    out.push([Number(endPt[0].toFixed(6)), Number(endPt[1].toFixed(6))]);
+    return out;
+  }
+
+  function buildOfflineCorridorStations(origin, destination, energyType = state.energyType, baseRoutes = null) {
+    const start = parseLocation(origin) || DEFAULT_ORIGIN.coordinate.slice();
+    const end = parseLocation(destination) || FALLBACK.destination.slice();
+    const expectedTypes = Array.isArray(energyType)
+      ? energyType
+      : energyType === "hybrid"
+        ? ["加油站", "充电站"]
+        : (energyType === "fuel" || energyType === "hybridFuel")
+          ? ["加油站"]
+          : ["充电站"];
+    const resolvedBaseRoutes = (() => {
+      if (Array.isArray(baseRoutes) && baseRoutes.length) {
+        const mapped = {};
+        const fallbackKeys = ["fastest", "reliable", "cheapest"];
+        baseRoutes.forEach((route, idx) => {
+          if (!route) return;
+          const key = route.key || fallbackKeys[idx] || `route-${idx}`;
+          mapped[key] = route;
+        });
+        return mapped;
+      }
+      if (baseRoutes && typeof baseRoutes === "object" && Object.keys(baseRoutes).length) {
+        return baseRoutes;
+      }
+      if (state.baseRouteRecords && Object.keys(state.baseRouteRecords).length) {
+        return state.baseRouteRecords;
+      }
+      return fallbackRoutes();
+    })();
+    const routeEntries = ["fastest", "reliable", "cheapest"]
+      .map((key) => [key, resolvedBaseRoutes[key]])
+      .filter(([, route]) => route && Array.isArray(route.path) && route.path.length >= 2);
+    const primaryRoute = resolvedBaseRoutes.reliable
+      || routeEntries[0]?.[1]
+      || {
+        key: "reliable",
+        path: buildOfflineCorridorPath(start, end, 0.08, 8),
+        distance: Math.max(12, distanceKm(start, end) * 1.18)
+      };
+    const primaryDistanceKm = Math.max(
+      6,
+      Number(primaryRoute.distance) || routeDistance(primaryRoute.path) || distanceKm(start, end) * 1.18
+    );
+    const metricsCache = new Map();
+    const getRouteMetrics = (route) => {
+      if (!metricsCache.has(route)) metricsCache.set(route, buildPathMetrics(route.path));
+      return metricsCache.get(route);
+    };
+    const destLabel = String(state.destinationName || "目的地").slice(0, 14);
+    const originLabel = String(state.originName || DEFAULT_ORIGIN.name).slice(0, 12);
+    const stations = [];
+    const hybridMode = energyType === "hybrid" || (Array.isArray(energyType) && energyType.length > 1) || isHybrid();
+
+    const buildName = (type, idx, totalCount, progressKm) => {
+      const kmTag = `K${Math.max(5, Math.round(progressKm))}`;
+      const isFuel = type === "加油站";
+      if (primaryDistanceKm <= 120) {
+        const shortEv = [
+          `${originLabel}沿线超充中心`,
+          "走廊综合能源驿站",
+          `${destLabel}东侧超级充电站`,
+          `${destLabel}门户直流快充站`
+        ];
+        const shortFuel = [
+          `${originLabel}沿线综合加油站`,
+          "走廊综合能源服务站",
+          `${destLabel}东侧综合加油站`,
+          `${destLabel}门户综合加油站`
+        ];
+        return (isFuel ? shortFuel : shortEv)[idx] || `${destLabel}沿线${type}`;
+      }
+      if (idx === 0) return isFuel ? `${originLabel}高速出口综合加油站` : `${originLabel}高速出口超充服务区`;
+      if (idx === totalCount - 1) return isFuel ? `${destLabel}门户高速加油服务区` : `${destLabel}门户高速超充服务区`;
+      const evTemplates = [
+        `干线高速 ${kmTag} 服务区超充站`,
+        `城际走廊 ${kmTag} 综合能源服务区`,
+        `高速枢纽 ${kmTag} 直流快充驿站`,
+        `省际干线 ${kmTag} 超级充电中心`
+      ];
+      const fuelTemplates = [
+        `干线高速 ${kmTag} 服务区加油站`,
+        `城际走廊 ${kmTag} 综合能源服务区`,
+        `高速枢纽 ${kmTag} 综合加油驿站`,
+        `省际干线 ${kmTag} 能源补给站`
+      ];
+      return (isFuel ? fuelTemplates : evTemplates)[idx % 4];
+    };
+
+    const buildForType = (type, sideSign) => {
+      const isFuel = type === "加油站";
+      const profile = hybridMode
+        ? (isFuel ? ENERGY_PROFILES.hybridFuel : ENERGY_PROFILES.hybridElectric)
+        : (isFuel ? ENERGY_PROFILES.fuel : ENERGY_PROFILES.electric);
+      const energyLevel = hybridMode
+        ? hybridBranchLevel(isFuel ? "fuel" : "electric")
+        : state.energyPercent;
+      const safetyEnergy = profile.capacity * profile.safetyReservePercent / 100;
+      const initialSafeRange = Math.max(0, (profile.capacity * energyLevel / 100 - safetyEnergy) / profile.consumptionPerKm);
+
+      let stopsSpec = [];
+      if (primaryDistanceKm <= 120) {
+        const count = primaryDistanceKm > 45 ? 4 : 3;
+        const baseFractions = count === 4 ? [0.20, 0.42, 0.64, 0.84] : [0.26, 0.52, 0.78];
+        const corridorOrder = count === 4
+          ? ["fastest", "reliable", "cheapest", "reliable"]
+          : ["fastest", "reliable", "cheapest"];
+        const safeFracCap = initialSafeRange > 3 && initialSafeRange < primaryDistanceKm
+          ? Math.max(0.14, Math.min(0.84, (initialSafeRange * 0.78) / primaryDistanceKm))
+          : 0.86;
+        stopsSpec = baseFractions.map((frac, idx) => {
+          const corridorKey = corridorOrder[idx];
+          const route = resolvedBaseRoutes[corridorKey] || primaryRoute;
+          // Ensure each of fastest/reliable/cheapest gets a reachable station on short trips
+          const adjustedFrac = idx < 3 && frac > safeFracCap
+            ? Math.max(0.08, safeFracCap * (0.68 + idx * 0.14))
+            : frac;
+          return {
+            corridorKey: route.key || corridorKey,
+            route,
+            fraction: Math.max(0.06, Math.min(0.92, adjustedFrac))
+          };
+        });
+      } else if (primaryDistanceKm <= 400) {
+        const targetFirstKm = Math.min(45, Math.max(15, initialSafeRange * 0.65));
+        const firstKm = initialSafeRange > 5 && initialSafeRange < 15
+          ? Math.max(5, initialSafeRange * 0.7)
+          : Math.min(targetFirstKm, primaryDistanceKm * 0.24);
+        const endKm = Math.max(firstKm + 40, primaryDistanceKm - Math.min(28, primaryDistanceKm * 0.08));
+        const spanKm = Math.max(20, endKm - firstKm);
+        const count = Math.max(5, Math.min(7, Math.round(spanKm / 62) + 1));
+        for (let idx = 0; idx < count; idx += 1) {
+          const km = count === 1 ? firstKm : firstKm + (spanKm * idx) / (count - 1);
+          stopsSpec.push({
+            corridorKey: primaryRoute.key || "reliable",
+            route: primaryRoute,
+            fraction: Math.max(0.03, Math.min(0.96, km / primaryDistanceKm))
+          });
+        }
+      } else {
+        const targetFirstKm = Math.max(25, Math.min(75, initialSafeRange * 0.6));
+        const firstKm = initialSafeRange > 5 && initialSafeRange < 25
+          ? Math.max(8, initialSafeRange * 0.7)
+          : Math.min(targetFirstKm, primaryDistanceKm * 0.12);
+        const endKm = Math.max(firstKm + 120, primaryDistanceKm - Math.min(60, primaryDistanceKm * 0.05));
+        const spanKm = Math.max(60, endKm - firstKm);
+        const count = Math.max(12, Math.min(16, Math.round(spanKm / 85) + 1));
+        for (let idx = 0; idx < count; idx += 1) {
+          const km = count === 1 ? firstKm : firstKm + (spanKm * idx) / (count - 1);
+          stopsSpec.push({
+            corridorKey: primaryRoute.key || "reliable",
+            route: primaryRoute,
+            fraction: Math.max(0.02, Math.min(0.97, km / primaryDistanceKm))
+          });
+        }
+      }
+
+      stopsSpec.forEach((spec, idx) => {
+        const route = spec.route || primaryRoute;
+        const routeDistKm = Math.max(6, Number(route.distance) || primaryDistanceKm);
+        const offsetKm = Number((0.06 + (idx % 3) * 0.03).toFixed(2)); // strictly <= 0.15 km
+        const location = pointOnPathWithOffset(
+          route.path,
+          spec.fraction,
+          offsetKm,
+          (idx % 2 === 0 ? 1 : -1) * sideSign,
+          getRouteMetrics(route)
+        ) || pointAtPathProgress(route.path, spec.fraction, getRouteMetrics(route)) || start.slice();
+        const progressKm = Number((spec.fraction * routeDistKm).toFixed(1));
+        const routeProgressVal = Number(spec.fraction.toFixed(4));
+        const detourKm = Number((0.3 + ((idx * 7 + (isFuel ? 3 : 1)) % 10) * 0.09).toFixed(1)); // 0.3–1.2 km
+        const routeMetricsByPolicy = {};
+        routeEntries.forEach(([policyKey, policyRoute]) => {
+          const policyDist = Math.max(6, Number(policyRoute.distance) || primaryDistanceKm);
+          const policyProgressKm = Number((spec.fraction * policyDist).toFixed(1));
+          routeMetricsByPolicy[policyKey] = {
+            routeProgress: routeProgressVal,
+            progressKm: policyProgressKm,
+            corridorKm: offsetKm,
+            detourKm,
+            detour: detourKm.toFixed(1)
+          };
+        });
+        stations.push({
+          id: `offline-${isFuel ? "fuel" : "ev"}-${idx + 1}`,
+          name: buildName(type, idx, stopsSpec.length, progressKm),
+          address: `离线走廊站点 · 距起点约 ${Math.round(progressKm)} km`,
+          location,
+          type,
+          corridorKey: spec.corridorKey,
+          progressKm,
+          routeProgress: routeProgressVal,
+          distanceFromOriginKm: progressKm,
+          corridorKm: offsetKm,
+          detourKm,
+          detour: detourKm.toFixed(1),
+          routeMetricsByPolicy,
+          source: "离线走廊站点",
+          sourceLabel: "离线走廊站点"
+        });
+      });
+    };
+
+    if (expectedTypes.includes("充电站")) buildForType("充电站", 1);
+    if (expectedTypes.includes("加油站")) buildForType("加油站", -1);
+    return stations;
+  }
+
+  function buildOfflineMultiStopRoute(role, baseRoute, stops) {
+    const reliableBase = state.baseRouteRecords.reliable || baseRoute;
+    const referencePath = Array.isArray(reliableBase?.path) && reliableBase.path.length >= 2
+      ? reliableBase.path
+      : (Array.isArray(baseRoute?.path) && baseRoute.path.length >= 2 ? baseRoute.path : null);
+    if (!referencePath || !Array.isArray(stops) || !stops.length) return null;
+    const baseDistance = Math.max(1, Number(baseRoute?.distance || reliableBase?.distance || routeDistance(referencePath)));
+    const baseDuration = Math.max(1, Number(baseRoute?.duration || reliableBase?.duration || 30));
+    const baseTolls = Math.max(0, Number(baseRoute?.tolls || 0));
+    const refMetrics = buildPathMetrics(referencePath);
+    const orderedStops = stops
+      .slice()
+      .sort((a, b) => Number(a.routeProgress ?? 0) - Number(b.routeProgress ?? 0)
+        || Number(a.progressKm ?? 0) - Number(b.progressKm ?? 0));
+    const legs = [];
+    const fullPath = [];
+    let prevProgress = 0;
+    let prevProgressKm = 0;
+    let prevDetour = 0;
+    const appendSegmentPoints = (points) => {
+      points.forEach((pt) => {
+        if (!pt) return;
+        const last = fullPath[fullPath.length - 1];
+        if (!last || Math.abs(last[0] - pt[0]) > 1e-6 || Math.abs(last[1] - pt[1]) > 1e-6) {
+          fullPath.push(pt);
+        }
+      });
+    };
+    orderedStops.forEach((stop) => {
+      const stopProgress = Math.max(
+        prevProgress + 0.005,
+        Math.min(0.98, Number.isFinite(Number(stop.routeProgress))
+          ? Number(stop.routeProgress)
+          : Number(stop.progressKm || 0) / Math.max(1, Number(reliableBase?.distance || baseDistance)))
+      );
+      const stopProgressKm = Math.max(prevProgressKm + 0.5, stopProgress * baseDistance);
+      const detour = Math.max(0, Number(stop.detourKm ?? stop.detour ?? 0.5));
+      const legDistance = Number(Math.max(0.5, stopProgressKm - prevProgressKm + prevDetour / 2 + detour / 2).toFixed(1));
+      const legPath = slicePathBetweenProgress(referencePath, prevProgress, stopProgress, refMetrics);
+      const stopLoc = parseLocation(stop.location);
+      if (stopLoc) legPath.push([Number(stopLoc[0].toFixed(6)), Number(stopLoc[1].toFixed(6))]);
+      appendSegmentPoints(legPath);
+      legs.push({ distance: legDistance, path: legPath });
+      prevProgress = stopProgress;
+      prevProgressKm = stopProgressKm;
+      prevDetour = detour;
+    });
+    const finalLegDistance = Number(Math.max(0.5, baseDistance - prevProgressKm + prevDetour / 2).toFixed(1));
+    const finalLegPath = slicePathBetweenProgress(referencePath, prevProgress, 1, refMetrics);
+    appendSegmentPoints(finalLegPath);
+    legs.push({ distance: finalLegDistance, path: finalLegPath });
+    const totalDistance = Number(legs.reduce((sum, leg) => sum + leg.distance, 0).toFixed(1));
+    const totalDuration = baseDuration * (totalDistance / Math.max(1, baseDistance));
+    const detailedLegs = legs.map((leg) => ({
+      distance: leg.distance,
+      duration: totalDuration * (leg.distance / Math.max(0.1, totalDistance)),
+      tolls: baseTolls * (leg.distance / Math.max(0.1, totalDistance)),
+      path: leg.path
+    }));
+    return {
+      key: role,
+      path: fullPath.length >= 2 ? fullPath : referencePath,
+      legs: detailedLegs,
+      distance: totalDistance,
+      duration: totalDuration,
+      tolls: baseTolls,
+      highway: baseRoute?.highway !== false && baseDistance >= 80,
+      policy: baseRoute?.policy || role,
+      routeSource: "离线走廊多站推演",
+      source: "离线走廊多站推演",
+      offlineCorridorRoute: true
+    };
+  }
+
+  async function requestOfflineLongTripProposal(role = "reliable") {
+    const base = state.baseRouteRecords[role] || state.baseRouteRecords.reliable || state.routeRecords.reliable;
+    if (!base || !Number.isFinite(Number(base.distance))) return null;
+    const stopBudget = longTripStopBudget(base);
+    const branchStations = stationsForActiveBranch(state.stations);
+    const planningStations = branchStations.map((station) => compactLongTripStation(station, role));
+    if (!planningStations.length) return null;
+    try {
+      return await postJson("/api/longtrip", {
+        distanceKm: base.distance,
+        durationMinutes: base.duration,
+        roadTolls: Math.max(0, Number(base.tolls || 0)),
+        stations: planningStations,
+        energyType: backendEnergyTypeKey(),
+        soc: state.energyPercent,
+        minArrivalSoc: effectiveArrivalReserveSoc(getEnergyProfile(isFuelActive())),
+        maxStops: stopBudget.maxStops,
+        adaptiveMaxStops: stopBudget.adaptiveMaxStops,
+        maxDetourKm: effectiveLongTripDetourLimit(base),
+        departureMinutes: state.departureMinutes,
+        ...(plannerDeadlineOffset() !== undefined ? { deadlineOffsetMinutes: plannerDeadlineOffset() } : {}),
+        weatherFactor: Number(state.weather?.weatherFactor) || 1,
+        trafficFactor: 1,
+        demandFactor: 1,
+        horizonMinutes: Math.min(240, Math.max(30, Math.ceil(Number(base.duration || 30) / 5) * 5)),
+        intervalMinutes: 5,
+        useForecast: true
+      }, 20000);
+    } catch {
+      return null;
+    }
+  }
+
+  async function planOfflineMultiStopRoutes() {
+    const reliableBase = state.baseRouteRecords.reliable || state.routeRecords.reliable;
+    if (!reliableBase) return false;
+    const primaryProposal = await requestOfflineLongTripProposal("reliable");
+    const primaryPlans = Array.isArray(primaryProposal?.plans)
+      ? primaryProposal.plans.filter((plan) => Number(plan.stopCount || 0) >= 1)
+      : [];
+    if (!primaryPlans.length) return false;
+    const cheapestProposal = state.baseRouteRecords.cheapest
+      ? await requestOfflineLongTripProposal("cheapest")
+      : null;
+    const cheapPlans = Array.isArray(cheapestProposal?.plans)
+      ? cheapestProposal.plans.filter((plan) => Number(plan.stopCount || 0) >= 1)
+      : [];
+    const roles = ["fastest", "reliable", "cheapest"];
+    const validated = {};
+    for (const role of roles) {
+      const roleBase = state.baseRouteRecords[role] || reliableBase;
+      const roleProposal = role === "cheapest" && cheapPlans.length ? cheapestProposal : primaryProposal;
+      const rolePlans = role === "cheapest" && cheapPlans.length ? cheapPlans : primaryPlans;
+      const candidates = [
+        roleProposal?.plansByObjective?.[role],
+        rolePlans.find((candidate) => candidate.objective === role),
+        ...rolePlans
+      ].filter(Boolean);
+      const seen = new Set();
+      for (const plan of candidates) {
+        const sig = (plan.stops || []).map((stop) => String(stop.id)).join("|");
+        if (!sig || seen.has(sig)) continue;
+        seen.add(sig);
+        const stops = (plan.stops || []).map((stop) => {
+          const station = state.stations.find((candidate) => String(candidate.id) === String(stop.id));
+          const metrics = station?.routeMetricsByPolicy?.[role];
+          return station && metrics ? Object.assign({}, station, metrics) : station;
+        }).filter(Boolean);
+        if (stops.length !== Number(plan.stopCount || 0)) continue;
+        const routeStops = stops.map((station) => Object.assign({}, station, { kind: "energy" }));
+        const syntheticRoute = buildOfflineMultiStopRoute(role, roleBase, stops);
+        const record = syntheticRoute && buildValidatedLongTripRecord(role, roleBase, syntheticRoute, routeStops);
+        if (record?.feasible) {
+          validated[role] = record;
+          break;
+        }
+      }
+    }
+    const available = Object.values(validated).filter((record) => record && record.feasible);
+    if (!available.length) return false;
+    state.multiStopRouteRecords = reconcileRouteObjectiveAliases(
+      Object.fromEntries(available.map((record, index) => [`offline-verified-${index}`, record]))
+    );
+    const preferred = Object.entries(state.multiStopRouteRecords).find(([, record]) => record.recommended)?.[0] || "reliable";
+    state.routeCandidates = Object.assign({}, state.multiStopRouteRecords);
+    state.routeRecords = Object.assign({}, state.multiStopRouteRecords);
+    state.recommendedRoute = preferred;
+    state.multiStopPlanningMeta = {
+      candidatesConsidered: primaryProposal.candidatesConsidered || state.stations.length,
+      candidatesAvailable: primaryProposal.candidatesAvailable || state.stations.length,
+      maxStops: primaryProposal.maxStops,
+      candidateSearchComplete: primaryProposal.candidateSearchComplete !== false,
+      sequenceSearchComplete: primaryProposal.sequenceSearchComplete !== false,
+      offlineCorridor: true
+    };
+    return true;
+  }
+
+  async function finalizeOfflinePlan(isCurrent = () => true) {
+    prepareFallbackPlan();
+    state.hasPlannedRoute = true;
+    renderFallbackMap();
+    renderFallbackRouteVisuals();
+    const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
+    if (base) await ensureStationForecasts(base, "reliable");
+    if (!isCurrent()) return false;
+    if (base) {
+      const direct = directEnergyState(base, isFuelActive());
+      const profile = getEnergyProfile(isFuelActive());
+      const targetEnergy = profile.capacity * effectiveArrivalReserveSoc(profile) / 100;
+      const finalLegRangeKm = Math.max(0, profile.capacity - targetEnergy) / profile.consumptionPerKm;
+      const singleStopMaxRangeKm = direct.maxSafeFirstLegKm + finalLegRangeKm;
+      state.multiStopRouteRecords = null;
+      calculateRouteRecords();
+      const hasFeasibleSingleStop = Object.values(state.routeRecords || {}).some((record) => record && record.feasible);
+      const needsMultiStop = !direct.canDirect
+        && (Number(base.distance || 0) > singleStopMaxRangeKm - 1e-6 || !hasFeasibleSingleStop);
+      if (needsMultiStop) {
+        const planned = await planOfflineMultiStopRoutes();
+        if (!isCurrent()) return false;
+        if (planned) {
+          renderFallbackMap();
+          renderFallbackRouteVisuals();
+        }
+      }
+    }
+    return true;
   }
 
   function renderFallbackMap() {
     const mapElement = byId("map");
     if (!mapElement) return;
-    const routePoints = fallbackSvgPoints(FALLBACK.routes[state.selectedRoute] || FALLBACK.routes.reliable);
+    const activeRoute = state.routeRecords[state.selectedRoute] || state.routeRecords.reliable;
+    const routePoints = fallbackSvgPoints(activeRoute?.path || buildOfflineCorridorPath(state.origin, state.destination, 0));
+    const originTitle = escapeHtml(state.originName || DEFAULT_ORIGIN.name);
+    const destTitle = escapeHtml(state.destinationName || "目的地");
     mapElement.innerHTML = `
       <svg class="fallback-map" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
         <rect width="1440" height="900" fill="#e8ece8" />
@@ -3526,21 +4462,34 @@
         </g>
         <polyline class="fallback-route" points="${routePoints}" style="display:${state.hasPlannedRoute ? "" : "none"}" />
         <g class="fallback-labels">
-          <text x="615" y="210">北京市</text><text x="515" y="320">朝阳区</text><text x="670" y="480">大兴区</text><text x="365" y="510">亦庄</text>
-          <g class="fallback-destination-labels" style="display:${state.hasPlannedRoute ? "" : "none"}"><text x="1110" y="720">机场方向</text><text x="825" y="590">榆垡</text><text x="1050" y="805">大兴机场</text></g>
+          <text x="455" y="165">${originTitle}</text>
+          <g class="fallback-destination-labels" style="display:${state.hasPlannedRoute ? "" : "none"}"><text x="720" y="420">沿线补能走廊</text><text x="920" y="720">${destTitle}</text></g>
         </g>
-        <g class="fallback-pins" style="display:${state.hasPlannedRoute ? "" : "none"}"><circle cx="625" cy="190" r="10" /><circle cx="815" cy="505" r="10" /><circle cx="960" cy="630" r="10" /></g>
+        <g class="fallback-pins" style="display:${state.hasPlannedRoute ? "" : "none"}"><circle cx="490" cy="185" r="10" /><circle cx="720" cy="435" r="10" /><circle cx="950" cy="685" r="10" /></g>
       </svg>`;
   }
 
   function fallbackRoutes() {
-    const fastestDistance = routeDistance(FALLBACK.routes.fastest);
-    const reliableDistance = routeDistance(FALLBACK.routes.reliable);
-    const cheapestDistance = routeDistance(FALLBACK.routes.cheapest);
+    const origin = parseLocation(state.origin) || FALLBACK.origin;
+    const destination = parseLocation(state.destination) || FALLBACK.destination;
+    const straightKm = Math.max(6, distanceKm(origin, destination));
+    const roadBaseKm = Math.max(12, straightKm * 1.18);
+    const fastestPath = buildOfflineCorridorPath(origin, destination, 0.45, 8);
+    const reliablePath = buildOfflineCorridorPath(origin, destination, 0.08, 8);
+    const cheapestPath = buildOfflineCorridorPath(origin, destination, -0.5, 8);
+    const fastestDistance = Number((roadBaseKm * 1.01).toFixed(1));
+    const reliableDistance = Number((roadBaseKm * 1.03).toFixed(1));
+    const cheapestDistance = Number((roadBaseKm * 1.07).toFixed(1));
+    const avgSpeedKmPerMin = roadBaseKm >= 150 ? 1.48 : 0.72;
+    const fastestDuration = Math.max(18, Math.round(fastestDistance / (avgSpeedKmPerMin * 1.06)));
+    const reliableDuration = Math.max(22, Math.round(reliableDistance / avgSpeedKmPerMin));
+    const cheapestDuration = Math.max(25, Math.round(cheapestDistance / (avgSpeedKmPerMin * 0.91)));
+    const highway = roadBaseKm >= 80;
+    const baseTolls = highway ? Math.round(roadBaseKm * 0.45) : 0;
     return {
-      fastest: { key: "fastest", path: FALLBACK.routes.fastest, distance: fastestDistance, duration: 73, policy: "速度优先" },
-      reliable: { key: "reliable", path: FALLBACK.routes.reliable, distance: reliableDistance, duration: 87, policy: "实时路况" },
-      cheapest: { key: "cheapest", path: FALLBACK.routes.cheapest, distance: cheapestDistance, duration: 101, policy: "费用优先" }
+      fastest: { key: "fastest", path: fastestPath, distance: fastestDistance, duration: fastestDuration, tolls: baseTolls, highway, policy: "速度优先", routeSource: "离线沙盒走廊推演" },
+      reliable: { key: "reliable", path: reliablePath, distance: reliableDistance, duration: reliableDuration, tolls: Math.round(baseTolls * 0.9), highway, policy: "实时路况", routeSource: "离线沙盒走廊推演" },
+      cheapest: { key: "cheapest", path: cheapestPath, distance: cheapestDistance, duration: cheapestDuration, tolls: Math.round(baseTolls * 0.45), highway: false, policy: "费用优先", routeSource: "离线沙盒走廊推演" }
     };
   }
 
@@ -3642,7 +4591,7 @@
       state.origin,
       "origin-marker",
       "circle-dot",
-      includeDestination ? (state.originName || DEFAULT_ORIGIN_NAME) : "起点"
+      includeDestination ? (state.originName || DEFAULT_ORIGIN.name) : "起点"
     )];
     state.stationOverlays.push(endpoints[0]);
     if (includeDestination && state.destination) {
@@ -3679,6 +4628,13 @@
     }
   }
 
+  function amapFitPadding(mode = "driver") {
+    const width = Number(window.innerWidth || 1440);
+    if (width <= 760) return mode === "operator" ? [120, 20, 40, 20] : [120, 20, 260, 20];
+    if (width <= 1180) return mode === "operator" ? [100, 36, 48, 36] : [100, 36, 260, 36];
+    return mode === "operator" ? [90, 380, 220, 330] : [90, 390, 245, 410];
+  }
+
   function fitAmapView() {
     if (!state.map || !state.AMap) return;
     if (state.simulation?.active) return;
@@ -3690,7 +4646,7 @@
     const selectedMarker = state.selectedStation ? state.stationMarkerById.get(state.selectedStation.id) : null;
     const overlays = [selectedRoute, selectedMarker].filter(Boolean);
     if (overlays.length && state.map.setFitView) {
-      state.map.setFitView(overlays, false, [90, 390, 245, 410], 11);
+      state.map.setFitView(overlays, false, amapFitPadding("driver"), 11);
     } else {
       state.map.setZoomAndCenter(10, [(state.origin[0] + state.destination[0]) / 2, (state.origin[1] + state.destination[1]) / 2]);
     }
@@ -3767,7 +4723,7 @@
   ]);
 
   async function fetchRouteOnce(params) {
-    const response = await fetch(`/api/route?${params}`, { headers: { Accept: "application/json" } });
+    const response = await fetchWithTimeout(`/api/route?${params}`, { headers: { Accept: "application/json" } }, 15000);
     if (!response.ok) {
       // 服务端已经把高德的 info/infocode 透传出来了，不要再退化成一个光秃秃的
       // HTTP_502："配额用尽"和"这一秒请求太密"需要完全不同的处置和话术。
@@ -3847,7 +4803,7 @@
           // side AMap search. The web-service key stays private, while the
           // browser no longer has to broaden “麦当劳” into an arbitrary餐厅.
           if (["meal", "coffee", "rest"].includes(serverType) && keyword) query.keyword = keyword;
-          const response = await fetch(`/api/poi?${new URLSearchParams(query)}`, { headers: { Accept: "application/json" } });
+          const response = await fetchWithTimeout(`/api/poi?${new URLSearchParams(query)}`, { headers: { Accept: "application/json" } }, 15000);
           const payload = response.ok ? await response.json().catch(() => ({})) : {};
           const pois = Array.isArray(payload.pois) ? payload.pois : [];
           if (pois.length) return pois.map((poi, index) => normalizePoi(poi, index, type)).filter(Boolean);
@@ -5628,13 +6584,14 @@
     const safeP50Wait = escapeHtml(record.p50Wait ?? record.station?.p50 ?? "—");
     const safeP90Wait = escapeHtml(record.p90Wait ?? record.station?.p90 ?? "—");
     if (metrics) {
-      metrics.innerHTML = displayCopy(record.directTrip
+      const serviceSpan = safeServiceName ? `<span>服务 <b>${safeServiceName}</b></span>` : "";
+      metrics.innerHTML = record.directTrip
         ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>直达 <b>无需补能</b></span><span>到达 <b>${safeArrivalSoc}%</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span>`
         : record.serviceOnly
           ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>服务 <b>${safeServiceName || "已加入"}</b></span><span>到达 <b>${safeArrivalSoc}%</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`
         : record.multiStop
-            ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>补能 <b>${safeStopCount} 次</b></span><span>停靠 <b>${escapeHtml(formatDuration(record.totalStopMinutesP50 || 0))}</b></span>${safeServiceName ? `<span>服务 <b>${safeServiceName}</b></span>` : ""}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>排队 P90 <b>${safeP90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`
-            : `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span>${safeServiceName ? `<span>服务 <b>${safeServiceName}</b></span>` : ""}<span>停靠 <b>${escapeHtml(formatDuration(record.totalStopMinutesP50 || 0))}</b></span><span>排队 P50 <b>${safeP50Wait}分</b></span><span>排队 P90 <b>${safeP90Wait}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`);
+            ? `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span><span>补能 <b>${safeStopCount} 次</b></span><span>停靠 <b>${escapeHtml(formatDuration(record.totalStopMinutesP50 || 0))}</b></span>${serviceSpan}<span>绕行 <b>${Number(record.detour || 0).toFixed(1)}km</b></span><span>${displayCopy("排队 P90")} <b>${safeP90Wait}分</b></span><span>费用 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`
+            : `<span>用时 <b>${escapeHtml(formatDuration(record.total))}</b></span>${serviceSpan}<span>停靠 <b>${escapeHtml(formatDuration(record.totalStopMinutesP50 || 0))}</b></span><span>${displayCopy("排队 P50")} <b>${safeP50Wait}分</b></span><span>${displayCopy("排队 P90")} <b>${safeP90Wait}分</b></span><span>成本 <b>¥${Math.round(record.cost)}</b></span><span>${state.deadlineEnabled ? "准时" : "安全余量"} <b>${state.deadlineEnabled ? `${Math.round(record.onTime)}%` : `${safeTargetArrivalSoc}%`}</b></span>`;
     }
     if (tag) {
       const objectiveBadgeText = record.feasible && Array.isArray(record.objectiveBadges) && record.objectiveBadges.length > 1
@@ -5666,15 +6623,15 @@
     const unconfirmedEquipment = (stations) => stations.some((station) => station && (station.serviceAreaCandidate || station.provisionalCorridor))
       ? " · 补能设施待确认"
       : "";
-    if (stationLine) stationLine.textContent = displayCopy(record.directTrip
+    if (stationLine) stationLine.textContent = record.directTrip
       ? `无需${isFuelActive() ? "加油" : "补能"} · 直达 ${state.destinationName} · 到达 ${record.arrivalSoc}%`
       : record.serviceOnly
         ? `服务停靠 · ${rawServiceName || "沿线服务"} · ETA 已按真实路线重算`
       : record.multiStop
         ? `连续${isFuelActive() ? "加油" : "补能"} ${record.stopCount} 次${rawServiceName ? ` · 含 ${rawServiceName}` : ""} · ${record.stops.map((stop) => stop.name).join(" → ")} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment(record.stops || [])}`
       : !record.canReachStation
-        ? (record.planningFailure || `当前余量不足以安全抵达候选${isFuelActive() ? "加油站" : "充电站"} · 不建议执行`)
-        : `${isFuelActive() ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"}${rawServiceName ? ` · 含 ${rawServiceName}` : ""} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment([record.station])}`);
+        ? displayCopy(record.planningFailure || `当前余量不足以安全抵达候选${isFuelActive() ? "加油站" : "充电站"} · 不建议执行`)
+        : `${isFuelActive() ? "加油" : "补能"} ${record.energyAmount}${record.energyUnit} · ${record.station?.name || "未匹配站点"}${rawServiceName ? ` · 含 ${rawServiceName}` : ""} · 到达 ${record.arrivalSoc}%${unconfirmedEquipment([record.station])}`;
     if (reason) {
       // 该策略的高德查询没返回独立路线，这里复用的是本次行程另一条真实路线。
       // 必须说出来，否则三张卡片看着像三条不同的路线。
@@ -5687,7 +6644,7 @@
         return;
       }
       if (record.serviceOnly) {
-        reason.textContent = displayCopy(withNote(`已加入 ${rawServiceName || "沿线服务"} · 预计额外 ${record.servicePlan?.extraMinutes || 0} 分钟 · 到达余量 ${record.arrivalSoc}%。`));
+        reason.textContent = withNote(`已加入 ${rawServiceName || "沿线服务"} · ${displayCopy(`预计额外 ${record.servicePlan?.extraMinutes || 0} 分钟 · 到达余量 ${record.arrivalSoc}%。`)}`);
         return;
       }
       if (record.multiStop) {
@@ -5698,12 +6655,12 @@
           return;
         }
         const summaries = {
-          fastest: `高德时间优先道路 + 典型排队与补能服务更短；补能停靠总耗时 P50 ${record.totalStopMinutesP50} 分钟（排队 ${record.p50Wait} + 服务 ${record.serviceMinutes} + 支付驶离缓冲 ${record.paymentExitMinutes}）。`,
+          fastest: `${state.live ? "高德时间优先道路" : "离线走廊时间优先方案"} + 典型排队与补能服务更短；补能停靠总耗时 P50 ${record.totalStopMinutesP50} 分钟（排队 ${record.p50Wait} + 服务 ${record.serviceMinutes} + 支付驶离缓冲 ${record.paymentExitMinutes}）。`,
           reliable: `按到站时刻的预测 P90 比较尾部风险；当前补能停靠总耗时 P90 ${record.totalStopMinutesP90} 分钟（排队 P90 ${record.p90Wait} + 服务 ${record.serviceMinutes} + 支付驶离缓冲 ${record.paymentExitMinutes}）。`,
-          cheapest: `费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + 高德通行费 ¥${Math.round(record.roadTolls || 0)}；优先在模拟单价较低的站点补能。`
+          cheapest: `费用 ¥${Math.round(record.cost)} = 补能 ¥${Math.round(record.energyCost || 0)} + ${state.live ? "高德通行费" : "估算通行费"} ¥${Math.round(record.roadTolls || 0)}；优先在模拟单价较低的站点补能。`
         };
-         const baseReason = summaries[record.key] || `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：补能停靠总耗时 P90 ${record.totalStopMinutesP90} 分钟。`;
-        reason.textContent = displayCopy(withNote(rawServiceName ? `${baseReason} 已含服务停靠 ${rawServiceName}。` : baseReason));
+        const baseReason = displayCopy(summaries[record.key] || `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：补能停靠总耗时 P90 ${record.totalStopMinutesP90} 分钟。`);
+        reason.textContent = withNote(rawServiceName ? `${baseReason} 已含服务停靠 ${rawServiceName}。` : baseReason);
         return;
       }
       if (!record.canReachStation) {
@@ -5850,7 +6807,7 @@
     if (endpoints.length >= 2 && state.map.setFitView) {
       const distance = distanceKm(state.origin, state.destination);
       const maxZoom = distance >= 700 ? 8 : distance >= 300 ? 9 : distance >= 100 ? 10 : 12;
-      state.map.setFitView(endpoints, false, [90, 390, 245, 410], maxZoom);
+      state.map.setFitView(endpoints, false, amapFitPadding("driver"), maxZoom);
     } else {
       state.map.setZoomAndCenter(11, state.destination);
     }
@@ -6242,6 +7199,7 @@
     const sameScene = image.dataset.simulationSceneKey === sceneKey;
     if (!sameScene) {
       image.dataset.simulationSceneKey = sceneKey;
+      image.dataset.originalSrc = asset || "";
       image.src = asset || "";
       image.alt = `${isFuelActive() ? "燃油" : "纯电"}车辆${simulationTimeOfDay() === "day" ? "白天" : "夜间"}补能演示素材`;
       image.onerror = () => { image.removeAttribute("src"); if (badge) badge.textContent = "素材未找到"; };
@@ -6431,6 +7389,7 @@
 
   async function autoReserveSimulationStop(stop) {
     if (!stop?.id || isFuelActive()) return;
+    const sessionId = state.simulationSessionId;
     const key = String(stop.id);
     if (state.simulation.reservedStops.has(key)) return;
     state.simulation.reservedStops.add(key);
@@ -6450,21 +7409,23 @@
         base,
         routeKey
       );
+      if (!state.simulation.active || state.simulationSessionId !== sessionId) return;
       const updated = state.stations.find((candidate) => String(candidate.id) === key) || station;
       state.selectedStation = updated;
       selectStation(updated, false);
       state.simulation.reservationAfterSnapshot = simulationSnapshotFor(updated);
-      showToast(`已为您自动预约${updated.name || "下一补能站"}，等待时间已按预约队列重算`, 3200);
+      showToast(`已为您自动预约${updated.name || "下一补能站"}，等待时间已按预约队列重算`, 3200, "success");
     } catch (error) {
+      if (!state.simulation.active || state.simulationSessionId !== sessionId) return;
       state.simulation.reservationAfterSnapshot = simulationSnapshotFor(station);
-      showToast(`已记录预约演示状态，等待预测暂沿用当前数据 · ${error?.message || "服务稍后重试"}`, 3600);
+      showToast(`已记录预约演示状态，等待预测暂沿用当前数据 · ${error?.message || "服务稍后重试"}`, 3600, "warning");
     } finally {
+      if (!state.simulation.active || state.simulationSessionId !== sessionId) return;
       state.simulation.reservationPending = false;
       const phase = state.simulation.phase;
       if (phase?.stop && String(phase.stop.id) === key) {
-        // Freeze the completed reservation card in automatic playback.  The
-        // reviewer must be able to read the station, ETA, before/after P50/P90
-        // and the expandable calculation evidence before the next phase starts.
+        // Freeze the completed reservation card in automatic playback so the
+        // station, ETA, before/after P50/P90 and calculation evidence remain readable.
         if (state.simulation.autoAdvance && phase.type === "reservation") {
           state.simulation.phaseElapsedMs = Number(phase.durationMs || SIMULATION_STAGE_MS.reservation);
           state.simulation.paused = true;
@@ -6477,14 +7438,17 @@
   function fallbackSimulationPoint(point) {
     const mapElement = byId("map");
     if (!mapElement || !Array.isArray(point)) return null;
-    const startLat = FALLBACK.origin[1];
-    const endLat = FALLBACK.destination[1];
-    const startLng = FALLBACK.origin[0];
-    const endLng = FALLBACK.destination[0];
-    const progress = Math.max(0, Math.min(1, (startLat - point[1]) / (startLat - endLat)));
-    const expectedLng = startLng + (endLng - startLng) * progress;
-    const x = 590 + progress * 500 + (point[0] - expectedLng) * 2500;
-    const y = 170 + progress * 560;
+    const path = state.simulation.path?.length >= 2 ? state.simulation.path : [state.origin || FALLBACK.origin, state.destination || FALLBACK.destination];
+    const start = path[0] || FALLBACK.origin;
+    const end = path[path.length - 1] || FALLBACK.destination;
+    const dLng = end[0] - start[0];
+    const dLat = end[1] - start[1];
+    const span = Math.hypot(dLng, dLat) || 0.001;
+    const along = ((point[0] - start[0]) * dLng + (point[1] - start[1]) * dLat) / (span * span);
+    const perp = (-(point[0] - start[0]) * dLat + (point[1] - start[1]) * dLng) / (span * span);
+    const progress = Math.max(0, Math.min(1, along));
+    const x = 490 + progress * 460 + perp * 220;
+    const y = 185 + progress * 500 - perp * 160;
     const rect = mapElement.getBoundingClientRect();
     const scale = Math.max(rect.width / 1440, rect.height / 900);
     return { left: (rect.width - 1440 * scale) / 2 + x * scale, top: (rect.height - 900 * scale) / 2 + y * scale };
@@ -6655,8 +7619,7 @@
 
   function simulationFrame(timestamp) {
     const simulation = state.simulation;
-    if (!simulation.active) return;
-    if (!simulation.autoAdvance) {
+    if (!simulation.active || simulation.paused || !simulation.autoAdvance) {
       simulation.rafId = null;
       return;
     }
@@ -6681,7 +7644,7 @@
         simulationAdvancePhase();
       }
     }
-    if (simulation.autoAdvance && simulation.active && simulation.phase?.type === "drive") {
+    if (!simulation.paused && simulation.autoAdvance && simulation.active && simulation.phase?.type === "drive") {
       simulation.rafId = window.requestAnimationFrame(simulationFrame);
     } else {
       simulation.rafId = null;
@@ -6694,7 +7657,13 @@
     const button = byId("simulationOcrButton");
     const detail = byId("simulationOcrDetail");
     if (!status) return;
-    if (!image?.src) {
+    const phase = state.simulation.phase;
+    const rawOriginalSrc = image?.dataset?.originalSrc || phase?.scene?.image || simulationAssetFor(phase) || "";
+    const staticAssetSrc = typeof rawOriginalSrc === "string" && !rawOriginalSrc.startsWith("data:") ? rawOriginalSrc : "";
+    if (image && staticAssetSrc && !image.dataset.originalSrc) {
+      image.dataset.originalSrc = staticAssetSrc;
+    }
+    if (!staticAssetSrc) {
       status.textContent = "场景素材尚未加载，无法执行 OCR";
       if (detail) detail.textContent = "请先让到站视觉画面加载完成，再执行本地 OCR；不会把缺少图片当作识别成功。";
       state.simulation.ocrFallbackAvailable = true;
@@ -6721,10 +7690,10 @@
       } else if (health?.modelLoaded === false || health?.status === "warming") {
         status.textContent = "正在加载本地 PaddleOCR 模型…";
       }
-      const response = await fetch(image.src, { cache: "no-store" });
+      const response = await fetch(staticAssetSrc, { cache: "no-store" });
       if (!response.ok) throw new Error("读取场景素材失败");
       const imageData = await readVisionBlob(await response.blob(), "模拟驾驶场景");
-      const result = await postJson("/api/cv/analyze", { mode: "upload", imageData, fileName: "simulation-scene.png" }, 65000);
+      const result = await postJson("/api/cv/analyze", { mode: "upload", imageData, fileName: "simulation-scene.jpg" }, 65000);
       // OCR runs asynchronously while the reviewer may manually advance to
       // the queue/service phase. Never let a late response rewrite the next
       // scene's badge or status with the previous phase's recognition result.
@@ -6764,7 +7733,8 @@
           ? "视觉服务未连接（127.0.0.1:5099）。请先启动 cv-service，再点“再次执行 OCR”；可使用预置样例继续，但不会把它当成本次图片的真实识别结果。"
           : `实际响应：${evidence || result?.source || "本地模型尚未就绪"} · 本次未形成有效 OCR 结果${timing}。可选择使用预置样例继续，不把它当成本次图片识别结果。`;
       }
-      if (result?.annotatedImage) {
+      if (image && isSafeImageSrc(result?.annotatedImage)) {
+        if (!image.dataset.originalSrc && staticAssetSrc) image.dataset.originalSrc = staticAssetSrc;
         image.src = result.annotatedImage;
         image.alt = "本地 PaddleOCR 标注结果";
         const badge = byId("simulationSceneBadge");
@@ -6823,6 +7793,7 @@
     const built = buildSimulationPhases(record);
     if (!built.phases.length) { showToast("当前路线阶段不足，无法开始模拟", 2600); return; }
     const simulation = state.simulation;
+    state.simulationSessionId += 1;
     const selectedSpeed = Number(document.querySelector("[data-simulation-speed].active")?.dataset.simulationSpeed || simulation.preferredSpeed || 3);
     simulation.active = true;
     simulation.preferredSpeed = Math.max(1, Math.min(5, selectedSpeed));
@@ -6872,7 +7843,9 @@
     }
     byId("simulationUi").hidden = false;
     byId("simulationToolbox").hidden = false;
-    byId("simulationToolbox")?.setAttribute("aria-expanded", "true");
+    const isNarrowViewport = Number(window.innerWidth || 1440) <= 760;
+    byId("simulationToolbox")?.setAttribute("aria-expanded", isNarrowViewport ? "false" : "true");
+    byId("simulationToolboxToggle")?.setAttribute("aria-expanded", isNarrowViewport ? "false" : "true");
     if (state.live && state.map) {
       const routeKm = Number(record.distance) || routeDistance(built.path);
       const simulationZoom = routeKm >= 800 ? 10 : routeKm >= 300 ? 11 : routeKm >= 80 ? 12 : 13;
@@ -6890,6 +7863,7 @@
 
   function stopSimulationDriving() {
     const simulation = state.simulation;
+    state.simulationSessionId += 1;
     if (simulation.rafId) window.cancelAnimationFrame(simulation.rafId);
     simulation.rafId = null;
     removeSimulationMarker();
@@ -6901,6 +7875,7 @@
     byId("simulationToolbox").hidden = true;
     byId("simulationSceneCard").hidden = true;
     byId("simulationSceneImage")?.removeAttribute("data-simulation-scene-key");
+    byId("simulationSceneImage")?.removeAttribute("data-original-src");
     byId("simulationDataGrid")?.remove();
     byId("simulationDataSource")?.remove();
     byId("simulationQueueNote")?.remove();
@@ -6997,6 +7972,10 @@
       return;
     }
     state.simulation.paused = !state.simulation.paused;
+    if (!state.simulation.paused && state.simulation.autoAdvance && state.simulation.phase?.type === "drive" && !state.simulation.rafId) {
+      state.simulation.lastFrameAt = performance.now();
+      state.simulation.rafId = window.requestAnimationFrame(simulationFrame);
+    }
     renderSimulationPhase(state.simulation.phase || state.simulation.phases[state.simulation.phaseIndex]);
   }
 
@@ -7083,6 +8062,7 @@
     updateInsight(state.routeRecords[state.selectedRoute]);
     syncArrivalPayment();
     renderSimulationLaunch();
+    window.requestAnimationFrame(syncDesktopComposerClearance);
   }
 
   // 混动车的两条补能路径必须放在同一条已核验路线上比较，否则"省钱"只是
@@ -7206,11 +8186,18 @@
   function branchCardMarkup(branch, comparison) {
     const active = activeEnergyKind() === branch.kind;
     const recommended = comparison.recommend === branch.kind;
+    const unavailableText = branch.unavailableReason === "first-stop-unreachable"
+      ? `当前余量无法直达最近${branch.stationType}`
+      : branch.unavailableReason === "planning-failed"
+        ? `逐段路线核验未通过，暂不可用`
+        : branch.unavailableReason === "no-station"
+          ? `沿线暂未检索到${branch.stationType}`
+          : `当前${branch.label}路径暂不可用`;
     const stopText = !branch.available
-        ? `沿线暂未检索到${branch.stationType}`
-        : branch.stops === 0
-          ? "无需补能，可直达"
-          : `需补能 ${branch.stops} 次 · 约 ${branch.stopMinutes} 分钟`;
+      ? unavailableText
+      : branch.stops === 0
+        ? "无需补能，可直达"
+        : `需补能 ${branch.stops} 次 · 约 ${branch.stopMinutes} 分钟`;
     return `<button type="button" class="hybrid-branch${active ? " active" : ""}" data-hybrid-branch="${escapeHtml(branch.kind)}" aria-pressed="${active}">
       <div class="hybrid-branch-head">
         <span class="hybrid-branch-name"><i data-lucide="${branch.kind === "fuel" ? "fuel" : "zap"}"></i>${escapeHtml(branch.label)}</span>
@@ -7292,6 +8279,7 @@
   // 里，只需要按新分支重新做多站规划并重绘。
   async function applyHybridBranch(kind, options = {}) {
     if (!isHybrid()) return;
+    const requestId = ++state.energySwitchVersion;
     const next = kind === "fuel" ? "fuel" : "electric";
     if (options.touched) state.hybridBranchTouched = true;
     // 用户手动切换是在显式重试，清掉之前自动换路径留下的失败记录，给这条分支
@@ -7311,12 +8299,14 @@
     if (state.live && state.AMap) {
       setMapStatus(`正在按${next === "fuel" ? "燃油" : "纯电"}路径重新规划…`);
       await replanRoutesViaStations();
+      if (requestId !== state.energySwitchVersion) return;
       drawAmapRoutes();
       fitAmapView();
       setMapStatus("高德地图已连接 · 真实路线与 POI 已更新", "ready");
     }
+    if (requestId !== state.energySwitchVersion) return;
     renderRouteCards();
-    if (options.touched) showToast(`已按${next === "fuel" ? "燃油" : "纯电"}路径重新生成路线`);
+    if (options.touched) showToast(`已按${next === "fuel" ? "燃油" : "纯电"}路径重新生成路线`, 2600, "success");
   }
 
   function selectedPaymentTarget() {
@@ -7397,6 +8387,7 @@
       ? `车牌识别自动扣款 · 已核销运营端 ¥${discount.toFixed(1)} 引流券`
       : "车牌识别自动扣款 · 已授权");
     const overlay = byId("paymentReceiptOverlay");
+    window.clearTimeout(closePaymentReceipt.timer);
     if (overlay) { overlay.hidden = false; overlay.classList.add("visible"); }
     refreshIcons();
     return { energyFee, discount, paid };
@@ -7406,7 +8397,8 @@
     const overlay = byId("paymentReceiptOverlay");
     if (!overlay) return;
     overlay.classList.remove("visible");
-    window.setTimeout(() => { overlay.hidden = true; }, 180);
+    window.clearTimeout(closePaymentReceipt.timer);
+    closePaymentReceipt.timer = window.setTimeout(() => { overlay.hidden = true; }, 180);
   }
 
   async function runArrivalPayment() {
@@ -7473,11 +8465,13 @@
     }
     timeline.hidden = false;
     const hasProvisional = record.stops.some((stop) => stop.provisionalCorridor);
-    const verificationNote = hasProvisional
-      ? "高德主路线已核验 · 兜底候选需确认"
-      : String(record.source || "").includes("多途经点")
-        ? "全程途经点已核验 · 道路折线分段"
-        : "逐段路线已核验";
+    const verificationNote = record.offlineCorridorRoute || !state.live
+      ? "离线走廊分段推演 · 仿真预测"
+      : hasProvisional
+        ? "高德主路线已核验 · 兜底候选需确认"
+        : String(record.source || "").includes("多途经点")
+          ? "全程途经点已核验 · 道路折线分段"
+          : "逐段路线已核验";
      timeline.innerHTML = `<div class="stop-timeline-head"><strong>分段补能账本</strong><span>${escapeHtml(verificationNote)}</span></div>${record.stops.map((stop) => `<div class="stop-timeline-item"><b>${escapeHtml(stop.sequence)}</b><div><strong title="${escapeHtml(stop.name)}">${escapeHtml(stop.name)}</strong><small>到站 ${escapeHtml(stop.arrivalSoc)}% → 补至 ${escapeHtml(stop.targetSoc)}% · ${escapeHtml(stop.legDistanceKm)} km · 停靠 P50 ${escapeHtml(stop.stopMinutesP50 ?? "—")} 分（排队 ${escapeHtml(stop.plannedP50 ?? stop.p50 ?? "—")} + 服务 ${escapeHtml(stop.chargeMinutes ?? "—")} + 支付驶离缓冲 ${escapeHtml(stop.paymentExitMinutes ?? "—")}）${stop.provisionalCorridor ? " · 设备待确认" : ""}</small></div><span>+${escapeHtml(stop.energyAmount)}${escapeHtml(record.energyUnit)}</span></div>`).join("")}`;
   }
 
@@ -7517,13 +8511,16 @@
     const evidence = $$(".evidence-row span");
     if (record.multiStop) {
       const hasProvisional = record.stops.some((stop) => stop.provisionalCorridor);
-      if (evidence[0]) evidence[0].textContent = hasProvisional
-        ? `高德主路线已核验；按沿线候选分配 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`
-        : `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`;
+      if (evidence[0]) evidence[0].textContent = record.offlineCorridorRoute || !state.live
+        ? `离线走廊已分段推演 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`
+        : hasProvisional
+          ? `高德主路线已核验；按沿线候选分配 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`
+          : `已逐段核验 ${record.stopCount} 次${isFuelActive() ? "加油" : "补能"}：首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到达 ${state.destinationName} 预计余量 ${record.arrivalSoc}%。`;
       if (evidence[1]) evidence[1].textContent = `建议累计${isFuelActive() ? "加油" : "补能"} ${record.energyAmount} ${record.energyUnit}；补能停靠总耗时 P50 ${record.totalStopMinutesP50} 分 / P90 ${record.totalStopMinutesP90} 分（排队 P50 ${record.p50Wait} + 服务 ${record.serviceMinutes} + 支付驶离缓冲 ${record.paymentExitMinutes}）。`;
       if (evidence[2]) evidence[2].textContent = `总绕行 ${Number(record.detour || 0).toFixed(1)} km · ${formatJourneyClock(record.arrival)} 抵达 · ${arrivalReserveDescription(record)}。`;
       renderServiceRecommendations(record);
       updateServiceNudge(record);
+      syncInsightDisplayCopy();
       return;
     }
     if (evidence[0]) evidence[0].textContent = `首段 ${record.firstLegKm?.toFixed(1) || "—"} km，到站余量 ${record.arrivalAtStationSoc ?? "—"}% · 绕行 ${record.station.detour} km，预计 ${formatJourneyClock(record.arrival)} 抵达${state.destinationName}`;
@@ -7555,7 +8552,7 @@
     highlightSelectedStation();
     setText("stationTitle", "本次行程无需补能");
     const subtitle = byId("stationSubtitle");
-    if (subtitle) subtitle.innerHTML = `当前${isFuelActive() ? "油量" : "电量"}可直达 ${escapeHtml(state.destinationName)}<span class="source-badge"> · 真实路线 / 能耗模型计算</span>`;
+    if (subtitle) subtitle.innerHTML = `当前${isFuelActive() ? "油量" : "电量"}可直达 ${escapeHtml(state.destinationName)}<span class="source-badge"> · ${state.live ? "真实路线" : "离线走廊推演"} / 能耗模型计算</span>`;
     setInsightBadge("直达可行", false);
     const wait = byId("waitValue");
     if (wait) wait.innerHTML = `0 <small>分钟</small>`;
@@ -7846,6 +8843,67 @@
     return conservativeExtraMinutes + 6 <= slackMinutes;
   }
 
+  function buildOfflineServiceOptions(record, suggestion, preferredName, serviceKind) {
+    const locationLabel = suggestion.locationLabel || serviceLocationLabel(record, suggestion.progress);
+    const center = pointAtPathProgress(record.path, suggestion.progress) || state.destination || FALLBACK.destination;
+    const baseVenues = [
+      {
+        id: `offline-service-area-${record.key}`,
+        name: `${locationLabel}高速服务区`,
+        address: "离线参考 · 沿线高速综合服务区",
+        location: [Number((center[0] + 0.002).toFixed(6)), Number((center[1] + 0.001).toFixed(6))],
+        serviceType: serviceKind === "meal" ? "meal" : "rest",
+        icon: "utensils",
+        durationMinutes: 18,
+        detourKm: 0.4,
+        highwayServiceArea: true,
+        offlineReference: true,
+        reason: `离线参考 · 沿线服务区简餐与休整（预计在${locationLabel}附近）`
+      },
+      {
+        id: `offline-coffee-${record.key}`,
+        name: "驿站精品咖啡角",
+        address: "离线参考 · 补能站旁咖啡空间",
+        location: [Number((center[0] - 0.0015).toFixed(6)), Number((center[1] + 0.0015).toFixed(6))],
+        serviceType: "coffee",
+        icon: "coffee",
+        durationMinutes: 12,
+        detourKm: 0.5,
+        offlineReference: true,
+        reason: "离线参考 · 现磨咖啡与短暂休息，可与补能驻留并行"
+      },
+      {
+        id: `offline-meal-${record.key}`,
+        name: "沿途轻食简餐馆",
+        address: "离线参考 · 沿线快捷简餐",
+        location: [Number((center[0] + 0.001).toFixed(6)), Number((center[1] - 0.0015).toFixed(6))],
+        serviceType: "meal",
+        icon: "utensils",
+        durationMinutes: 20,
+        detourKm: 0.6,
+        offlineReference: true,
+        reason: `离线参考 · 简餐补给，预计距主路线约 0.6 km`
+      },
+      {
+        id: `offline-store-${record.key}`,
+        name: "24 小时补给便利店",
+        address: "离线参考 · 沿线便利店与饮品补给",
+        location: [Number((center[0] - 0.001).toFixed(6)), Number((center[1] - 0.001).toFixed(6))],
+        serviceType: "rest",
+        icon: "store",
+        durationMinutes: 10,
+        detourKm: 0.4,
+        offlineReference: true,
+        reason: "离线参考 · 便利店速食、饮品与卫生间服务"
+      }
+    ];
+    return baseVenues.map((venue) => Object.assign({}, venue, {
+      routeProgress: suggestion.progress,
+      targetLocationLabel: locationLabel,
+      alternative: Boolean(preferredName)
+    }));
+  }
+
   async function loadServiceRecommendations(record, options = {}) {
     let suggestion = state.serviceSuggestion;
     if (options.action && record) {
@@ -7864,17 +8922,32 @@
       });
       state.serviceSuggestion = suggestion;
     }
-    if (!record || !suggestion || suggestion.recordKey !== record.key || !state.AMap) return;
+    if (!record || !suggestion || suggestion.recordKey !== record.key) return;
+    const preferredName = String(options.preferredName || "").trim();
+    const serviceKind = options.kind || suggestion.kind || "meal";
+    if (!state.AMap) {
+      suggestion.accepted = true;
+      suggestion.loading = false;
+      suggestion.offlineReference = true;
+      suggestion.requestedServiceName = preferredName || null;
+      suggestion.exactMatchLocated = false;
+      suggestion.exactMatchFound = false;
+      suggestion.filteredOutCount = 0;
+      suggestion.options = buildOfflineServiceOptions(record, suggestion, preferredName, serviceKind);
+      if (byId("serviceNudge")) byId("serviceNudge").hidden = true;
+      renderServiceRecommendations(record);
+      revealServiceFlow({ attention: true, toast: "离线模式：已在右侧展示沿线参考服务（离线参考）" });
+      return;
+    }
     suggestion.accepted = true;
     suggestion.loading = true;
+    suggestion.offlineReference = false;
     const requestId = ++state.serviceRequestVersion;
     byId("serviceNudge").hidden = true;
     revealServiceFlow({ attention: true, toast: "请在右侧查看非油服务推荐" });
     renderServiceRecommendations(record);
     const center = pointAtPathProgress(record.path, suggestion.progress);
     if (!center) return;
-    const preferredName = String(options.preferredName || "").trim();
-    const serviceKind = options.kind || suggestion.kind || "meal";
     let searches = preferredName
       ? [[preferredName, serviceKind], ...(serviceKind === "meal" ? [["餐厅", "meal"], ["咖啡厅", "coffee"]] : serviceKind === "rest" ? [["休息区", "rest"], ["咖啡厅", "coffee"]] : [["咖啡厅", "coffee"], ["便利店", "rest"]])]
       : suggestion.kind === "meal"
@@ -8002,7 +9075,11 @@
     const options = suggestion.options || [];
     flow?.classList.toggle("is-recommended", options.length > 0);
     const excludedByDeadline = Number(suggestion.filteredOutCount || 0);
-    if (dwellLabel) dwellLabel.textContent = `预计 ${formatJourneyClock(suggestion.targetMinute)} 在${suggestion.locationLabel || serviceLocationLabel(record, suggestion.progress)}附近经过 · 高德真实 POI`;
+    if (dwellLabel) {
+      dwellLabel.textContent = suggestion.offlineReference
+        ? `预计 ${formatJourneyClock(suggestion.targetMinute)} 在${suggestion.locationLabel || serviceLocationLabel(record, suggestion.progress)}附近经过 · 离线参考`
+        : `预计 ${formatJourneyClock(suggestion.targetMinute)} 在${suggestion.locationLabel || serviceLocationLabel(record, suggestion.progress)}附近经过 · 高德真实 POI`;
+    }
     const requestedName = String(suggestion.requestedServiceName || "").trim();
     const hasExact = Boolean(suggestion.exactMatchFound);
     container.innerHTML = options.length
@@ -8020,6 +9097,37 @@
   }
 
   async function applyServicePlan(service) {
+    const applyId = ++state.serviceApplyVersion;
+    if (!state.AMap && service?.offlineReference) {
+      const currentRecord = state.routeRecords[state.selectedRoute] || state.routeRecords.reliable;
+      if (!currentRecord) return;
+      const extraMinutes = Math.max(5, Number(service.durationMinutes || 12) + Math.ceil(Number(service.detourKm || 0.5) * 2));
+      const servicePlan = {
+        id: service.id,
+        name: service.name,
+        icon: service.icon,
+        serviceType: service.serviceType,
+        serviceLabel: service.serviceType === "rest" ? "休息" : "餐饮",
+        location: service.location,
+        durationMinutes: service.durationMinutes,
+        extraMinutes,
+        routeMode: "estimated-corridor",
+        source: "离线参考 · 演示服务时长"
+      };
+      state.selectedService = service.id;
+      state.activeServicePlan = servicePlan;
+      const updated = Object.assign({}, currentRecord, {
+        total: Number(currentRecord.total || 0) + extraMinutes,
+        p90Total: Number(currentRecord.p90Total || currentRecord.total || 0) + extraMinutes,
+        arrival: state.departureMinutes + Number(currentRecord.total || 0) + extraMinutes,
+        detour: Number((Number(currentRecord.detour || 0) + Number(service.detourKm || 0.5)).toFixed(1)),
+        servicePlan
+      });
+      state.routeRecords[state.selectedRoute] = updated;
+      renderRouteCards();
+      showToast(`已将「${service.name}」（离线参考）加入行程`, 2800, "success");
+      return;
+    }
     setText("serviceStatus", "正在将服务停靠加入真实路线并重算 ETA…");
     const preferredRole = state.selectedRoute;
     const evaluateServiceOnRoute = async (role, record) => {
@@ -8134,12 +9242,14 @@
     };
     const canUse = (candidate) => Boolean(candidate.updated && candidate.updated.canReachStation && candidate.updated.targetSocMet && candidate.serviceDetourWithinLimit && candidate.updated.lateMinutes === 0);
     let candidate = await evaluateServiceOnRoute(preferredRole, state.routeRecords[preferredRole]);
+    if (applyId !== state.serviceApplyVersion) return;
     let switchedToFastest = false;
     // A meal can make the "most reliable" option miss the deadline by a few
     // minutes while the already-computed fastest option still meets every
     // constraint. Try that alternative before rejecting a useful service.
     if (!canUse(candidate) && preferredRole !== "fastest" && state.routeRecords.fastest?.feasible) {
       const fastestCandidate = await evaluateServiceOnRoute("fastest", state.routeRecords.fastest);
+      if (applyId !== state.serviceApplyVersion) return;
       if (canUse(fastestCandidate)) {
         candidate = fastestCandidate;
         switchedToFastest = true;
@@ -8453,6 +9563,22 @@
       setOperatorAnalysisStep("feishu", "idle", simulationReady ? "等待 AI 解读" : "等待仿真结果");
     }
     renderFeishuAiResult(result);
+    const details = byId("feishuAiDetails");
+    const badge = byId("feishuSummaryBadge");
+    if (badge) {
+      badge.textContent = stateName === "completed"
+        ? "已生成 AI 解读"
+        : stateName === "processing"
+          ? "分析中…"
+          : stateName === "error"
+            ? "暂不可用"
+            : result?.status === "not-configured"
+              ? "未配置 · 本地沙盘可用"
+              : state.feishuConfigured ? "已接入 · 等待仿真" : "未配置 · 可展开查看说明";
+    }
+    if (details && (stateName === "completed" || stateName === "processing" || state.feishuConfigured)) {
+      details.open = true;
+    }
     if (button) button.disabled = stateName === "processing" && result?.timedOut !== true;
   }
 
@@ -8656,6 +9782,7 @@
       if (pollVersion !== state.feishuPollVersion) return;
       try {
         const result = await getJson(`/api/feishu/sync/${encodeURIComponent(syncId)}`, 12000);
+        if (pollVersion !== state.feishuPollVersion) return;
         if (result.status === "error" && result.retryable === true && attempt < maxAttempts - 1) {
           state.feishuSync = {
             ...state.feishuSync,
@@ -8678,6 +9805,7 @@
           return;
         }
       } catch (error) {
+        if (pollVersion !== state.feishuPollVersion) return;
         const retryable = error?.retryable === true || error?.name === "AbortError" || error?.name === "TimeoutError";
         if (retryable && attempt < maxAttempts - 1) {
           state.feishuSync = {
@@ -8746,6 +9874,7 @@
     renderFeishuSyncStatus(state.feishuSync);
     try {
       const result = await postJson("/api/feishu/sync", { runId, ...feishuPayload }, 30000);
+      if (pollVersion !== state.feishuPollVersion) return;
       state.feishuSync = result;
       renderFeishuSyncStatus(result);
       if (result.status === "not-configured") {
@@ -8757,10 +9886,12 @@
         await pollFeishuSync(result.syncId, pollVersion);
       }
     } catch (error) {
+      if (pollVersion !== state.feishuPollVersion) return;
       state.feishuSync = { status: "error", mode: "error", message: error.message || "飞书同步失败" };
       renderFeishuSyncStatus(state.feishuSync);
       showToast("飞书同步失败，未影响本地运营结果", 3600);
     } finally {
+      if (pollVersion !== state.feishuPollVersion) return;
       if (button && (state.feishuSync?.status !== "processing" || state.feishuSync?.timedOut === true)) button.disabled = false;
     }
   }
@@ -8896,7 +10027,8 @@
     const adviceValue = byId("energyAdviceValue");
     if (title) title.textContent = station.name;
     if (wait) wait.innerHTML = `${escapeHtml(station.p90)} <small>分钟</small>`;
-    if (subtitle) subtitle.innerHTML = `额外里程 ${escapeHtml(station.detour)} km · ${station.type === "加油站" ? "油品服务" : "直流快充"}<span class="source-badge"> · ${escapeHtml(station.source)} · 演示预测状态</span>`;
+    const stationSourceLabel = !state.live ? "离线走廊站点" : (station.source || "高德真实 POI");
+    if (subtitle) subtitle.innerHTML = `额外里程 ${escapeHtml(station.detour)} km · ${station.type === "加油站" ? "油品服务" : "直流快充"}<span class="source-badge"> · ${escapeHtml(stationSourceLabel)} · 演示预测状态</span>`;
     if (badge) {
       badge.innerHTML = `<i data-lucide="${station.status === "forecast-risk" ? "triangle-alert" : "check-circle-2"}"></i>${escapeHtml(station.riskLabel)}`;
       badge.classList.toggle("risk", station.status === "forecast-risk");
@@ -8968,9 +10100,33 @@
     if (state.live) fitAmapView();
   }
 
+  function initializeBaselineOfflinePlan() {
+    if (state.hasPlannedRoute) return;
+    state.origin = parseLocation(state.origin) || DEFAULT_ORIGIN.coordinate.slice();
+    state.originName = state.originName || DEFAULT_ORIGIN.name;
+    state.originNote = state.originNote || DEFAULT_ORIGIN.note;
+    state.originCity = state.originCity || DEFAULT_ORIGIN.city;
+    state.destination = FALLBACK.destination.slice();
+    state.destinationName = "北京南站";
+    state.destinationCity = "北京";
+    setText("destinationName", state.destinationName);
+    updateOriginSurface();
+    prepareFallbackPlan();
+    state.hasPlannedRoute = true;
+    renderFallbackRouteVisuals();
+    setPlanningVisibility(true);
+    renderRouteCards();
+    const base = state.baseRouteRecords.reliable || state.routeRecords.reliable;
+    if (base) void ensureStationForecasts(base, "reliable");
+  }
+
   function setMode(mode) {
     if (state.simulation?.active && mode !== "driver") stopSimulationDriving();
+    if ((mode === "operator" || mode === "validation") && !state.hasPlannedRoute) {
+      initializeBaselineOfflinePlan();
+    }
     state.mode = mode;
+    byId("app")?.setAttribute("data-active-mode", mode);
     const composerDock = byId("aiComposerDock");
     const isDriverMode = mode === "driver";
     if (composerDock) {
@@ -8994,18 +10150,18 @@
     byId("validationPanel").classList.toggle("visible", mode === "validation");
     byId("visionPanel")?.classList.toggle("visible", mode === "vision");
     byId("routeSheet").style.display = mode === "driver" && !state.mobileInsightOpen ? "" : "none";
-    if (mode === "driver") byId("mapAttribution").textContent = state.live ? "高德地图 · 真实路线与 POI / 演示预测状态" : "固定场景地图 · POI 示意 / 演示预测状态";
+    if (mode === "driver") byId("mapAttribution").textContent = state.live ? "高德地图 · 真实路线与 POI / 演示预测状态" : "离线沙盒地图 · 走廊示意 / 仿真预测状态";
     if (mode === "operator") {
       byId("mapAttribution").textContent = state.live
         ? "高德地图 · 真实路线与 POI / 演示运营负载"
-        : "固定场景地图 · POI 示意 / 演示运营负载";
+        : "离线沙盒地图 · 走廊示意 / 仿真运营负载";
       syncOperatorPanelTitle();
       renderOperatorFlow(state.pendingOperatorPayload);
-      if (state.map && state.stations.length) state.map.setFitView(state.stationOverlays, false, [90, 380, 220, 330], 11);
+      if (state.map && state.stations.length) state.map.setFitView(state.stationOverlays, false, amapFitPadding("operator"), 11);
     }
     if (mode === "validation") byId("mapAttribution").textContent = state.live
       ? "高德地图 · 沿线 POI / 固定种子验证场景"
-      : "固定场景地图 · POI 示意 / 固定种子验证场景";
+      : "离线沙盒地图 · 走廊示意 / 固定种子验证场景";
     if (mode === "validation" && !state.validationLoaded) loadValidation();
     if (mode === "vision") {
       byId("mapAttribution").textContent = "站内视觉演示 · 内置样例/上传媒体 · 本地 OCR";
@@ -9062,23 +10218,28 @@
   // 报错，而不是退回默认起点后画出一条"起点不对"的真实折线。
   function showUnresolvedOrigin(origin) {
     clearPlanForUnresolvedDestination();
-    const message = `未能定位出发地“${origin}”。系统没有改用默认起点${DEFAULT_ORIGIN_NAME}替代，请检查名称后重试。`;
+    const message = `未能定位出发地“${origin}”。系统没有改用默认起点${DEFAULT_ORIGIN.name}替代，请检查名称后重试。`;
     setAiStatus("出发地未定位", "unresolved");
     setAiReply(message);
     setText("aiReplyMeta", "未生成路线");
     showToast(message, 4600);
   }
 
-  function showUnresolvedDestination(destination, resolution = null) {
+  function showUnresolvedDestination(destination, resolution = null, payload = null) {
     clearPlanForUnresolvedDestination();
     const aiChecked = resolution === "ai-fallback" || resolution === "unresolved";
-    const message = destination
-      ? aiChecked
-        ? `未找到地点“${destination}”。规则未直接识别，AI 复核后也没有得到可确认的驾车地点，请换一个更具体的名称。`
-        : `未能定位“${destination}”，或该地点暂不支持驾车路线。系统没有使用默认机场替代，请检查名称后重试。`
-      : aiChecked
-        ? "未找到地点。规则解析和 AI 复核都没有得到可确认的驾车目的地，请补充一个具体地点后再试。"
-        : "没有识别到目的地，因此没有使用默认机场代替。请补充一个可驾车到达的目的地后再试。";
+    const offlineMapMode = payload?.mapConfigured === false;
+    const message = offlineMapMode
+      ? destination
+        ? `未能定位“${destination}”。当前处于离线模式，仅内置主要城市与核心交通枢纽；配置高德地图密钥后可解锁全国地点检索。系统不会使用默认目的地替代。`
+        : "没有识别到目的地。当前处于离线模式，仅内置主要城市与核心交通枢纽；配置高德地图密钥后可解锁全国地点检索。请补充一个可驾车到达的目的地后再试。"
+      : destination
+        ? aiChecked
+          ? `未找到地点“${destination}”。规则未直接识别，AI 复核后也没有得到可确认的驾车地点，请换一个更具体的名称。`
+          : `未能定位“${destination}”，或该地点暂不支持驾车路线。系统不会使用默认目的地替代，请检查名称后重试。`
+        : aiChecked
+          ? "未找到地点。规则解析和 AI 复核都没有得到可确认的驾车目的地，请补充一个具体地点后再试。"
+          : "没有识别到目的地，因此不会使用默认目的地代替。请补充一个可驾车到达的目的地后再试。";
     setAiStatus("目的地未定位", "unresolved");
     setAiReply(message);
     setText("aiReplyMeta", "未生成路线");
@@ -9125,15 +10286,18 @@
     setAiStatus("正在理解需求", "loading");
     setAiReply("正在把你的自然语言要求拆解为路线约束……");
     try {
+      const isBrowserOrigin = state.originSource === "browser";
       const payload = await postJson("/api/plan", {
         message: value,
-        // The text box is authoritative for destination. Do not feed the demo
-        // airport back as context, otherwise an uncertain parse can silently
-        // fall back to Beijing Daxing International Airport.
+        // The text box is authoritative for destination. Only attach
+        // originLocation when the user explicitly chose browser geolocation, so
+        // typing an explicit origin (e.g. "从上海去杭州") resolves cleanly.
         context: {
-          origin: state.originName || DEFAULT_ORIGIN_NAME,
-          originLocation: state.origin,
-          originLocationSource: state.originSource || null,
+          origin: state.originName || DEFAULT_ORIGIN.name,
+          ...(isBrowserOrigin ? {
+            originLocation: state.origin,
+            originLocationSource: "用户当前位置（浏览器定位）"
+          } : {}),
           originCity: state.originCity || null,
           arrivalDeadline: state.deadlineEnabled ? formatClock(state.deadlineMinutes) : null,
           minArrivalSoc: state.arrivalReserveEnabled ? state.minArrivalSoc : null,
@@ -9217,7 +10381,7 @@
           showToast("请先选择一个目的地候选", 3200);
           return;
         }
-        showUnresolvedDestination(applied.destination, payload.destinationResolution);
+        showUnresolvedDestination(applied.destination, payload.destinationResolution, payload);
         return;
       }
       clearDestinationCandidates();
@@ -9270,7 +10434,7 @@
       const applied = applyParsedIntent(parsedForApply, payloadForApply);
       if (!applied.ok) {
         if (applied.originUnresolved) showUnresolvedOrigin(applied.origin);
-        else showUnresolvedDestination(applied.destination);
+        else showUnresolvedDestination(applied.destination, null, { mapConfigured: state.live });
         return;
       }
       const preRouteOutcome = await applyPreRouteActions(actions);
@@ -9468,13 +10632,15 @@
         : "当前没有可执行策略，不生成场景 ROI 或优惠结论";
     }
     if (action && executed && strategyAvailable) {
-      const improved = snapshot.p90 <= state.operatorBefore.p90;
-      const p90Message = snapshot.p90 < state.operatorBefore.p90
-        ? `P90 从 ${state.operatorBefore.p90.toFixed(1)} 分钟降至 ${snapshot.p90.toFixed(1)} 分钟`
-        : `P90 保持 ${snapshot.p90.toFixed(1)} 分钟`;
+      const beforeP90 = Number(state.operatorBefore?.p90 ?? snapshot.p90);
+      const afterP90 = Number(snapshot.p90 ?? beforeP90);
+      const improved = afterP90 <= beforeP90;
+      const p90Message = afterP90 < beforeP90
+        ? `P90 从 ${beforeP90.toFixed(1)} 分钟降至 ${afterP90.toFixed(1)} 分钟`
+        : `P90 保持 ${afterP90.toFixed(1)} 分钟`;
       action.innerHTML = improved
          ? `<strong>策略沙盘结果：</strong>高峰站点仿真预计可引导，${p90Message}。`
-         : `<strong>沙盘复盘：</strong>P90 从 ${state.operatorBefore.p90.toFixed(1)} 分钟升至 ${snapshot.p90.toFixed(1)} 分钟，本沙盘建议应撤回并降低优惠强度。`;
+         : `<strong>沙盘复盘：</strong>P90 从 ${beforeP90.toFixed(1)} 分钟升至 ${afterP90.toFixed(1)} 分钟，本沙盘建议应撤回并降低优惠强度。`;
     } else if (action) {
       action.innerHTML = strategyAvailable
          ? `<strong>沙盘建议：</strong>依据平台承接容量、人群响应和场景 ROI，比较平台券与推荐引导方案。`
@@ -9661,6 +10827,7 @@
   }
 
   async function simulateOperatorStrategy() {
+    const requestId = ++state.operatorSimRequestVersion;
     const button = byId("operatorSimulate");
     const discount = Number(byId("discountSlider")?.value || 0);
     const targetUser = byId("targetSegment")?.selectedOptions?.[0]?.textContent || "全部可触达用户";
@@ -9692,6 +10859,7 @@
         targetSegment,
         targetStationId
       }, 20000);
+      if (requestId !== state.operatorSimRequestVersion) return;
       const snapshot = renderOperatorSimulation(payload);
       state.pendingOperatorPayload = payload;
       state.pendingOperatorSnapshot = snapshot;
@@ -9702,15 +10870,16 @@
         ? "已根据平台边界、券成本与目标人群完成场景仿真"
         : "已完成站点边界校验，当前未生成可执行运营策略");
     } catch (error) {
+      if (requestId !== state.operatorSimRequestVersion) return;
       state.pendingOperatorPayload = null;
       state.pendingOperatorSnapshot = null;
       state.operatorAfter = null;
       renderOperatorMetrics(state.operatorBefore || computeOperatorSnapshot(state.stations), false);
       renderOperatorFlow(null);
       setOperatorAnalysisStep("simulation", "error", "计算失败");
-      showToast("策略计算失败，请稍后重试", 3600);
+      showToast("策略计算失败，请稍后重试", 3600, "error");
     } finally {
-      if (button) button.disabled = false;
+      if (requestId === state.operatorSimRequestVersion && button) button.disabled = false;
     }
   }
 
@@ -9807,14 +10976,18 @@
   }
 
   async function refreshVisionHealth() {
+    const requestId = ++state.visionHealthVersion;
     const status = byId("visionHealthStatus");
     if (status) {
       status.dataset.state = "checking";
       status.textContent = "正在检查本地视觉服务…";
     }
     try {
-      renderVisionHealth(await getJson("/api/cv/health", 5000));
+      const payload = await getJson("/api/cv/health", 5000);
+      if (requestId !== state.visionHealthVersion) return;
+      renderVisionHealth(payload);
     } catch {
+      if (requestId !== state.visionHealthVersion) return;
       renderVisionHealth({ configured: true, serviceConfigured: true, serviceReachable: false, status: "unreachable" });
     }
   }
@@ -9836,8 +11009,11 @@
     const preview = byId("visionPreviewImage");
     const previewVideo = byId("visionPreviewVideo");
     const empty = byId("visionPreviewEmpty");
-    const image = result?.annotatedImage || result?.previewImage;
-    const videoSource = result?.previewVideo;
+    const rawAnnotated = isSafeImageSrc(result?.annotatedImage) ? result.annotatedImage : null;
+    const rawPreview = isSafeImageSrc(result?.previewImage) ? result.previewImage : null;
+    const image = rawAnnotated || rawPreview;
+    const isVideoMode = String(result?.mode || "").trim().toLowerCase() === "video";
+    const videoSource = isVideoMode && isSafeVideoSrc(result?.previewVideo) ? result.previewVideo.trim() : null;
     if (preview && image && !videoSource) {
       preview.src = image;
       preview.hidden = false;
@@ -9902,13 +11078,19 @@
     if (evidence) evidence.innerHTML = (Array.isArray(result?.evidence) && result.evidence.length ? result.evidence : ["暂无可展示的计算依据"]).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
     setText("visionBoundary", visionText(result?.dataBoundary, "视觉结果边界待确认"));
     const json = byId("visionJson");
+    const jsonDetails = byId("visionJsonDetails");
     if (json) {
       const safe = Object.assign({}, result || {});
       delete safe.annotatedImage;
       delete safe.previewImage;
       delete safe.previewVideo;
       json.textContent = JSON.stringify(safe, null, 2);
-      json.hidden = !result;
+      if (jsonDetails) {
+        jsonDetails.hidden = !result;
+        jsonDetails.open = false;
+      } else {
+        json.hidden = !result;
+      }
     }
     const status = byId("visionStatus");
     if (status) {
@@ -9979,9 +11161,11 @@
     try {
       const body = { mode, seed: "flowtwin-vision-01" };
       if (mode === "sample") {
-        body.mode = "upload";
-        body.imageData = await readBuiltInVisionSample();
-        body.fileName = "default-camera-scene.png";
+        // Keep mode === "sample" so backend identifies this as built-in sample
+        // pipeline instead of mislabeling it as a user local upload.
+        body.mode = "sample";
+        body.imageData = await readBuiltInVisionSample().catch(() => null);
+        body.fileName = "default-camera-scene.jpg";
       } else if (mode === "upload") {
         if (!state.visionFile) throw new Error("请先选择一张图片或短视频");
         const isVideo = /^video\//i.test(state.visionFile.type);
@@ -9991,20 +11175,34 @@
         else body.imageData = dataUrl;
         body.fileName = state.visionFile.name;
       }
-      const isVideo = body.mode === "video";
-      const result = await postJson("/api/cv/analyze", body, isVideo ? 125000 : body.mode === "upload" ? 65000 : 25000);
       if (requestId !== state.visionRequestVersion) return;
-      // Keep the preview in the browser's existing FileReader data URL. The
-      // local CV service should not echo the uploaded plate image back in its
-      // JSON response, which reduces memory duplication and data retention.
-      renderVisionResult(body.mode === "video"
-        ? { ...result, previewVideo: body.videoData }
-        : body.mode === "upload" ? { ...result, previewImage: body.imageData } : result);
+      const isVideo = body.mode === "video";
+      const result = await postJson("/api/cv/analyze", body, isVideo ? 125000 : 65000);
+      if (requestId !== state.visionRequestVersion) return;
+      const previewImage = body.mode === "sample"
+        ? (body.imageData || DEFAULT_VISION_SAMPLE_URL)
+        : body.mode === "upload" ? body.imageData : null;
+      const sanitizedResult = Object.assign({}, result || {});
+      if (body.mode === "video") {
+        sanitizedResult.mode = "video";
+        if (isSafeVideoSrc(body.videoData)) sanitizedResult.previewVideo = body.videoData;
+        else delete sanitizedResult.previewVideo;
+      } else {
+        delete sanitizedResult.previewVideo;
+        if (previewImage) sanitizedResult.previewImage = previewImage;
+      }
+      renderVisionResult(sanitizedResult);
     } catch (error) {
+      if (requestId !== state.visionRequestVersion) return;
       if (status) { status.dataset.state = "error"; status.textContent = error?.message || "视觉分析失败"; }
-      showToast(error?.message || "视觉分析失败", 3200);
+      showToast(error?.message || "视觉分析失败", 3200, "error");
     } finally {
-      [sampleButton, uploadButton].filter(Boolean).forEach((button) => { button.disabled = button === uploadButton ? !state.visionFile : false; button.removeAttribute("aria-busy"); });
+      if (requestId === state.visionRequestVersion) {
+        [sampleButton, uploadButton].filter(Boolean).forEach((button) => {
+          button.disabled = button === uploadButton ? !state.visionFile : false;
+          button.removeAttribute("aria-busy");
+        });
+      }
     }
   }
 
@@ -10081,6 +11279,7 @@
 
   async function loadValidation(force = false) {
     if (state.validationLoaded && !force) return;
+    const requestId = ++state.validationRequestVersion;
     setText("validationStatusText", "正在运行策略仿真…");
     setText("validationStatusMeta", "固定随机种子 · 正在以当前站点输入计算 1,000 次合成行程");
     const evidenceButton = byId("validationEvidenceButton");
@@ -10089,8 +11288,10 @@
     if (progress) progress.style.width = "34%";
     try {
       const payload = await postJson("/api/validate", { trips: 1000, seed: 20260719, stations: validationStationInput() }, 30000);
+      if (requestId !== state.validationRequestVersion) return;
       renderValidationPayload(payload);
     } catch (error) {
+      if (requestId !== state.validationRequestVersion) return;
       setText("validationStatusText", "仿真服务暂不可用");
       setText("validationStatusMeta", "未生成结果；不会展示示例数字或伪造结论");
       if (progress) progress.style.width = "0%";
@@ -10101,6 +11302,7 @@
     const payload = state.pendingOperatorPayload;
     if (!payload?.stations?.length) return false;
     const before = state.operatorBefore || computeOperatorSnapshot(state.stations);
+    state.operatorBefore = before;
     const executable = payload.execution?.executable === true && payload.insufficientData !== true;
     if (!executable) {
       // 站点边界或经济字段不满足时，不把“仿真响应”写回导航状态，
@@ -10197,36 +11399,65 @@
     }
     if (!state.pendingOperatorPayload) await simulateOperatorStrategy();
     if (!state.pendingOperatorPayload) return;
+    const activeLoopId = ++state.operatorSimRequestVersion;
     state.executionState = "running";
     const button = byId("approveButton");
+    let applied = false;
     if (button) {
       button.innerHTML = '<i data-lucide="loader-circle"></i>正在生成沙盘结果…';
       button.disabled = true;
       button.style.opacity = "0.72";
       refreshIcons();
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 680));
-    applyStrategy();
-    state.executionState = "after";
-    setOperatorAnalysisStep("simulation", "completed", "已完成");
-    if (button) {
-      button.innerHTML = '<i data-lucide="loader-circle"></i>正在同步并检查 AI 解读…';
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 680));
+      if (activeLoopId !== state.operatorSimRequestVersion) return;
+      applyStrategy();
+      applied = true;
+      state.executionState = "after";
+      setOperatorAnalysisStep("simulation", "completed", "已完成");
+      if (button) {
+        button.innerHTML = '<i data-lucide="loader-circle"></i>正在同步并检查 AI 解读…';
+        refreshIcons();
+      }
+      await syncFeishuOperatorSnapshot();
+      if (activeLoopId !== state.operatorSimRequestVersion) return;
+      if (button) {
+        button.disabled = false;
+        button.style.opacity = "1";
+        // The completed state keeps the teal CTA background; keep the label
+        // white so it does not disappear into the button color.
+        button.style.color = "white";
+        button.innerHTML = '<i data-lucide="rotate-ccw"></i>重置分析';
+      }
+      // The main CTA becomes “重置分析” after completion; keep the legacy
+      // secondary reset control hidden so the UI exposes one clear action.
+      byId("resetExecution")?.classList.add("hidden");
+      showToast(operatorAnalysisCompletionToast());
       refreshIcons();
+    } finally {
+      if (!applied) {
+        state.executionState = "before";
+        if (button) {
+          button.disabled = false;
+          button.style.opacity = "1";
+          button.style.color = "";
+          button.innerHTML = '<i data-lucide="sparkles"></i>开始智能分析';
+          refreshIcons();
+        }
+      } else if (button && button.disabled) {
+        button.disabled = false;
+        button.style.opacity = "1";
+        if (state.executionState === "after") {
+          button.style.color = "white";
+          button.innerHTML = '<i data-lucide="rotate-ccw"></i>重置分析';
+        } else {
+          button.style.color = "";
+          button.innerHTML = '<i data-lucide="sparkles"></i>开始智能分析';
+        }
+        refreshIcons();
+      }
     }
-    await syncFeishuOperatorSnapshot();
-    if (button) {
-      button.disabled = false;
-      button.style.opacity = "1";
-      // The completed state keeps the teal CTA background; keep the label
-      // white so it does not disappear into the button color.
-      button.style.color = "white";
-      button.innerHTML = '<i data-lucide="rotate-ccw"></i>重置分析';
-    }
-    // The main CTA becomes “重置分析” after completion; keep the legacy
-    // secondary reset control hidden so the evaluator sees one clear action.
-    byId("resetExecution")?.classList.add("hidden");
-    showToast(operatorAnalysisCompletionToast());
-    refreshIcons();
   }
 
   function hybridBranchRangeKm(kind) {
@@ -10245,10 +11476,10 @@
     if (stateLabel) stateLabel.textContent = hybrid ? (isFuel ? "混动 · 油量" : "混动 · 电量") : isFuel ? "当前油量" : "当前电量";
     $$('[data-energy-type]').forEach((button) => button.classList.toggle("active", button.dataset.energyType === state.energyType));
     const vehicleIcon = byId("vehicleEnergyIcon");
-    const vehiclePercent = byId("vehicleEnergyPercent");
     const vehicleRange = byId("vehicleEnergyRange");
+    const settingsEnergyLabel = byId("settingsEnergyLabel");
     if (vehicleIcon) vehicleIcon.outerHTML = `<i data-lucide="${isFuel ? "fuel" : "battery-medium"}" id="vehicleEnergyIcon"></i>`;
-    if (vehiclePercent) vehiclePercent.textContent = `${Math.round(state.energyPercent)}%`;
+    if (settingsEnergyLabel) settingsEnergyLabel.textContent = isFuel ? "当前油量 (%)" : "当前电量 (%)";
     if (vehicleRange) {
       const profile = getEnergyProfile(isFuel);
       const estimatedRange = Math.max(0, Math.floor(profile.capacity * state.energyPercent / 100 / profile.consumptionPerKm));
@@ -10296,18 +11527,21 @@
 
   async function setEnergyType(type, replan) {
     if (!ENERGY_TYPES.includes(type)) return;
+    const requestId = ++state.energySwitchVersion;
     const changed = adoptEnergyType(type);
     state.lastIntentSignature = null;
     state.routeSelectionTouched = false;
     state.selectedRoute = "reliable";
     updateEnergyControls();
-    // The selector now lives in the always-visible vehicle card, so it can be
-    // clicked before the first plan.  Update the local vehicle state in that
+    // The selector lives in the always-visible vehicle controls, so it can be
+    // clicked before the first plan. Update the local vehicle state in that
     // case, but do not spend a map/POI request until a route actually exists.
     if (replan !== false && state.hasPlannedRoute && state.live && state.AMap) {
       setMapStatus("正在按动力类型重新检索补能站…");
       await queryStations();
+      if (requestId !== state.energySwitchVersion) return;
       await replanRoutesViaStations();
+      if (requestId !== state.energySwitchVersion) return;
       drawAmapRoutes();
       fitAmapView();
       setMapStatus("高德地图已连接 · 真实路线与 POI 已更新", "ready");
@@ -10317,22 +11551,16 @@
         : "排队、补能服务时长、实时负载和价格为演示模拟数据；站点名称、坐标和地址来自高德真实 POI。服务区候选的补能设施需现场确认。");
       renderRouteCards();
     } else {
-      if (!state.live) {
-        // A hybrid can use either network, so the offline sample keeps both.
-        const expectedTypes = isHybrid() ? ["加油站", "充电站"] : [isFuelActive() ? "加油站" : "充电站"];
-        state.stations = FALLBACK.stations.filter((station) => expectedTypes.includes(station.type)).map(simulateStation);
-        const branchPool = stationsForActiveBranch();
-        state.routeCandidates = fallbackRoutes();
-        state.routeCandidates.fastest.station = branchPool[0] || null;
-        state.routeCandidates.reliable.station = branchPool[1] || branchPool[0] || null;
-        state.routeCandidates.cheapest.station = branchPool[2] || branchPool[0] || null;
+      if (!state.live && state.hasPlannedRoute) {
+        const completed = await finalizeOfflinePlan(() => requestId === state.energySwitchVersion);
+        if (!completed || requestId !== state.energySwitchVersion) return;
       }
       renderRouteCards();
     }
-    if (changed) {
+    if (changed && requestId === state.energySwitchVersion) {
       showToast(type === "hybrid"
         ? "已切换为混动车型：将同时核算油、电两条补能路径"
-        : type === "fuel" ? "已切换为燃油补能方案" : "已切换为纯电补能方案");
+        : type === "fuel" ? "已切换为燃油补能方案" : "已切换为纯电补能方案", 2600, "success");
     }
   }
 
@@ -10394,6 +11622,11 @@
       .map(([key, route]) => `${key}:${routeDisplayIdentity(route)}`)
       .join("|");
     const departureBucket = Math.floor(Number(state.departureMinutes || 0) / 5) * 5;
+    const weatherKey = Number(state.weather?.weatherFactor || 1).toFixed(2);
+    const reservationKey = Object.entries(state.reservationOverrides || {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([id, count]) => `${id}:${count}`)
+      .join(",") || "none";
     return [
       "demo-route-v2",
       state.origin.map((value) => Number(value).toFixed(5)).join(","),
@@ -10409,7 +11642,9 @@
       state.priority,
       state.deadlineEnabled ? Number(state.deadlineMinutes || 0) : "none",
       departureBucket,
-      state.selectedService?.id || "none"
+      state.activeServicePlan?.id || state.selectedService || "none",
+      `weather:${weatherKey}`,
+      `reservations:${reservationKey}`
     ].join("::");
   }
 
@@ -10577,7 +11812,7 @@
         await replanRoutesViaStations();
         timingMarks.routeValidationMs = Date.now() - routeValidationStartedAt;
         timingMarks.completedPlanCacheHit = false;
-        writeCompletedRoutePlan(completedKey);
+        writeCompletedRoutePlan(completedPlanCacheKey(state.baseRouteRecords));
       }
       drawAmapRoutes();
       fitAmapView();
@@ -10587,15 +11822,12 @@
         ? "排队、补能服务时长、实时负载和价格为演示模拟数据；高德 POI 以外的路线补能兜底候选仅用于规划演示，需在出发前确认现场设备。"
         : "排队、补能服务时长、实时负载和价格为演示模拟数据；站点名称、坐标和地址来自高德真实 POI。服务区候选的补能设施需现场确认。");
     } else {
-      prepareFallbackPlan();
-      state.hasPlannedRoute = true;
-      renderFallbackRouteVisuals();
-      // The fallback page starts with an "enter a request" status. Once the
-      // deterministic demo plan has actually been built, keep the status
-      // truthful and actionable instead of leaving a stale pre-plan message
-      // above a rendered route.
-      setMapStatus("固定场景路线已生成 · 预测与运营为演示仿真", "ready");
-      setText("mapAttribution", "固定场景地图 · POI 示意 / 演示预测状态");
+      await finalizeOfflinePlan();
+      // Keep the status truthful and actionable once the offline sandbox plan
+      // is ready so all comparison cards, forecast curves, simulation, operator,
+      // and validation views unlock seamlessly offline.
+      setMapStatus("离线沙盒路线已生成 · 预测与运营为仿真推演", "ready");
+      setText("mapAttribution", "离线沙盒地图 · 走廊示意 / 仿真预测状态");
     }
     state.hasPlannedRoute = true;
     state.lastPlanTimings = Object.assign(timingMarks, { totalMs: Date.now() - timingStartedAt });
@@ -10617,11 +11849,38 @@
     state.baseRouteRecords = Object.assign({}, state.routeRecords);
     // 混动模式下油、电两张网都要保留，油电对比才有数据可算。
     const expectedTypes = isHybrid() ? ["加油站", "充电站"] : [isFuelActive() ? "加油站" : "充电站"];
-    state.stations = FALLBACK.stations.filter((station) => expectedTypes.includes(station.type)).map(simulateStation);
+    const corridorStations = buildOfflineCorridorStations(
+      state.origin,
+      state.destination,
+      expectedTypes,
+      state.baseRouteRecords
+    );
+    state.stations = corridorStations.map(simulateStation);
     const branchPool = stationsForActiveBranch();
-    state.routeRecords.fastest.station = branchPool[0] || null;
-    state.routeRecords.reliable.station = branchPool[1] || branchPool[0] || null;
-    state.routeRecords.cheapest.station = branchPool[2] || branchPool[0] || null;
+    const pickForRole = (role, fallbackIdx) => {
+      const route = state.routeRecords[role];
+      const byCorridor = branchPool.find((station) => station.corridorKey === role);
+      if (byCorridor) return byCorridor;
+      if (route?.path) {
+        const onRoute = branchPool.find((station) => Number.isFinite(distanceAlongPathToWaypoint(route.path, station.location)));
+        if (onRoute) return onRoute;
+      }
+      return branchPool[Math.min(fallbackIdx, Math.max(0, branchPool.length - 1))] || branchPool[0] || null;
+    };
+    const roleSpecs = [["fastest", 0], ["reliable", 1], ["cheapest", 2]];
+    roleSpecs.forEach(([role, fallbackIdx]) => {
+      const route = state.routeRecords[role];
+      if (!route) return;
+      const station = pickForRole(role, fallbackIdx);
+      route.station = station;
+      // On medium intercity single-stop routes where stations lie along the
+      // reliable corridor, keep fastest/cheapest polylines passing through
+      // their assigned station so single-stop projection stays <= 1.2 km.
+      if (station && route.path && !Number.isFinite(distanceAlongPathToWaypoint(route.path, station.location))) {
+        const synthesized = buildOfflineMultiStopRoute(role, route, [station]);
+        if (synthesized?.path?.length >= 2) route.path = synthesized.path;
+      }
+    });
     state.routeCandidates = Object.assign({}, state.routeRecords);
     renderStationSummary();
   }
@@ -10678,23 +11937,72 @@
     window.__FLOWTWIN_READY__ = true;
   }
 
+  function loadAmapLoaderScript(timeoutMs = 12000) {
+    if (window.AMapLoader && typeof window.AMapLoader.load === "function") {
+      return Promise.resolve(window.AMapLoader);
+    }
+    return new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://webapi.amap.com/loader.js";
+      script.async = true;
+      const timer = window.setTimeout(() => {
+        script.remove();
+        reject(new Error("AMAP_LOADER_TIMEOUT"));
+      }, timeoutMs);
+      script.onload = () => {
+        window.clearTimeout(timer);
+        if (window.AMapLoader && typeof window.AMapLoader.load === "function") resolve(window.AMapLoader);
+        else reject(new Error("AMAP_LOADER_MISSING"));
+      };
+      script.onerror = () => {
+        window.clearTimeout(timer);
+        reject(new Error("AMAP_LOADER_FAILED"));
+      };
+      document.head.appendChild(script);
+    });
+  }
+
+  function isDesktopComposerCollapsed() {
+    const composer = byId("aiComposer");
+    if (!composer || !state.hasPlannedRoute) return false;
+    if (composer.classList.contains("force-expanded")) return false;
+    const width = composer.getBoundingClientRect?.().width || 0;
+    return width > 0 && width <= 72;
+  }
+
   function begin() {
+    syncDefaultOriginFromConfig();
     refreshIcons();
     initDemoNotice();
     initSettings();
-    setDisplayMode("reviewer", { persist: false });
+    setDisplayMode(readDisplayMode(), { persist: false });
     initFallback();
     renderParseAnalysis(null);
     setPlanningVisibility(false);
     void loadAiHealthStatus();
     fitIntentInput();
     if (window.innerWidth <= 760) byId("insightPanel").classList.add("hidden");
+    window.addEventListener("resize", () => {
+      window.requestAnimationFrame(syncDesktopComposerClearance);
+    });
     initModeChoice();
     $$("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
     $$(".route-option").forEach((button) => button.addEventListener("click", () => selectRoute(button.dataset.route)));
     $$('[data-simulation-route]').forEach((button) => button.addEventListener("click", (event) => {
       event.stopPropagation();
       startSimulationForRoute(button.dataset.simulationRoute);
+    }));
+    $$('[data-scenario-prompt]').forEach((chip) => chip.addEventListener("click", () => {
+      const prompt = String(chip.dataset.scenarioPrompt || "").trim();
+      const input = byId("intentInput");
+      if (!prompt || !input) return;
+      input.value = prompt;
+      state.lastIntentSignature = null;
+      state.manualDeadlineOverride = null;
+      state.manualArrivalReserveOverride = null;
+      fitIntentInput();
+      updateComposerActionLabel();
+      void parseIntent({ force: true });
     }));
     byId("resetView").addEventListener("click", () => {
       selectRoute("reliable");
@@ -10738,13 +12046,25 @@
       if (button) button.disabled = !state.visionFile;
       const status = byId("visionStatus");
       const label = byId("visionUploadLabel");
-      if (status && state.visionFile) {
+      const pill = byId("visionFilePill");
+      if (state.visionFile) {
         const kind = /^video\//i.test(state.visionFile.type) ? "视频" : "图片";
-        status.dataset.state = "idle";
-        status.textContent = `已选择${kind} · ${state.visionFile.name}`;
-        if (label) label.textContent = kind === "视频" ? "已选短视频" : "已选车牌照片";
-      } else if (label) {
-        label.textContent = "上传车牌照片或短视频";
+        if (status) {
+          status.dataset.state = "idle";
+          status.textContent = `已选择${kind} · ${state.visionFile.name}`;
+        }
+        if (label) label.textContent = "更换文件";
+        if (pill) {
+          pill.textContent = state.visionFile.name;
+          pill.title = state.visionFile.name;
+          pill.hidden = false;
+        }
+      } else {
+        if (label) label.textContent = "选择照片或短视频";
+        if (pill) {
+          pill.textContent = "";
+          pill.hidden = true;
+        }
       }
     });
     byId("validationEvidenceButton")?.addEventListener("click", openValidationEvidence);
@@ -10794,22 +12114,95 @@
     byId("voiceIntentButton")?.addEventListener("click", () => { toggleVoiceIntent(); });
     byId("aiMultiturnExampleButton")?.addEventListener("click", fillAiMultiturnExample);
     byId("planningAiExampleButton")?.addEventListener("click", fillAiMultiturnExample);
-    byId("composerSubmitButton")?.addEventListener("click", parseIntent);
+    // On desktop when collapsed into a pill/circle, clicking the button expands
+    // the composer instead of blindly re-submitting a duplicate query.
+    byId("aiComposer")?.addEventListener("click", (event) => {
+      if (isDesktopComposerCollapsed()) {
+        event.preventDefault();
+        event.stopPropagation();
+        byId("aiComposer")?.classList.add("force-expanded");
+        byId("intentInput")?.focus();
+      }
+    }, true);
+    document.addEventListener("click", (event) => {
+      const composer = byId("aiComposer");
+      const dock = byId("aiComposerDock");
+      if (composer?.classList.contains("force-expanded") && !(dock || composer).contains(event.target)) {
+        composer.classList.remove("force-expanded");
+      }
+    });
+    byId("composerSubmitButton")?.addEventListener("click", () => {
+      if (isDesktopComposerCollapsed()) {
+        byId("aiComposer")?.classList.add("force-expanded");
+        byId("intentInput")?.focus();
+        return;
+      }
+      parseIntent();
+    });
     byId("destinationCandidates")?.addEventListener("click", (event) => {
       const button = event.target.closest("[data-candidate-index]");
       if (!button) return;
       pickDestinationCandidate(button.dataset.candidateIndex);
     });
     $$('[data-energy-type]').forEach((button) => button.addEventListener("click", () => setEnergyType(button.dataset.energyType)));
-    [byId("topEnergyPercentInput"), byId("departureTimeInput"), byId("deadlineInput"), byId("minArrivalSocInput")].filter(Boolean).forEach((input) => input.addEventListener("change", () => {
-      state.lastIntentSignature = null;
-      readManualControls({ markArrivalOverrides: input.id === "deadlineInput" || input.id === "minArrivalSocInput" });
-      showToast("出行状态已更新，点击规划按钮后重新计算", 2200);
-    }));
+    [
+      byId("topEnergyPercentInput"),
+      byId("settingsEnergyPercentInput"),
+      byId("departureTimeInput"),
+      byId("mobileDepartureTimeInput"),
+      byId("settingsDepartureTimeInput"),
+      byId("deadlineInput"),
+      byId("minArrivalSocInput")
+    ].filter(Boolean).forEach((input) => {
+      const commitHandler = () => {
+        state.lastIntentSignature = null;
+        readManualControls({
+          commit: true,
+          sourceInput: input,
+          markArrivalOverrides: input.id === "deadlineInput" || input.id === "minArrivalSocInput"
+        });
+        showToast("出行状态已更新，点击规划按钮后重新计算", 2200, "info");
+      };
+      input.addEventListener("change", commitHandler);
+      if (input.id === "minArrivalSocInput" || input.id === "topEnergyPercentInput" || input.id === "settingsEnergyPercentInput") {
+        input.addEventListener("blur", () => {
+          readManualControls({
+            commit: true,
+            sourceInput: input,
+            markArrivalOverrides: input.id === "minArrivalSocInput"
+          });
+        });
+      }
+    });
+    // Mid-typing on #minArrivalSocInput / #deadlineInput never overwrites or
+    // clamps input.value, so users can freely type 10-49% before commit.
     [byId("deadlineInput"), byId("minArrivalSocInput")].filter(Boolean).forEach((input) => input.addEventListener("input", () => {
       state.lastIntentSignature = null;
-      readManualControls({ markArrivalOverrides: true });
+      readManualControls({ commit: false, sourceInput: input, markArrivalOverrides: true });
     }));
+    // Global Escape handler for overlays (evidence dialog, receipt overlay, and
+    // non-driver full-card panels).
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      const evidenceBackdrop = byId("validationEvidenceBackdrop");
+      if (evidenceBackdrop && !evidenceBackdrop.hidden) {
+        event.preventDefault();
+        closeValidationEvidence();
+        return;
+      }
+      const receiptOverlay = byId("paymentReceiptOverlay");
+      if (receiptOverlay && !receiptOverlay.hidden) {
+        event.preventDefault();
+        closePaymentReceipt();
+        return;
+      }
+      const settingsBackdrop = byId("settingsBackdrop");
+      if (settingsBackdrop && !settingsBackdrop.hidden) return;
+      if (state.mode !== "driver") {
+        event.preventDefault();
+        setMode("driver");
+      }
+    });
     // 混动的两格电/油量直接写进 hybridLevels；当前规划分支那一格同步到
     // energyPercent，另一格只用于油电对比与切换分支后的起始能量。
     [["hybridElectricInput", "electric"], ["hybridFuelInput", "fuel"]].forEach(([id, kind]) => {
@@ -10820,7 +12213,7 @@
         syncHybridLevels();
         updateEnergyControls();
         renderHybridCompare();
-        showToast("混动能量状态已更新，点击规划按钮后重新计算", 2200);
+        showToast("混动能量状态已更新，点击规划按钮后重新计算", 2200, "info");
       });
     });
     byId("collapseTrip").addEventListener("click", () => byId("tripPanel").classList.add("collapsed"));
@@ -10837,7 +12230,6 @@
     byId("expandRoutes").addEventListener("click", () => byId("routeSheet").classList.remove("collapsed"));
     byId("approveButton").addEventListener("click", runExecutionLoop);
     byId("resetExecution").addEventListener("click", resetExecution);
-    byId("arrivalPaymentButton")?.addEventListener("click", runArrivalPayment);
     byId("paymentReceiptClose")?.addEventListener("click", closePaymentReceipt);
     byId("paymentReceiptOverlay")?.addEventListener("click", (event) => { if (event.target.id === "paymentReceiptOverlay") closePaymentReceipt(); });
     const discountSlider = byId("discountSlider");
@@ -10864,7 +12256,7 @@
     const serviceFeedbackButton = byId("serviceFeedbackButton");
     if (serviceFeedbackButton) serviceFeedbackButton.addEventListener("click", () => {
       if (!state.selectedService) {
-        showToast("请先选择一个推荐服务", 2200);
+        showToast("请先选择一个推荐服务", 2200, "warning");
         return;
       }
       setText("serviceStatus", "服务已完成 · 偏好已用于下一次推荐（演示）");
@@ -10872,18 +12264,26 @@
       showToast("非油服务订单已完成并回流偏好模型（演示）");
     });
 
-    if (config.mapMode !== "live" || !config.amapKey || !window.AMapLoader || typeof window.AMapLoader.load !== "function") {
+    if (config.mapMode !== "live" || !config.amapKey) {
       return;
     }
+    state.amapLoading = true;
     window._AMapSecurityConfig = { securityJsCode: config.securityJsCode || "" };
-    window.AMapLoader.load({
-      key: config.amapKey,
-      version: "2.0",
-      plugins: ["AMap.Driving", "AMap.PlaceSearch", "AMap.Geocoder"]
-    }).then((AMap) => initLiveMap(AMap)).catch((error) => {
-      console.warn("FlowTwin live map unavailable", error);
-      initFallback();
-    });
+    loadAmapLoaderScript()
+      .then((AMapLoader) => AMapLoader.load({
+        key: config.amapKey,
+        version: "2.0",
+        plugins: ["AMap.Driving", "AMap.PlaceSearch", "AMap.Geocoder"]
+      }))
+      .then((AMap) => {
+        state.amapLoading = false;
+        return initLiveMap(AMap);
+      })
+      .catch((error) => {
+        state.amapLoading = false;
+        console.warn("FlowTwin live map unavailable", error);
+        initFallback();
+      });
   }
 
   window.__FLOWTWIN_DEBUG__ = () => ({

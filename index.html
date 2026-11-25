@@ -13,9 +13,11 @@
         --surface-solid: #ffffff;
         --surface-soft: #f7f7f4;
         --text: #1c2123;
+        --ink: var(--text);
         --muted: #687074;
         --quiet: #8b9295;
         --line: #d8dcd7;
+        --border: var(--line);
         --blue: #4a7df0;
         --blue-soft: #e0e8ff;
         --teal: #168f7e;
@@ -58,6 +60,16 @@
       button {
         border: 0;
         cursor: pointer;
+      }
+
+      button:focus-visible,
+      a:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible,
+      summary:focus-visible {
+        outline: 2px solid var(--blue);
+        outline-offset: 2px;
       }
 
       .app {
@@ -188,9 +200,11 @@
         display: flex;
         align-items: center;
         gap: 11px;
+        flex-shrink: 0;
         min-height: 48px;
         padding: 0 16px 0 13px;
         border-radius: var(--radius);
+        white-space: nowrap;
       }
 
       .brand-mark {
@@ -214,12 +228,14 @@
         font-size: 14px;
         font-weight: 650;
         letter-spacing: 0.6px;
+        white-space: nowrap;
       }
 
       .brand-sub {
         margin-left: 1px;
         color: var(--muted);
         font-size: 12px;
+        white-space: nowrap;
       }
 
       .status-rail {
@@ -3780,21 +3796,21 @@
       }
 
       .toast {
-        position: absolute;
+        position: fixed;
         right: 24px;
         bottom: 208px;
-        z-index: 1000;
+        z-index: 940;
         display: flex;
         align-items: flex-start;
         gap: 9px;
-        width: min(340px, calc(100vw - 48px));
-        padding: 12px 13px;
+        width: min(360px, calc(100vw - 32px));
+        padding: 11px 14px;
         border: 1px solid #b8ddd4;
-        border-radius: 7px;
+        border-radius: 8px;
         background: #f4fbf8;
         box-shadow: var(--shadow);
         color: #176e60;
-        font-size: 11px;
+        font-size: 12px;
         line-height: 1.45;
         opacity: 0;
         pointer-events: none;
@@ -3802,15 +3818,44 @@
         transition: opacity 180ms ease, transform 180ms ease;
       }
 
+      .toast[data-tone="info"] {
+        border-color: #bdd0f7;
+        background: #f4f8ff;
+        color: #2950a3;
+      }
+
+      .toast[data-tone="warning"] {
+        border-color: #e4c187;
+        background: #fff9ee;
+        color: #8a5311;
+      }
+
+      .toast[data-tone="error"] {
+        border-color: #e4b4b2;
+        background: #fff4f3;
+        color: #9e3531;
+      }
+
       .toast.visible {
         opacity: 1;
         transform: translateY(0);
+      }
+
+      .toast-icon {
+        display: inline-flex;
+        align-items: center;
+        margin-top: 1px;
+        flex: 0 0 auto;
       }
 
       .toast svg {
         width: 16px;
         height: 16px;
         flex: 0 0 auto;
+      }
+
+      .app:not([data-active-mode="driver"]) .toast {
+        bottom: 20px;
       }
 
       .demo-notice-backdrop {
@@ -4324,6 +4369,7 @@
         align-items: center;
         justify-content: center;
         gap: 6px;
+        flex-shrink: 0;
         min-width: 48px;
         min-height: 48px;
         padding: 0 12px;
@@ -4332,8 +4378,9 @@
         background: rgba(255, 255, 255, 0.93);
         box-shadow: 0 7px 22px rgba(22, 29, 30, 0.09);
         color: var(--muted);
-        font-size: 11px;
+        font-size: 12px;
         font-weight: 650;
+        white-space: nowrap;
       }
 
       .settings-trigger:hover,
@@ -4750,17 +4797,17 @@
         pointer-events: auto;
         gap: 8px;
         width: 100%;
-        height: 58px;
+        height: auto;
         min-height: 58px;
-        max-height: 58px;
+        max-height: 116px;
         margin: 0;
-        padding: 6px 7px 6px 12px;
+        padding: 6px 7px 6px 14px;
         border: 1px solid rgba(216, 220, 215, 0.96);
-        border-radius: 999px;
+        border-radius: 28px;
         background: rgba(255, 255, 255, 0.95);
         box-shadow: 0 12px 30px rgba(22, 29, 30, 0.14), 0 2px 8px rgba(22, 29, 30, 0.06);
         backdrop-filter: blur(14px);
-        transition: width 430ms cubic-bezier(0.22, 1, 0.36, 1), min-height 430ms cubic-bezier(0.22, 1, 0.36, 1), padding 430ms cubic-bezier(0.22, 1, 0.36, 1), border-radius 430ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, box-shadow 240ms ease;
+        transition: width 360ms cubic-bezier(0.22, 1, 0.36, 1), min-height 360ms cubic-bezier(0.22, 1, 0.36, 1), padding 360ms cubic-bezier(0.22, 1, 0.36, 1), border-radius 360ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, box-shadow 240ms ease;
       }
 
       .ai-composer::after {
@@ -4774,16 +4821,17 @@
       }
 
       .ai-composer textarea {
-        height: 44px;
+        height: auto;
         min-height: 44px;
-        max-height: 44px;
-        padding: 8px 4px;
+        max-height: 88px;
+        padding: 9px 4px;
         border: 0;
-        border-radius: 20px;
+        border-radius: 16px;
         background: transparent;
         font-size: 13px;
         line-height: 1.45;
-        transition: width 380ms cubic-bezier(0.22, 1, 0.36, 1), min-width 380ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, padding 380ms cubic-bezier(0.22, 1, 0.36, 1);
+        resize: none;
+        transition: width 360ms cubic-bezier(0.22, 1, 0.36, 1), min-width 360ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, padding 360ms cubic-bezier(0.22, 1, 0.36, 1);
       }
 
       .ai-composer textarea:focus {
@@ -4960,19 +5008,18 @@
         }
       }
 
-      .ai-composer .ai-input-hint {
-        top: calc(100% + 8px);
-        right: auto;
-        left: 50%;
+      .ai-composer-dock .ai-input-hint {
+        position: static;
         width: min(520px, calc(100vw - 32px));
         box-sizing: border-box;
         border-radius: 12px;
         font-size: 11px;
         display: block;
-        opacity: 0;
-        visibility: hidden;
-        transform: translate(-50%, -7px);
-        transition: opacity 220ms ease, transform 420ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 420ms;
+        opacity: 1;
+        visibility: visible;
+        transform: none;
+        pointer-events: auto;
+        transition: opacity 220ms ease, transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
       }
 
       .ai-input-hint-copy {
@@ -5012,15 +5059,6 @@
         display: none;
       }
 
-      .ai-composer:hover .ai-input-hint,
-      .ai-composer:focus-within .ai-input-hint {
-        opacity: 1;
-        visibility: visible;
-        transform: translate(-50%, 0);
-        pointer-events: auto;
-        transition-delay: 430ms;
-      }
-
       .app.has-plan .ai-composer-dock {
         bottom: clamp(238px, 27vh, 290px);
       }
@@ -5033,50 +5071,66 @@
         bottom: clamp(88px, 12vh, 140px);
       }
 
-      .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) {
-        grid-template-columns: 1fr;
-        grid-template-rows: 50px;
-        row-gap: 0;
-        width: 58px;
-        height: 58px;
-        min-height: 58px;
-        max-height: 58px;
-        padding: 4px;
-        border-radius: 50%;
-        border-color: rgba(220, 226, 224, 0.96);
-        box-shadow: 0 9px 22px rgba(22, 29, 30, 0.17), 0 0 0 3px rgba(255, 255, 255, 0.58);
+      @media (min-width: 901px) and (hover: hover) {
+        .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) {
+          grid-template-columns: 1fr;
+          grid-template-rows: 50px;
+          row-gap: 0;
+          width: 58px;
+          height: 58px;
+          min-height: 58px;
+          max-height: 58px;
+          padding: 4px;
+          border-radius: 50%;
+          border-color: rgba(220, 226, 224, 0.96);
+          box-shadow: 0 9px 22px rgba(22, 29, 30, 0.17), 0 0 0 3px rgba(255, 255, 255, 0.58);
+        }
+
+        .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) textarea {
+          display: none;
+        }
+
+        .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) .ai-parse-button {
+          width: 50px;
+          height: 50px;
+        }
+
+        .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) .composer-submit-button {
+          width: 50px;
+          height: 50px;
+        }
+
+        .app.has-plan .ai-composer-dock:not(:has(.ai-composer.force-expanded)):not(:has(.ai-composer:hover)):not(:focus-within) .ai-input-hint {
+          display: none;
+          opacity: 0;
+          overflow: hidden;
+          pointer-events: none;
+        }
+
+        /* The status chip and the example hint are secondary information. They
+           appear only after the capsule has completed its expansion, instead of
+           jumping into view at the same time as the input. */
+        .app.has-plan .ai-composer-dock:not(:has(.ai-composer.force-expanded)):not(:has(.ai-composer:hover)):not(:focus-within) .ai-composer-status {
+          opacity: 0;
+          visibility: hidden;
+          transform: translateY(8px) scale(0.96);
+          pointer-events: none;
+          transition-delay: 0ms;
+        }
       }
 
-      .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) textarea {
-        display: none;
-      }
+      @media (max-width: 900px), (hover: none) {
+        .app.has-plan .ai-composer {
+          width: 100%;
+          height: auto;
+          min-height: 58px;
+          max-height: 112px;
+          border-radius: 26px;
+        }
 
-      .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) .ai-parse-button {
-        width: 50px;
-        height: 50px;
-      }
-
-      .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) .composer-submit-button {
-        width: 50px;
-        height: 50px;
-      }
-
-      .app.has-plan .ai-composer:not(.force-expanded):not(:hover):not(:focus-within) .ai-input-hint {
-        display: none;
-        opacity: 0;
-        overflow: hidden;
-        pointer-events: none;
-      }
-
-      /* The status chip and the example hint are secondary information. They
-         appear only after the capsule has completed its expansion, instead of
-         jumping into view at the same time as the input. */
-      .app.has-plan .ai-composer-dock:not(:has(.ai-composer:hover)):not(:focus-within) .ai-composer-status {
-        opacity: 0;
-        visibility: hidden;
-        transform: translateY(8px) scale(0.96);
-        pointer-events: none;
-        transition-delay: 0ms;
+        .app.has-plan .ai-composer textarea {
+          display: block;
+        }
       }
 
       .app.has-plan .ai-composer-dock:has(.ai-composer:hover) .ai-composer-status,
@@ -5084,12 +5138,16 @@
         opacity: 1;
         visibility: visible;
         transform: translateY(0) scale(1);
-        transition-delay: 430ms;
+        transition-delay: 220ms;
       }
 
+      .app.has-plan .ai-composer-dock:has(.ai-composer.force-expanded) .ai-input-hint,
       .app.has-plan .ai-composer-dock:has(.ai-composer:hover) .ai-input-hint,
       .app.has-plan .ai-composer-dock:focus-within .ai-input-hint {
-        transition-delay: 500ms;
+        display: block;
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
       }
 
       #serviceFlow.attention,
@@ -5106,30 +5164,20 @@
       }
 
       .ai-input-hint {
-        position: absolute;
-        z-index: 20;
-        top: calc(100% + 7px);
-        right: 0;
-        left: 0;
-        grid-column: 1 / -1;
-        display: none;
-        padding: 9px 10px;
+        position: static;
+        padding: 8px 12px;
         border: 1px solid #c8d6f6;
-        border-radius: 6px;
-        background: rgba(247, 249, 255, 0.98);
-        box-shadow: 0 8px 18px rgba(22, 29, 30, 0.1);
+        border-radius: 10px;
+        background: rgba(247, 249, 255, 0.96);
+        box-shadow: 0 6px 16px rgba(22, 29, 30, 0.08);
         color: var(--muted);
-        font-size: 10px;
-        line-height: 1.5;
-        pointer-events: none;
+        font-size: 11px;
+        line-height: 1.45;
+        pointer-events: auto;
       }
 
       .ai-input-hint strong {
         color: #315bb8;
-      }
-
-      .ai-request:hover .ai-input-hint {
-        display: block;
       }
 
       .energy-type-switch {
@@ -5576,13 +5624,8 @@
           height: 44px;
         }
 
-        .ai-composer .ai-input-hint {
+        .ai-composer-dock .ai-input-hint {
           display: none !important;
-        }
-
-        .ai-composer .ai-input-hint {
-          right: 12px;
-          left: 12px;
         }
 
         .trip-panel,
@@ -5861,10 +5904,10 @@
       }
 
       /* Keep the existing wide-screen composition, but move the planned
-         composer above the route comparison instead of through its header. */
+         composer cleanly above the route comparison instead of touching its header. */
       @media (min-width: 1181px) {
         .app.has-plan:not(:has(.route-sheet.collapsed)) .ai-composer-dock {
-          bottom: clamp(360px, 40vh, 420px);
+          bottom: var(--ft-composer-clearance, clamp(404px, 46vh, 468px));
         }
       }
 
@@ -6053,10 +6096,670 @@
         }
       }
 
+      /* ------------------------------------------------------------------
+         Audit polish: full-card map pill hiding, connection tones, quick
+         scenario chips, styled vision/feishu details, mobile powertrain &
+         departure restoration, 375px layout & typography readability floor.
+      ------------------------------------------------------------------ */
+      .app:not([data-active-mode="driver"]) .map-status,
+      .app:not([data-active-mode="driver"]) .map-attribution,
+      .app:not([data-active-mode="driver"]) .active-route-summary,
+      .app:not([data-active-mode="driver"]) .map-mode-banner {
+        display: none !important;
+      }
+
+      .connection-status[data-state="online"] svg,
+      .connection-status[data-state="online"] strong {
+        color: var(--teal);
+      }
+
+      .connection-status[data-state="offline"] svg,
+      .connection-status[data-state="offline"] strong {
+        color: #355fb8;
+      }
+
+      .connection-status[data-state="error"] svg,
+      .connection-status[data-state="error"] strong {
+        color: var(--danger);
+      }
+
+      .quick-scenario-chips {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px;
+        width: 100%;
+        pointer-events: auto;
+      }
+
+      .app.has-plan .quick-scenario-chips {
+        display: none;
+      }
+
+      .quick-scenario-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-height: 30px;
+        padding: 0 11px;
+        border: 1px solid rgba(203, 214, 232, 0.96);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.94);
+        box-shadow: 0 4px 12px rgba(22, 29, 30, 0.08);
+        color: #2f55a6;
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+        transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+      }
+
+      .quick-scenario-chip:hover {
+        border-color: var(--blue);
+        background: #f3f7ff;
+        transform: translateY(-1px);
+      }
+
+      .quick-scenario-chip svg {
+        width: 12px;
+        height: 12px;
+        color: var(--blue);
+      }
+
+      /* Collapsible Feishu AI strip inside operator panel */
+      .feishu-ai-details {
+        margin-top: 16px;
+        border: 1px solid #c5dfd8;
+        border-radius: 10px;
+        background: #f5fbf9;
+      }
+
+      .feishu-ai-details > summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        min-height: 44px;
+        padding: 10px 16px;
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 650;
+        cursor: pointer;
+        list-style: none;
+      }
+
+      .feishu-ai-details > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .feishu-ai-details-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .feishu-ai-details-badge {
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .feishu-ai-details > summary .feishu-summary-chevron {
+        width: 14px;
+        height: 14px;
+        color: var(--muted);
+        transition: transform 180ms ease;
+      }
+
+      .feishu-ai-details[open] > summary .feishu-summary-chevron {
+        transform: rotate(180deg);
+      }
+
+      .feishu-ai-details .feishu-ai-panel {
+        margin-top: 0;
+        border: 0;
+        border-top: 1px solid #d5e9e4;
+        border-radius: 0 0 10px 10px;
+      }
+
+      /* Vision styled file upload + collapsible raw JSON */
+      .sr-only-file {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      .vision-upload-trigger {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 36px;
+        padding: 0 13px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #fff;
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 650;
+        cursor: pointer;
+        transition: border-color 160ms ease, background 160ms ease;
+      }
+
+      .vision-upload-trigger:hover {
+        border-color: #aebff1;
+        background: #f5f7ff;
+      }
+
+      .vision-upload-trigger svg {
+        width: 14px;
+        height: 14px;
+        color: var(--blue);
+      }
+
+      .vision-file-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 240px;
+        min-height: 28px;
+        padding: 0 10px;
+        border: 1px solid #cfdcf6;
+        border-radius: 999px;
+        background: #f2f6ff;
+        color: #2c52a3;
+        font-size: 11px;
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .vision-raw-details {
+        margin-top: 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface-soft);
+      }
+
+      .vision-raw-details > summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 9px 12px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .vision-raw-details .vision-json {
+        margin: 0;
+        border-radius: 0 0 7px 7px;
+      }
+
+      /* Evidence table scrollable wrapper */
+      .evidence-table-wrap {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      /* Mobile vehicle strip inside tripPanel & Settings vehicle controls */
+      .mobile-vehicle-strip {
+        display: none;
+      }
+
+      .settings-vehicle-grid {
+        display: grid;
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .settings-vehicle-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .settings-vehicle-field {
+        display: grid;
+        gap: 4px;
+        padding: 9px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface-soft);
+      }
+
+      .settings-vehicle-field label {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .settings-vehicle-field input {
+        width: 100%;
+        min-height: 32px;
+        padding: 4px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #fff;
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      /* Typography readability floor: raise tiny 8px/9px Chinese captions to >=11px */
+      .active-route-summary > span:first-child,
+      .active-route-summary small,
+      .top-energy-type-switch button,
+      .constraint-label,
+      .constraint-label small,
+      .constraint-note,
+      .simulation-scene-head span,
+      .simulation-data-item span,
+      .simulation-data-source,
+      .simulation-ocr-row span,
+      .simulation-ocr-row button,
+      .simulation-reservation-copy,
+      .simulation-reservation-meta,
+      .simulation-reservation-delta,
+      .simulation-reservation-evidence-toggle,
+      .simulation-reservation-evidence,
+      .simulation-queue-note,
+      .simulation-stage-rail span,
+      .simulation-scene-action-note,
+      .simulation-completion-item,
+      .simulation-completion-boundary,
+      .simulation-toolbox-label,
+      .simulation-toolbox-action,
+      .simulation-speed-control,
+      .simulation-speed-control button,
+      .simulation-toolbox-note,
+      .simulation-auto-control,
+      .route-simulate-action,
+      .flow-arrow small,
+      .validation-kpi .stat-label small,
+      .vision-metric span,
+      .vision-guide,
+      .vision-detail-list div,
+      .vision-evidence,
+      .vision-boundary,
+      .evidence-block p,
+      .evidence-block li,
+      .evidence-input-table,
+      .mode-choice-option-head em,
+      .mode-choice-option small,
+      .mode-choice-option-action,
+      .mode-choice-foot {
+        font-size: 11px;
+      }
+
+      .simulation-scene-copy p,
+      .simulation-scene-primary,
+      .simulation-toolbox-toggle {
+        font-size: 12px;
+      }
+
+      @media (min-width: 1181px) {
+        .option-metrics,
+        .option-reason,
+        .option-station {
+          font-size: 11px;
+        }
+      }
+
+      @media (max-width: 900px) {
+        .mobile-vehicle-strip {
+          display: grid;
+          gap: 8px;
+          margin-bottom: 12px;
+          padding: 10px;
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--surface-soft);
+        }
+
+        .mobile-vehicle-strip-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .mobile-vehicle-strip .energy-type-switch {
+          flex: 1 1 180px;
+        }
+
+        .mobile-vehicle-strip .energy-type-switch button {
+          min-height: 36px;
+          font-size: 11px;
+        }
+
+        .mobile-departure-field {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 0 8px;
+          min-height: 36px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: #fff;
+          color: var(--muted);
+          font-size: 11px;
+          white-space: nowrap;
+        }
+
+        .mobile-departure-field input {
+          border: 0;
+          background: transparent;
+          color: var(--ink);
+          font-family: var(--mono);
+          font-size: 12px;
+          font-weight: 650;
+          width: 78px;
+        }
+
+        .topbar {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .brand {
+          min-height: 42px;
+          padding: 0 12px;
+          justify-self: start;
+        }
+
+        .topbar-actions {
+          display: contents;
+        }
+
+        .settings-trigger {
+          grid-column: 2;
+          grid-row: 1;
+          min-width: 44px;
+          min-height: 42px;
+          padding: 0 12px;
+        }
+
+        .status-rail {
+          grid-column: 1 / -1;
+          grid-row: 2;
+          width: 100%;
+          min-height: 44px;
+        }
+
+        .mode-switch button {
+          min-height: 40px;
+          font-size: 11px;
+        }
+
+        .close-button {
+          width: 40px;
+          height: 40px;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .brand-name {
+          display: inline;
+          font-size: 13px;
+        }
+
+        .brand-sub {
+          display: inline;
+          font-size: 11px;
+        }
+
+        .ai-composer {
+          height: auto;
+          min-height: 58px;
+          max-height: 112px;
+        }
+
+        .ai-composer textarea {
+          height: auto;
+          min-height: 44px;
+          max-height: 82px;
+          font-size: 13px;
+        }
+
+        .quick-scenario-chips {
+          justify-content: flex-start;
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          padding-bottom: 2px;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .simulation-ui {
+          top: 112px;
+          width: calc(100vw - 20px);
+          max-height: calc(100dvh - 124px);
+          padding-bottom: 72px;
+        }
+
+        .simulation-scene-card {
+          grid-template-columns: 1fr;
+        }
+
+        .simulation-scene-media,
+        .simulation-scene-media img {
+          min-height: 150px;
+          max-height: 200px;
+        }
+
+        .simulation-stage-rail {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 5px;
+        }
+
+        .simulation-stage-rail span {
+          flex: 1 1 auto;
+          padding: 5px 8px;
+        }
+
+        .simulation-toolbox {
+          right: 12px;
+          bottom: 12px;
+          width: min(210px, calc(100vw - 24px));
+        }
+
+        .simulation-toolbox[aria-expanded="false"] {
+          width: auto;
+        }
+
+        .evidence-dialog {
+          width: calc(100vw - 20px);
+          max-height: calc(100dvh - 24px);
+          padding: 16px;
+        }
+
+        .evidence-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .toast {
+          right: 12px;
+          bottom: 16px;
+          width: calc(100vw - 24px);
+        }
+      }
+
+      /* Intermediate desktop widths (901px–1260px): tighten topbar spacing and
+         hide secondary captions progressively so brand, status rail, mode tabs,
+         and settings stay separated with zero overlap down to 901px. */
+      @media (min-width: 901px) and (max-width: 1260px) {
+        .topbar {
+          left: 16px;
+          right: 16px;
+          gap: 8px;
+        }
+
+        .brand {
+          gap: 7px;
+          padding: 0 11px 0 10px;
+        }
+
+        .topbar-actions {
+          gap: 6px;
+        }
+
+        .status-item {
+          gap: 5px;
+          padding: 0 9px;
+          font-size: 11px;
+        }
+
+        #departureTimeInput {
+          width: 78px;
+          min-width: 78px;
+          font-size: 12px;
+        }
+
+        .top-energy-label {
+          display: none;
+        }
+
+        .top-energy-status {
+          padding: 0 6px;
+        }
+
+        .top-energy-type-switch button {
+          padding: 0 5px;
+        }
+
+        .mode-switch {
+          gap: 2px;
+          padding: 3px;
+        }
+
+        .mode-switch button {
+          gap: 4px;
+          padding: 0 7px;
+          font-size: 11px;
+        }
+
+        .settings-trigger {
+          min-width: 44px;
+          padding: 0 10px;
+        }
+      }
+
+      @media (min-width: 901px) and (max-width: 1240px) {
+        .status-item .status-caption {
+          display: none;
+        }
+      }
+
+      @media (min-width: 901px) {
+        .app.has-plan:not(:has(.route-sheet.collapsed)) .ai-composer-dock {
+          bottom: var(--ft-composer-clearance, calc(18px + var(--ft-route-drawer-height, 300px) + 18px));
+        }
+      }
+
+      @media (min-width: 901px) and (max-width: 1180px) {
+        .brand-sub,
+        .connection-status {
+          display: none;
+        }
+      }
+
+      @media (min-width: 901px) and (max-width: 1060px) {
+        .status-item.status-editable label,
+        .settings-trigger span {
+          display: none;
+        }
+
+        .status-item {
+          gap: 4px;
+          padding: 0 7px;
+        }
+
+        .mode-switch button {
+          padding: 0 6px;
+          font-size: 11px;
+        }
+
+        .settings-trigger {
+          min-width: 42px;
+          padding: 0 9px;
+        }
+      }
+
+      /* Mobile & narrow tablet post-plan layout: hide redundant floating status
+         pill above the composer (tripPanel already displays parse verification)
+         and reserve clean vertical separation between tripPanel, composer dock,
+         and routeSheet so zero controls overlap. */
+      @media (max-width: 900px) {
+        .app.has-plan .ai-composer-status,
+        .app.has-plan .ai-composer-dock .ai-input-hint {
+          display: none !important;
+        }
+      }
+
+      @media (min-width: 761px) and (max-width: 900px) {
+        .app.has-plan:has(#routeSheet:not([hidden]):not(.collapsed):not([style*="display: none"])) .trip-panel,
+        .app.has-plan:has(#routeSheet:not([hidden]):not(.collapsed):not([style*="display: none"])) .insight-panel {
+          bottom: calc(14px + var(--ft-route-drawer-height) + 86px);
+        }
+
+        .app.has-plan:not(:has(.route-sheet.collapsed)) .ai-composer-dock {
+          bottom: calc(14px + var(--ft-route-drawer-height) + 12px);
+        }
+      }
+
+      @media (max-width: 760px) {
+        .app {
+          --ft-route-drawer-height: min(296px, 37dvh, calc(100dvh - 120px));
+        }
+
+        .app.has-plan .ai-composer {
+          min-height: 54px;
+          max-height: 76px;
+          padding: 5px 6px 5px 12px;
+        }
+
+        .app.has-plan .ai-composer textarea {
+          min-height: 40px;
+          max-height: 60px;
+        }
+
+        .app.has-plan:has(#routeSheet:not([hidden]):not(.collapsed):not([style*="display: none"])) .ai-composer-dock {
+          bottom: calc(14px + var(--ft-route-drawer-height) + 10px);
+          gap: 0;
+        }
+
+        .app.has-plan:has(#routeSheet:not([hidden]):not(.collapsed):not([style*="display: none"])) .trip-panel {
+          top: 110px;
+          bottom: calc(14px + var(--ft-route-drawer-height) + 92px);
+          max-height: none;
+          padding: 12px 14px;
+        }
+
+        .app.has-plan .trip-panel .panel-heading {
+          margin-bottom: 10px;
+        }
+      }
     </style>
   </head>
   <body data-display-mode="reviewer">
-    <div class="app" id="app" data-display-mode="reviewer">
+    <div class="app" id="app" data-display-mode="reviewer" data-active-mode="driver">
       <div id="map" aria-label="全国路线地图"></div>
       <div class="map-wash"></div>
       <div class="map-status" id="mapStatus"><i data-lucide="loader-circle"></i><span>正在连接高德地图与路线服务…</span></div>
@@ -6103,7 +6806,7 @@
           <div class="simulation-speed-control"><span>行驶倍速</span><div role="group" aria-label="行驶倍速"><button type="button" data-simulation-speed="1">1×</button><button class="active" type="button" data-simulation-speed="3">3×</button><button type="button" data-simulation-speed="5">5×</button></div></div>
           <div class="simulation-auto-control"><label><input id="simulationAutoAdvance" type="checkbox" checked />自动演示</label><span class="simulation-auto-state" id="simulationAutoState">路线自动 · 站内手动</span></div>
           <button class="simulation-toolbox-action subtle" id="simulationPauseButton" type="button"><i data-lucide="pause"></i><span>暂停模拟</span></button>
-          <div class="simulation-toolbox-note">自动演示只负责车辆沿路线行驶；进入补能站后会自动暂停。预约、车牌识别、排队、服务和离场都由中央卡片手动推进，方便评委逐步查看。</div>
+          <div class="simulation-toolbox-note">自动演示只负责车辆沿路线行驶；进入补能站后会自动暂停。预约、车牌识别、排队、服务和离场均可在中央卡片逐步查看与推进。</div>
         </div>
       </aside>
 
@@ -6113,7 +6816,7 @@
           <span class="ai-runtime-meta" id="aiModelLabel" data-reviewer-only>等待出行需求</span>
         </div>
         <div class="ai-request ai-composer" id="aiComposer" aria-label="自然语言出行输入">
-          <textarea id="intentInput" rows="1" aria-label="用自然语言描述出行要求" aria-describedby="intentInputHint" placeholder="告诉我这次出行怎么安排…">从能链北京总部前往上海东方明珠广播电视塔，优先准时</textarea>
+          <textarea id="intentInput" rows="1" aria-label="用自然语言描述出行要求" aria-describedby="intentInputHint" placeholder="告诉我这次出行怎么安排…">去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时</textarea>
           <button type="button" class="composer-submit-button" id="composerSubmitButton" aria-label="提交新行程规划" title="开始规划">
             <i class="composer-arrow" data-lucide="arrow-up"></i>
             <span class="composer-dot-loader" aria-hidden="true">
@@ -6127,7 +6830,12 @@
               <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
             </span>
           </button>
-          <div class="ai-input-hint" id="intentInputHint" role="note"><span class="ai-input-hint-copy" id="intentInputHintCopy"><strong>可直接体验或改写：</strong>去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时。</span><button class="ai-multiturn-example" id="aiMultiturnExampleButton" type="button" data-reviewer-only><i data-lucide="sparkles"></i><span>填入 AI 多轮示例</span></button></div>
+        </div>
+        <div class="ai-input-hint" id="intentInputHint" role="note"><span class="ai-input-hint-copy" id="intentInputHintCopy"><strong>可直接体验或改写：</strong>去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时。</span><button class="ai-multiturn-example" id="aiMultiturnExampleButton" type="button" data-reviewer-only><i data-lucide="sparkles"></i><span>填入多轮补充示例</span></button></div>
+        <div class="quick-scenario-chips" id="quickScenarioChips" aria-label="快捷出行场景">
+          <button type="button" class="quick-scenario-chip" data-scenario-prompt="去北京南站，19:30 前到，到达保留 40%，最多绕行 5 公里，优先准时"><i data-lucide="navigation"></i>北京南站 · 准时通勤</button>
+          <button type="button" class="quick-scenario-chip" data-scenario-prompt="去北京首都国际机场，优先最快到达，最多绕行 5 公里"><i data-lucide="zap"></i>首都机场 · 快速补能</button>
+          <button type="button" class="quick-scenario-chip" data-scenario-prompt="从北京国贸 CBD 去上海东方明珠，优先准时"><i data-lucide="route"></i>上海东方明珠 · 1200km 跨省长途</button>
         </div>
       </div>
 
@@ -6151,11 +6859,11 @@
               </div>
             </div>
           </div>
-          <div class="status-item connection-status"><i data-lucide="wifi"></i><strong>已连接</strong></div>
+          <div class="status-item connection-status" id="connectionStatus" data-state="checking"><i data-lucide="wifi" id="connectionStatusIcon"></i><strong id="connectionStatusText">检测中</strong></div>
           <div class="mode-switch" role="tablist" aria-label="工作模式">
             <button class="active" data-mode="driver" role="tab" aria-selected="true"><i data-lucide="navigation"></i>出行</button>
-            <button data-mode="operator" role="tab" aria-selected="false" disabled title="完成一次路线规划后可用"><i data-lucide="activity"></i>运营</button>
-            <button data-mode="validation" role="tab" aria-selected="false" disabled title="完成一次路线规划后可用"><i data-lucide="bar-chart-3"></i>验证</button>
+            <button data-mode="operator" role="tab" aria-selected="false"><i data-lucide="activity"></i>运营</button>
+            <button data-mode="validation" role="tab" aria-selected="false"><i data-lucide="bar-chart-3"></i>验证</button>
             <button data-mode="vision" role="tab" aria-selected="false"><i data-lucide="scan-face"></i>视觉</button>
           </div>
         </div>
@@ -6172,6 +6880,20 @@
             <h1>为这次出行安排补能</h1>
           </div>
           <div class="panel-heading-actions"><button class="panel-collapse-button" id="collapseTrip" aria-label="收起行程规划"><i data-lucide="panel-left-close"></i></button></div>
+        </div>
+
+        <div class="mobile-vehicle-strip" aria-label="移动端车辆动力与出发时间">
+          <div class="mobile-vehicle-strip-row">
+            <div class="energy-type-switch" role="group" aria-label="动力类型">
+              <button type="button" class="active" data-energy-type="electric"><i data-lucide="zap"></i>纯电</button>
+              <button type="button" data-energy-type="fuel"><i data-lucide="fuel"></i>燃油</button>
+              <button type="button" data-energy-type="hybrid"><i data-lucide="git-compare-arrows"></i>混动</button>
+            </div>
+            <label class="mobile-departure-field" for="mobileDepartureTimeInput">
+              <i data-lucide="clock-3"></i><span>出发</span>
+              <input id="mobileDepartureTimeInput" type="time" aria-label="出发时间" />
+            </label>
+          </div>
         </div>
 
         <div class="ai-feedback" id="aiReply" aria-live="polite" hidden>
@@ -6226,8 +6948,8 @@
             <span class="route-dot"></span>
             <div>
               <div class="field-label">起点</div>
-              <div class="field-value" id="originName">能链中心 · 北京总部</div>
-              <div class="field-note" id="originMeta">北京市朝阳区姚家园南路 1 号 · 演示默认起点</div>
+              <div class="field-value" id="originName">北京国贸 CBD</div>
+              <div class="field-note" id="originMeta">北京市朝阳区建国门外大街 · 默认起点</div>
               <div class="field-weather" id="originWeather" hidden></div>
             </div>
           </div>
@@ -6235,7 +6957,7 @@
             <span class="route-dot destination"></span>
             <div>
               <div class="field-label">终点</div>
-              <div class="field-value" id="destinationName">北京大兴国际机场</div>
+              <div class="field-value" id="destinationName">北京南站</div>
               <div class="field-note" id="destinationMeta">到达时间不限 · 仅保留车辆安全下限</div>
             </div>
           </div>
@@ -6253,7 +6975,7 @@
         <div class="insight-top">
           <div>
             <div class="eyebrow">Recommended energy stop</div>
-            <div class="insight-title" id="stationTitle">大兴榆垡综合能源站</div>
+            <div class="insight-title" id="stationTitle">沿线综合能源站</div>
             <div class="insight-subtitle" id="stationSubtitle">距路线 0.8 km · 直流快充<span class="source-badge"> · 站点真实 / 状态演示</span></div>
           </div>
           <button class="close-button" id="closeInsight" aria-label="收起站点详情"><i data-lucide="panel-right-close"></i></button>
@@ -6297,18 +7019,18 @@
             </g>
           </svg>
           <div class="forecast-legend" id="forecastLegend"><span><i></i><span data-reviewer-copy="P50 典型排队" data-user-copy="典型排队">P50 典型排队</span></span><span><i></i><span data-reviewer-copy="P90 排队风险" data-user-copy="拥堵风险">P90 排队风险</span></span></div>
-          <div class="forecast-source" id="forecastMeta" data-reviewer-only><i data-lucide="database"></i><span>真实站点与路线 · 排队、服务时长、价格及预测为本次仿真；入围后替换为能链脱敏数据。</span></div>
+          <div class="forecast-source" id="forecastMeta" data-reviewer-only><i data-lucide="database"></i><span>站点与路线结构化建模 · 排队、服务时长、价格及预测为本次仿真推演。</span></div>
           <button class="forecast-evidence-toggle" id="forecastEvidenceToggle" type="button" aria-expanded="false" aria-controls="forecastEvidencePanel"><span>查看计算依据</span><i data-lucide="chevron-down"></i></button>
           <div class="forecast-evidence-panel" id="forecastEvidencePanel" hidden></div>
         </div>
         <div class="evidence-list">
-          <div class="evidence-row"><i data-lucide="check"></i><span>绕行较小，预计 19:08 抵达机场</span></div>
+          <div class="evidence-row"><i data-lucide="check"></i><span>绕行较小，预计按时抵达目的地</span></div>
           <div class="evidence-row"><i data-lucide="check"></i><span>预计离站电量 54%，覆盖剩余行程</span></div>
           <div class="evidence-row"><i data-lucide="trending-down"></i><span>相较最快方案，排队尾部风险更低</span></div>
         </div>
         <div class="stop-timeline" id="stopTimeline" hidden data-reviewer-only></div>
         <div class="arrival-loop" id="serviceFlow" aria-label="非油服务智能推荐">
-          <div class="arrival-head"><div><strong>非油服务智能推荐</strong><small id="serviceDwellTime">根据预计驻留时间匹配</small></div><span class="concept-badge" data-reviewer-only>高德 POI · 演示停留时长</span></div>
+          <div class="arrival-head"><div><strong>非油服务智能推荐</strong><small id="serviceDwellTime">根据预计驻留时间匹配</small></div><span class="concept-badge" data-reviewer-only>地图 POI · 演示停留时长</span></div>
           <div class="service-recommendations" id="serviceRecommendations"></div>
           <div class="arrival-foot"><span id="serviceStatus">选择一个服务，可加入到站计划</span><button class="arrival-feedback-button" id="serviceFeedbackButton">模拟预约服务</button></div>
         </div>
@@ -6394,27 +7116,34 @@
           </div>
           <div class="operator-button-group"><button class="secondary-action subtle hidden" id="resetExecution"><i data-lucide="rotate-ccw"></i>重置分析</button><button class="secondary-action analysis-run-button" id="approveButton"><i data-lucide="sparkles"></i>开始智能分析</button></div>
         </div>
-        <section class="feishu-ai-panel" id="feishuAiPanel" aria-label="飞书 AI 运营解读">
-          <div class="feishu-ai-head">
-            <div class="feishu-ai-title">
-              <span class="analysis-step-number">02</span>
-              <div>
-                <div class="eyebrow">AI operation interpretation</div>
-                <h3>飞书 AI 运营解读</h3>
-                <p>它不重新计算仿真指标，而是读取当前策略记录，把仿真引导结果解释成运营人员可以复核的建议。</p>
+        <details class="feishu-ai-details" id="feishuAiDetails">
+          <summary>
+            <span class="feishu-ai-details-title"><i data-lucide="sparkles"></i><span>飞书 AI 运营解读（可选外部集成）</span></span>
+            <span class="feishu-ai-details-badge" id="feishuSummaryBadge">待运行 / 可展开</span>
+            <i class="feishu-summary-chevron" data-lucide="chevron-down"></i>
+          </summary>
+          <section class="feishu-ai-panel" id="feishuAiPanel" aria-label="飞书 AI 运营解读">
+            <div class="feishu-ai-head">
+              <div class="feishu-ai-title">
+                <span class="analysis-step-number">02</span>
+                <div>
+                  <div class="eyebrow">AI operation interpretation</div>
+                  <h3>飞书 AI 运营解读</h3>
+                  <p>它不重新计算仿真指标，而是读取当前策略记录，把仿真引导结果解释成运营人员可以复核的建议。</p>
+                </div>
+              </div>
+              <div class="feishu-ai-actions">
+                <div class="feishu-ai-state" id="feishuSyncStatus" data-state="idle" role="status" aria-live="polite"><strong>等待仿真结果</strong></div>
+                <button class="secondary-action" id="feishuSyncButton" type="button"><i data-lucide="refresh-cw"></i>重新获取 AI 解读</button>
               </div>
             </div>
-            <div class="feishu-ai-actions">
-              <div class="feishu-ai-state" id="feishuSyncStatus" data-state="idle" role="status" aria-live="polite"><strong>等待仿真结果</strong></div>
-              <button class="secondary-action" id="feishuSyncButton" type="button"><i data-lucide="refresh-cw"></i>重新获取 AI 解读</button>
+            <div class="feishu-ai-result" id="feishuAiResult" aria-live="polite">
+              <div class="feishu-ai-empty" id="feishuAiEmpty">点击“开始智能分析”，先生成策略沙盘结果，再查看 AI 对运营结果的自然语言解读。</div>
+              <div class="feishu-ai-conclusions" id="feishuAiConclusions" hidden></div>
             </div>
-          </div>
-          <div class="feishu-ai-result" id="feishuAiResult" aria-live="polite">
-            <div class="feishu-ai-empty" id="feishuAiEmpty">点击“开始智能分析”，先生成策略沙盘结果，再查看 AI 对运营结果的自然语言解读。</div>
-            <div class="feishu-ai-conclusions" id="feishuAiConclusions" hidden></div>
-          </div>
-          <div class="feishu-ai-foot"><span id="feishuAiSource">数据来源将在分析完成后明确标注；当前不代表企业实时经营结论。</span><span class="source-badge">仿真结果 → AI 解读</span></div>
-        </section>
+            <div class="feishu-ai-foot"><span id="feishuAiSource">数据来源将在分析完成后明确标注；当前不代表企业实时经营结论。</span><span class="source-badge">仿真结果 → AI 解读</span></div>
+          </section>
+        </details>
       </section>
 
       <section class="validation-panel" id="validationPanel" aria-label="策略验证" data-reviewer-only>
@@ -6422,7 +7151,7 @@
           <div>
             <div class="eyebrow">Evidence view</div>
             <h2>FlowTwin 是否真的改善了补能决策</h2>
-            <p>使用固定种子的合成样本，对比常规策略与 FlowTwin 的排队、完整停靠、准时和站点供需指标。数值用于演示算法口径，不代表能链实时经营数据。</p>
+            <p>使用固定种子的合成样本，对比常规策略与 FlowTwin 的排队、完整停靠、准时和站点供需指标。数值用于验证算法口径，不代表实际站点实时经营数据。</p>
           </div>
           <div class="validation-head-actions"><button class="validation-evidence-button" id="validationEvidenceButton" type="button" disabled><i data-lucide="book-open-check"></i>查看计算依据</button><button class="close-button" id="closeValidation" aria-label="关闭验证视图"><i data-lucide="x"></i></button></div>
         </div>
@@ -6451,7 +7180,7 @@
         <div class="vision-head">
           <div>
             <div class="eyebrow">Station vision evidence</div>
-            <h2>站内视觉链路（轻量 MVP）</h2>
+            <h2>站内视觉链路</h2>
             <p>把“站内画面 → 车牌 OCR → 到站事件”串成可验证的业务链路。内置样例和上传的照片、短视频都会优先走本地 PaddleOCR；视频采用受限抽帧并要求连续命中后才判定稳定结果。车辆检测、车位检测、实时摄像头和真实扣款仍单独标注为未执行。</p>
           </div>
           <div class="vision-head-actions"><button class="close-button" id="closeVision" aria-label="关闭视觉演示"><i data-lucide="x"></i></button></div>
@@ -6459,7 +7188,8 @@
         <div class="vision-guide"><i data-lucide="info"></i><span>可以先试用内置样例进行本地 OCR 测试，也可以上传自己的车牌照片或短视频体验；如果模型没有识别到车牌，页面会如实显示“未识别”。</span></div>
         <div class="vision-toolbar">
           <button class="vision-action primary" id="visionSampleButton" type="button"><i data-lucide="scan-search"></i>识别内置样例</button>
-          <label for="visionFileInput"><span id="visionUploadLabel">上传车牌照片或短视频</span><input id="visionFileInput" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,video/x-matroska" /></label>
+          <label class="vision-upload-trigger" for="visionFileInput"><i data-lucide="upload"></i><span id="visionUploadLabel">选择照片或短视频</span><input id="visionFileInput" class="sr-only-file" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime,video/x-matroska" /></label>
+          <span class="vision-file-pill" id="visionFilePill" hidden></span>
           <button class="vision-action" id="visionUploadButton" type="button" disabled><i data-lucide="scan-search"></i>本地 OCR 识别</button>
           <span class="vision-status" id="visionStatus" data-state="idle" role="status" aria-live="polite">尚未运行</span>
           <span class="vision-health-status" id="visionHealthStatus" data-state="checking" role="status" aria-live="polite">正在检查本地视觉服务…</span>
@@ -6491,7 +7221,10 @@
             </dl>
             <ul class="vision-evidence" id="visionEvidence"><li>等待分析结果</li></ul>
             <div class="vision-boundary" id="visionBoundary">当前视觉链路优先走本地部署：车牌照片或短视频可由 PaddleOCR 在本地执行车牌 OCR；视频仅做受限抽帧，不代表已接入实时摄像头。车辆检测、车位检测和真实扣款不因 OCR 结果而被假装完成。</div>
-            <pre class="vision-json" id="visionJson" hidden></pre>
+            <details class="vision-raw-details" id="visionJsonDetails" hidden>
+              <summary>查看原始返回明细 (JSON)</summary>
+              <pre class="vision-json" id="visionJson"></pre>
+            </details>
           </article>
         </div>
       </section>
@@ -6501,7 +7234,7 @@
           <div class="evidence-dialog-head"><div><div class="eyebrow">Reproducible methodology</div><h3 id="validationEvidenceTitle">本次验证的计算依据</h3><p>展示本次仿真的输入、固定随机种子、策略规则与指标公式；同一输入和种子可复现同一结果。</p></div><div class="validation-head-actions"><button class="validation-evidence-button" id="validationRerunButton" type="button"><i data-lucide="rotate-cw"></i>重新运行</button><button class="close-button" id="closeValidationEvidence" aria-label="关闭计算依据"><i data-lucide="x"></i></button></div></div>
           <div class="evidence-summary" id="validationEvidenceSummary"></div>
           <div class="evidence-grid">
-          <article class="evidence-block wide"><h4>参与计算的站点输入</h4><table class="evidence-input-table"><thead><tr><th>站点</th><th>基础排队</th><th>价格</th><th>容量</th><th>负载</th></tr></thead><tbody id="validationEvidenceStationRows"></tbody></table></article>
+          <article class="evidence-block wide"><h4>参与计算的站点输入</h4><div class="evidence-table-wrap"><table class="evidence-input-table"><thead><tr><th>站点</th><th>基础排队</th><th>价格</th><th>容量</th><th>负载</th></tr></thead><tbody id="validationEvidenceStationRows"></tbody></table></div></article>
             <article class="evidence-block"><h4>场景生成</h4><ul id="validationEvidenceScenario"></ul></article>
             <article class="evidence-block"><h4>策略选站规则</h4><ul id="validationEvidenceStrategies"></ul></article>
             <article class="evidence-block wide"><h4>指标与核心公式</h4><ul id="validationEvidenceFormulas"></ul></article>
@@ -6542,7 +7275,7 @@
         </div>
       </section>
       <button class="panel-reveal reveal-bottom" id="expandRoutes" aria-label="展开路线方案" hidden><i data-lucide="chevron-up"></i><span>查看补能方案</span></button>
-      <div class="toast" id="toast"><i data-lucide="check-circle-2"></i><span id="toastText">操作已完成</span></div>
+      <div class="toast" id="toast" data-tone="success" role="status" aria-live="polite"><span class="toast-icon" id="toastIcon"><i data-lucide="check-circle-2"></i></span><span id="toastText">操作已完成</span></div>
     </div>
 
     <div class="settings-backdrop" id="settingsBackdrop" hidden>
@@ -6556,32 +7289,53 @@
         </div>
 
         <section class="settings-section" aria-labelledby="displayModeTitle">
-          <div class="settings-section-head"><h3 id="displayModeTitle">显示模式</h3><span>本次访问可随时切换</span></div>
-          <div class="display-mode-switch" role="radiogroup" aria-label="显示模式">
+          <div class="settings-section-head"><h3 id="displayModeTitle">视图模式</h3><span>自动记住偏好，可随时切换</span></div>
+          <div class="display-mode-switch" role="radiogroup" aria-label="视图模式">
             <button type="button" class="display-mode-option active" data-display-mode-option="reviewer" role="radio" aria-checked="true">
-              <strong>评委模式</strong><small>保留来源、预测过程、运营与验证</small>
+              <strong>完整工作台</strong><small>保留来源、预测过程、运营与验证</small>
             </button>
             <button type="button" class="display-mode-option" data-display-mode-option="user" role="radio" aria-checked="false">
-              <strong>用户模式</strong><small>只看出行、路线、补能、等待、价格与服务建议</small>
+              <strong>简洁出行模式</strong><small>聚焦出行、路线、补能、等待与沿线服务</small>
             </button>
           </div>
         </section>
 
+        <section class="settings-section" aria-labelledby="settingsVehicleTitle">
+          <div class="settings-section-head"><h3 id="settingsVehicleTitle">车辆动力与出发时间</h3><span>与顶栏实时同步</span></div>
+          <div class="settings-vehicle-grid">
+            <div class="energy-type-switch" role="group" aria-label="动力类型设置">
+              <button type="button" class="active" data-energy-type="electric"><i data-lucide="zap"></i>纯电</button>
+              <button type="button" data-energy-type="fuel"><i data-lucide="fuel"></i>燃油</button>
+              <button type="button" data-energy-type="hybrid"><i data-lucide="git-compare-arrows"></i>混动</button>
+            </div>
+            <div class="settings-vehicle-row">
+              <div class="settings-vehicle-field">
+                <label for="settingsDepartureTimeInput">出发时间</label>
+                <input id="settingsDepartureTimeInput" type="time" aria-label="设置出发时间" />
+              </div>
+              <div class="settings-vehicle-field">
+                <label for="settingsEnergyPercentInput" id="settingsEnergyLabel">当前电量 (%)</label>
+                <input id="settingsEnergyPercentInput" type="number" min="5" max="100" step="1" value="22" inputmode="numeric" aria-label="设置当前电量百分比" />
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="settings-section" aria-labelledby="settingsOriginTitle">
-          <div class="settings-section-head"><h3 id="settingsOriginTitle">出发位置</h3><span>本次访问可随时切换</span></div>
+          <div class="settings-section-head"><h3 id="settingsOriginTitle">出发位置</h3><span>可随时切换</span></div>
           <div class="settings-origin-current">
             <i data-lucide="map-pin" aria-hidden="true"></i>
-            <span><strong id="settingsOriginCurrent">能链中心 · 北京总部</strong><small id="settingsOriginMeta">北京市朝阳区姚家园南路 1 号 · 演示默认起点</small></span>
+            <span><strong id="settingsOriginCurrent">北京国贸 CBD</strong><small id="settingsOriginMeta">北京市朝阳区建国门外大街 · 默认起点</small></span>
           </div>
           <div class="settings-origin-actions" role="group" aria-label="切换出发位置">
             <button class="settings-origin-option active" type="button" data-settings-origin="default" aria-pressed="true">
-              <strong>能链总部</strong><small>使用演示默认起点</small>
+              <strong>北京国贸 CBD</strong><small>使用默认起点</small>
             </button>
             <button class="settings-origin-option" type="button" data-settings-origin="location" aria-pressed="false">
-              <strong>使用当前位置</strong><small>申请浏览器定位权限</small>
+              <strong>使用当前定位</strong><small>申请浏览器定位权限</small>
             </button>
           </div>
-          <div class="settings-origin-status" id="settingsOriginStatus" role="status" aria-live="polite">当前使用能链总部</div>
+          <div class="settings-origin-status" id="settingsOriginStatus" role="status" aria-live="polite">当前使用北京国贸 CBD</div>
         </section>
 
         <section class="settings-section" aria-labelledby="versionTitle">
@@ -6608,7 +7362,7 @@
 
         <section class="settings-section settings-boundary" aria-labelledby="boundaryTitle">
           <div class="settings-section-head"><h3 id="boundaryTitle">数据边界</h3></div>
-          <p>路线与地图可来自真实地图服务；站点排队、补能服务时长、价格、负载和运营结果是本次仿真。安全余量、可达性、预计停靠耗时与价格仍会影响路线选择。</p>
+          <p>路线与地图可来自真实地图服务，未配置地图密钥时自动以离线沙盒模式运行；站点排队、补能服务时长、价格、负载和运营结果均为仿真推演。</p>
           <p class="settings-boundary-note">本页不展示密钥或内部配置，也不会在打开设置时触发 AI、飞书同步或 Webhook。</p>
         </section>
       </aside>
@@ -6616,48 +7370,48 @@
 
     <div class="mode-choice-backdrop" id="modeChoiceBackdrop" hidden>
       <section class="mode-choice" id="modeChoicePanel" role="dialog" aria-modal="true" aria-labelledby="modeChoiceTitle" aria-describedby="modeChoiceDescription" tabindex="-1">
-        <div class="mode-choice-kicker">FlowTwin · 展示入口</div>
-        <h2 id="modeChoiceTitle">选择你的体验方式</h2>
-        <p class="mode-choice-intro" id="modeChoiceDescription">同一套出行规划能力，提供两种信息密度。评委模式默认展示，方便查看路线依据、数据边界和计算过程；用户模式则收起实现细节，直接看出行结果。</p>
-        <div class="mode-choice-options" role="group" aria-label="选择显示模式">
+        <div class="mode-choice-kicker">FlowTwin · 工作台视图</div>
+        <h2 id="modeChoiceTitle">选择视图密度</h2>
+        <p class="mode-choice-intro" id="modeChoiceDescription">同一套出行规划能力，提供两种信息密度。完整工作台默认展示路线依据、预测过程、运营与验证；简洁出行模式聚焦驾驶与补能结果。</p>
+        <div class="mode-choice-options" role="group" aria-label="选择视图模式">
           <button class="mode-choice-option" type="button" data-display-mode-choice="reviewer">
             <span class="mode-choice-option-icon"><i data-lucide="scan-search"></i></span>
-            <span class="mode-choice-option-head"><strong>评委模式</strong><em>默认</em></span>
-            <small>展示路线规划依据、等待预测、运营仿真、验证结果和数据边界，适合评委查看与项目演示。</small>
-            <span class="mode-choice-option-action">进入评委模式 <i data-lucide="arrow-right"></i></span>
+            <span class="mode-choice-option-head"><strong>完整工作台</strong><em>默认</em></span>
+            <small>展示路线规划依据、等待预测、运营仿真、验证结果与视觉链路。</small>
+            <span class="mode-choice-option-action">进入完整工作台 <i data-lucide="arrow-right"></i></span>
           </button>
           <button class="mode-choice-option" type="button" data-display-mode-choice="user">
             <span class="mode-choice-option-icon"><i data-lucide="route"></i></span>
-            <span class="mode-choice-option-head"><strong>用户模式</strong></span>
-            <small>隐藏复杂的计算和运营信息，突出目的地、路线、补能、等待和服务建议。</small>
-            <span class="mode-choice-option-action">进入用户模式 <i data-lucide="arrow-right"></i></span>
+            <span class="mode-choice-option-head"><strong>简洁出行模式</strong></span>
+            <small>收起复杂计算和运营视图，突出目的地、路线、补能、等待与沿线服务。</small>
+            <span class="mode-choice-option-action">进入简洁出行模式 <i data-lucide="arrow-right"></i></span>
           </button>
         </div>
-        <div class="mode-choice-foot">进入后仍可通过右上角“设置”随时切换；本次选择不会被记住，下次访问会重新询问。</div>
+        <div class="mode-choice-foot">可随时通过右上角“设置”切换视图模式，偏好会自动保存在本地浏览器。</div>
       </section>
     </div>
 
     <div class="mode-choice-backdrop origin-choice-backdrop" id="originChoiceBackdrop" hidden>
       <section class="mode-choice origin-choice" id="originChoicePanel" role="dialog" aria-modal="true" aria-labelledby="originChoiceTitle" aria-describedby="originChoiceDescription" tabindex="-1">
         <div class="mode-choice-kicker">FlowTwin · 出发位置</div>
-        <h2 id="originChoiceTitle">选择本次出发位置</h2>
-        <p class="mode-choice-intro" id="originChoiceDescription">默认从能链北京总部开始规划；如果你希望按实际所在位置体验，可以在这里授权浏览器定位。本次选择仅对当前访问生效。</p>
+        <h2 id="originChoiceTitle">选择出发位置</h2>
+        <p class="mode-choice-intro" id="originChoiceDescription">默认从北京国贸 CBD 开始规划；如果你希望按实际所在位置出发，可以在这里授权浏览器定位。</p>
         <div class="mode-choice-options" role="group" aria-label="选择出发位置">
           <button class="mode-choice-option" type="button" data-origin-choice="default">
             <span class="mode-choice-option-icon"><i data-lucide="building-2"></i></span>
-            <span class="mode-choice-option-head"><strong>能链总部</strong><em>默认</em></span>
-            <small>使用能链北京总部作为演示起点，路线、地图与示例数据口径保持一致。</small>
-            <span class="mode-choice-option-action">从能链总部出发 <i data-lucide="arrow-right"></i></span>
+            <span class="mode-choice-option-head"><strong>北京国贸 CBD</strong><em>默认</em></span>
+            <small>使用北京国贸 CBD 作为默认起点，路线与示例数据口径保持一致。</small>
+            <span class="mode-choice-option-action">从北京国贸 CBD 出发 <i data-lucide="arrow-right"></i></span>
           </button>
           <button class="mode-choice-option" type="button" data-origin-choice="location">
             <span class="mode-choice-option-icon"><i data-lucide="locate-fixed"></i></span>
-            <span class="mode-choice-option-head"><strong>使用当前位置</strong></span>
+            <span class="mode-choice-option-head"><strong>使用当前定位</strong></span>
             <small>点击后才会申请浏览器定位权限；定位成功后将用当前位置作为起点，并尝试显示附近地址。</small>
             <span class="mode-choice-option-action">申请定位并继续 <i data-lucide="arrow-right"></i></span>
           </button>
         </div>
-        <div class="origin-choice-status" id="originChoiceStatus" role="status" aria-live="polite">本次访问默认使用能链北京总部。</div>
-        <div class="mode-choice-foot">如果拒绝授权、定位超时或浏览器不支持定位，系统不会伪造坐标，会保留能链总部供你继续体验。</div>
+        <div class="origin-choice-status" id="originChoiceStatus" role="status" aria-live="polite">当前默认起点为北京国贸 CBD。</div>
+        <div class="mode-choice-foot">如果拒绝授权、定位超时或浏览器不支持定位，系统不会伪造坐标，会保留北京国贸 CBD 供你继续使用。</div>
       </section>
     </div>
 
@@ -6665,7 +7419,7 @@
       <section class="demo-notice" role="dialog" aria-modal="true" aria-labelledby="demoNoticeTitle" aria-describedby="demoNoticeDescription">
         <span class="demo-notice-mark"><i data-lucide="map"></i></span>
         <h2 id="demoNoticeTitle">全国长途规划已开启</h2>
-        <p id="demoNoticeDescription">可输入全国可驾车目的地。地图路线和沿线站点会根据高德数据动态查询；站点价格、占用率、排队和补能服务时长目前使用演示仿真数据。</p>
+        <p id="demoNoticeDescription">可输入全国可驾车目的地。地图路线和沿线站点可根据高德数据动态查询，离线环境下自动切换沙盒推演；站点价格、占用率、排队和补能服务时长为仿真数据。</p>
         <div class="demo-notice-boundary"><i data-lucide="info"></i><span>建议体验：输入城市、机场、火车站或具体地址，系统将检索路线与沿线补能站。</span></div>
         <div class="demo-notice-action"><button id="demoNoticeConfirm" type="button"><span>知道了，开始体验</span><i data-lucide="arrow-right"></i></button></div>
       </section>
@@ -6684,11 +7438,9 @@
       </div>
     </div>
 
-    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.js" integrity="sha384-LtmWBcrD5iuFIR4sFphS8IiiaftkypL5dJzLKywbyd9ATLB7ZbPz3JYnI9nvXHkV" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="./runtime-config.js"></script>
     <script>window._AMapSecurityConfig = { securityJsCode: (window.FLOWTWIN_CONFIG || {}).securityJsCode || "" };</script>
-    <script src="https://webapi.amap.com/loader.js"></script>
     <script src="./service-intent.js"></script>
-    <script src="./app.js?v=20260822-multi-waypoint-route-1"></script>
+    <script src="./app.js"></script>
   </body>
 </html>
