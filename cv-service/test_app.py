@@ -1,12 +1,14 @@
 import base64
 import json
+import os
+import socket
 import struct
 import sys
 import threading
 import unittest
 import zlib
 from http.client import HTTPConnection
-from http.server import HTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -16,10 +18,16 @@ import app  # noqa: E402
 from app import (  # noqa: E402
     Handler,
     MAX_IMAGE_PIXELS,
+    MAX_REQUEST_BYTES,
+    OcrBusyError,
     SOCKET_TIMEOUT_SECONDS,
+    _env_float,
+    _env_int,
+    _get_ocr_engine,
     _normalize_ocr_text,
     _plate_candidates,
     analyze,
+    runtime_summary,
     upload_metadata,
     upload_video_metadata,
 )
@@ -232,18 +240,64 @@ class CvAdapterTests(unittest.TestCase):
 
     def test_http_handler_enforces_json_content_type_sanitizes_errors_and_sets_timeout(self):
         self.assertGreaterEqual(SOCKET_TIMEOUT_SECONDS, 5.0)
-        server = HTTPServer(("127.0.0.1", 0), Handler)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
         port = server.server_address[1]
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            # GET /health -> 200 with runtime summary
+            conn.request("GET", "/health")
+            res = conn.getresponse()
+            health = json.loads(res.read().decode("utf-8"))
+            self.assertEqual(res.status, 200)
+            self.assertTrue(health["ok"])
+            self.assertEqual(health["service"], "flowtwin-cv")
+            self.assertIn("ocrAvailable", health["runtime"])
+
             # Non-JSON Content-Type -> 415
             conn.request("POST", "/analyze", body=b'{"mode":"sample"}', headers={"Content-Type": "text/plain"})
             res = conn.getresponse()
             body = json.loads(res.read().decode("utf-8"))
             self.assertEqual(res.status, 415)
             self.assertEqual(body["error"], "UNSUPPORTED_MEDIA_TYPE")
+
+            # Content-Length: 0 -> 400 INVALID_CONTENT_LENGTH (not 413)
+            conn.request("POST", "/analyze", body=b"", headers={"Content-Type": "application/json", "Content-Length": "0"})
+            res = conn.getresponse()
+            body = json.loads(res.read().decode("utf-8"))
+            self.assertEqual(res.status, 400)
+            self.assertEqual(body["error"], "INVALID_CONTENT_LENGTH")
+
+            # Missing Content-Length -> 400 INVALID_CONTENT_LENGTH
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as raw_sock:
+                raw_sock.sendall(b"POST /analyze HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n")
+                raw_resp = b""
+                while True:
+                    chunk = raw_sock.recv(4096)
+                    if not chunk:
+                        break
+                    raw_resp += chunk
+            head, _, payload_bytes = raw_resp.partition(b"\r\n\r\n")
+            self.assertIn(b" 400 ", head)
+            self.assertEqual(json.loads(payload_bytes.decode("utf-8"))["error"], "INVALID_CONTENT_LENGTH")
+
+            # Oversized Content-Length -> 413 REQUEST_TOO_LARGE
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as raw_sock:
+                oversized = MAX_REQUEST_BYTES + 1
+                raw_sock.sendall(
+                    f"POST /analyze HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {oversized}\r\nConnection: close\r\n\r\n".encode("ascii")
+                )
+                raw_resp = b""
+                while True:
+                    chunk = raw_sock.recv(4096)
+                    if not chunk:
+                        break
+                    raw_resp += chunk
+            head, _, payload_bytes = raw_resp.partition(b"\r\n\r\n")
+            self.assertIn(b" 413 ", head)
+            self.assertEqual(json.loads(payload_bytes.decode("utf-8"))["error"], "REQUEST_TOO_LARGE")
 
             # Invalid JSON -> 400 with whitelisted error code (no Python internals)
             conn.request("POST", "/analyze", body=b"{broken", headers={"Content-Type": "application/json"})
@@ -252,8 +306,16 @@ class CvAdapterTests(unittest.TestCase):
             self.assertEqual(res.status, 400)
             self.assertEqual(body["error"], "INVALID_JSON")
 
-            # Valid JSON -> 200
-            conn.request("POST", "/analyze", body=b'{"mode":"sample"}', headers={"Content-Type": "application/json"})
+            # 429 OCR_BUSY when OCR slot is busy
+            with mock.patch.object(app, "analyze", side_effect=OcrBusyError("OCR_BUSY")):
+                conn.request("POST", "/analyze", body=b'{"mode":"upload","imageData":"x"}', headers={"Content-Type": "application/json"})
+                res = conn.getresponse()
+                body = json.loads(res.read().decode("utf-8"))
+                self.assertEqual(res.status, 429)
+                self.assertEqual(body["error"], "OCR_BUSY")
+
+            # Valid JSON -> 200 (also case/whitespace normalized mode)
+            conn.request("POST", "/analyze", body=b'{"mode":"  Sample "}', headers={"Content-Type": "application/json"})
             res = conn.getresponse()
             body = json.loads(res.read().decode("utf-8"))
             self.assertEqual(res.status, 200)
@@ -262,6 +324,58 @@ class CvAdapterTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_jpeg_with_trailing_padding_after_eoi_is_accepted(self):
+        padded = make_jpeg_header(640, 480) + b"\x00\x00trailing-exif-pad"
+        metadata = upload_metadata(data_url("image/jpeg", padded))
+        self.assertEqual(metadata["mimeType"], "image/jpeg")
+        self.assertEqual(metadata["dimensions"], [640, 480])
+
+        # Missing EOI entirely must still fail
+        no_eoi = make_jpeg_header(640, 480)[:-2] + b"\x00\x00"
+        with self.assertRaisesRegex(ValueError, "IMAGE_CONTENT_INVALID"):
+            upload_metadata(data_url("image/jpeg", no_eoi))
+
+    def test_get_ocr_engine_preserves_permanent_error_code_and_exposes_init_error(self):
+        with mock.patch.object(app, "_OCR_ENGINE", None), \
+             mock.patch.object(app, "_OCR_ENGINE_LABEL", ""), \
+             mock.patch.object(app, "_OCR_INIT_ERROR", ""), \
+             mock.patch.object(app, "_build_ocr_engine", side_effect=RuntimeError("PADDLEOCR_LOCAL_MODEL_DIRS_REQUIRED")):
+            with self.assertRaisesRegex(RuntimeError, "PADDLEOCR_LOCAL_MODEL_DIRS_REQUIRED"):
+                _get_ocr_engine()
+            summary = runtime_summary()
+            self.assertEqual(summary.get("ocrInitError"), "PADDLEOCR_LOCAL_MODEL_DIRS_REQUIRED")
+
+    def test_runtime_summary_factors_local_model_dirs_when_local_only_enabled(self):
+        with mock.patch.dict(os.environ, {"PADDLEOCR_LOCAL_ONLY": "1", "PADDLEOCR_TEXT_DET_MODEL_DIR": "", "PADDLEOCR_TEXT_REC_MODEL_DIR": ""}), \
+             mock.patch.object(app, "paddleocr", object()), \
+             mock.patch.object(app, "np", object()), \
+             mock.patch.object(app, "cv2", object()):
+            summary = runtime_summary()
+            self.assertTrue(summary["localOnly"])
+            self.assertFalse(summary["localModelDirsReady"])
+            self.assertFalse(summary["ocrAvailable"])
+
+    def test_mocked_executed_ocr_flow_returns_plate_and_confidence(self):
+        raw_jpeg = make_jpeg_header(800, 600)
+        with mock.patch.object(app, "_decode_image", return_value="fake-image"), \
+             mock.patch.object(app, "_run_paddle_ocr", return_value=([{"text": "京A·88888", "score": 0.96, "bbox": None}], "PaddleOCR 本地 CPU（mock）")):
+            result = analyze({"mode": " UPLOAD ", "imageData": data_url("image/jpeg", raw_jpeg)})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["mode"], "local-ocr")
+        self.assertEqual(result["inferenceStatus"], "executed")
+        self.assertEqual(result["capabilities"]["plateOcr"], "executed")
+        self.assertEqual(result["arrivalRecognition"]["status"], "recognized")
+        self.assertEqual(result["arrivalRecognition"]["plate"], "京A88888")
+        self.assertAlmostEqual(result["confidence"], 0.96)
+
+    def test_safe_env_parsers_tolerate_empty_and_invalid_values(self):
+        with mock.patch.dict(os.environ, {"CV_TEST_INT": "", "CV_TEST_FLOAT": "not-a-float"}):
+            self.assertEqual(_env_int("CV_TEST_INT", 1600, 640, 2400), 1600)
+            self.assertEqual(_env_float("CV_TEST_FLOAT", 15.0, 5.0, 60.0), 15.0)
+        with mock.patch.dict(os.environ, {"CV_TEST_INT": "99999", "CV_TEST_FLOAT": "nan"}):
+            self.assertEqual(_env_int("CV_TEST_INT", 1600, 640, 2400), 2400)
+            self.assertEqual(_env_float("CV_TEST_FLOAT", 15.0, 5.0, 60.0), 15.0)
 
     def test_plate_text_is_normalized_and_format_checked(self):
         self.assertEqual(_normalize_ocr_text("车牌号：京A·12345"), "京A12345")
@@ -273,6 +387,139 @@ class CvAdapterTests(unittest.TestCase):
     def test_invalid_plate_text_is_not_promoted_to_a_result(self):
         valid, _ = _plate_candidates([{"text": "京A1234", "score": 0.99}])
         self.assertEqual(valid, [])
+
+    def test_ocr_init_and_runtime_summary_are_synchronized_under_init_lock(self):
+        build_calls = 0
+        build_entered = threading.Event()
+        release_build = threading.Event()
+        summary_result: dict[str, object] = {}
+
+        def fake_build():
+            nonlocal build_calls
+            build_calls += 1
+            build_entered.set()
+            release_build.wait(timeout=2.0)
+            return object(), "PaddleOCR 本地 CPU（thread-safe）"
+
+        with mock.patch.object(app, "_OCR_ENGINE", None), \
+             mock.patch.object(app, "_OCR_ENGINE_LABEL", ""), \
+             mock.patch.object(app, "_OCR_INIT_ERROR", "STALE_ERROR"), \
+             mock.patch.object(app, "_build_ocr_engine", side_effect=fake_build):
+            results: list[tuple[object, str]] = []
+            errors: list[Exception] = []
+
+            def worker():
+                try:
+                    results.append(_get_ocr_engine())
+                except Exception as exc:  # pragma: no cover
+                    errors.append(exc)
+
+            def reader():
+                summary_result["value"] = runtime_summary()
+
+            t1 = threading.Thread(target=worker)
+            t2 = threading.Thread(target=worker)
+            t1.start()
+            self.assertTrue(build_entered.wait(timeout=2.0))
+            t2.start()
+            t_read = threading.Thread(target=reader)
+            t_read.start()
+            release_build.set()
+            t1.join(timeout=2.0)
+            t2.join(timeout=2.0)
+            t_read.join(timeout=2.0)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(build_calls, 1)
+            self.assertEqual(len(results), 2)
+            self.assertIs(results[0][0], results[1][0])
+            self.assertEqual(results[0][1], "PaddleOCR 本地 CPU（thread-safe）")
+            self.assertEqual(results[1][1], "PaddleOCR 本地 CPU（thread-safe）")
+            snap = summary_result["value"]
+            assert isinstance(snap, dict)
+            self.assertTrue(snap["ocrLoaded"])
+            self.assertNotIn("ocrInitError", snap)
+
+    def test_analyze_video_holds_ocr_run_lock_once_across_all_frames(self):
+        raw = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+        payload = {"mode": "video", "videoData": data_url("video/mp4", raw)}
+
+        class FakeFrame:
+            shape = (480, 640, 3)
+
+        class FakeCv2MultiFrame:
+            CAP_PROP_FPS = 5
+            CAP_PROP_FRAME_WIDTH = 3
+            CAP_PROP_FRAME_HEIGHT = 4
+
+            class VideoCapture:
+                def __init__(self, _path):
+                    self.count = 0
+
+                def isOpened(self):
+                    return True
+
+                def get(self, prop):
+                    if prop == 5:
+                        return 2.0
+                    if prop == 3:
+                        return 640.0
+                    if prop == 4:
+                        return 480.0
+                    return 0.0
+
+                def read(self):
+                    if self.count >= 3:
+                        return False, None
+                    self.count += 1
+                    return True, FakeFrame()
+
+                def release(self):
+                    pass
+
+        class TrackingSemaphore:
+            def __init__(self):
+                self.held = False
+                self.acquire_calls = 0
+                self.release_calls = 0
+
+            def acquire(self, timeout=None):
+                self.acquire_calls += 1
+                if self.held:
+                    return False
+                self.held = True
+                return True
+
+            def release(self):
+                self.release_calls += 1
+                self.held = False
+
+        tracker = TrackingSemaphore()
+        frame_locked_states: list[bool] = []
+
+        class FakeEngine:
+            def predict(self, _img):
+                # Lock MUST remain held throughout every sampled frame
+                frame_locked_states.append(tracker.held)
+                return [{"rec_texts": ["京A12345"], "rec_scores": [0.95]}]
+
+        with mock.patch.object(app, "cv2", FakeCv2MultiFrame), \
+             mock.patch.object(app, "_OCR_RUN_LOCK", tracker), \
+             mock.patch.object(app, "_resize_image", side_effect=lambda f: f), \
+             mock.patch.object(app, "_get_ocr_engine", return_value=(FakeEngine(), "FakeOCR")):
+            result = analyze(payload)
+            self.assertEqual(result["mode"], "local-video-ocr")
+            self.assertEqual(result["arrivalRecognition"]["plate"], "京A12345")
+            self.assertEqual(tracker.acquire_calls, 1)
+            self.assertEqual(tracker.release_calls, 1)
+            self.assertFalse(tracker.held)
+            self.assertEqual(frame_locked_states, [True, True, True])
+
+            # When lock is already held, _analyze_video raises OcrBusyError immediately
+            tracker.held = True
+            with self.assertRaises(OcrBusyError):
+                analyze(payload)
+            self.assertEqual(tracker.release_calls, 1)
 
 
 def json_text(value):

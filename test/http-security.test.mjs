@@ -62,6 +62,7 @@ test("SECURITY_HEADERS include hardened CSP directives and are returned on HTML 
   assert.match(SECURITY_HEADERS["Content-Security-Policy"], /object-src 'none'/);
   assert.match(SECURITY_HEADERS["Content-Security-Policy"], /base-uri 'self'/);
   assert.match(SECURITY_HEADERS["Content-Security-Policy"], /frame-ancestors 'none'/);
+  assert.equal(SECURITY_HEADERS["Content-Security-Policy"].includes("unpkg.com"), false);
   assert.equal(SECURITY_HEADERS["Content-Security-Policy"], CONTENT_SECURITY_POLICY);
 
   await withServer({ config: {} }, async ({ baseUrl }) => {
@@ -408,11 +409,13 @@ test("index.html and app.js harden DOM XSS, payment receipt modal placement, and
   const demoBackdropMatch = html.match(/<div class="demo-notice-backdrop hidden" id="demoNoticeBackdrop">[\s\S]*?<\/div>\s*<div class="payment-receipt-overlay" id="paymentReceiptOverlay"/);
   assert.ok(demoBackdropMatch, "paymentReceiptOverlay should be a sibling outside demoNoticeBackdrop");
 
-  // lucide external CDN script must include SRI + crossorigin + referrerpolicy
-  const lucideTag = html.match(/<script[^>]*unpkg\.com\/lucide@0\.468\.0[^>]*><\/script>/)?.[0] || "";
-  assert.match(lucideTag, /integrity="sha384-[A-Za-z0-9+/=]+"/);
-  assert.match(lucideTag, /crossorigin="anonymous"/);
-  assert.match(lucideTag, /referrerpolicy="no-referrer"/);
+  // Any external CDN script tag (e.g. unpkg lucide) must include SRI + crossorigin + referrerpolicy
+  const externalScripts = html.match(/<script[^>]*\bsrc=["']https?:\/\/[^"']+["'][^>]*><\/script>/gi) || [];
+  for (const scriptTag of externalScripts) {
+    assert.match(scriptTag, /integrity="sha384-[A-Za-z0-9+/=]+"/);
+    assert.match(scriptTag, /crossorigin="anonymous"/);
+    assert.match(scriptTag, /referrerpolicy="no-referrer"/);
+  }
 
   // app.js must not pass raw <b> HTML into setText("paymentReceiptStation", ...)
   assert.equal(appJs.includes('setText("paymentReceiptStation", `车牌 <b>'), false);

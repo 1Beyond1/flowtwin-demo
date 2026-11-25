@@ -26,18 +26,43 @@ import threading
 import tempfile
 import time
 from io import BytesIO
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterable
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(value, maximum))
+
+
+def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    if not math.isfinite(value):
+        return default
+    return max(minimum, min(value, maximum))
+
 
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
 MAX_VIDEO_BYTES = 24 * 1024 * 1024
 MAX_REQUEST_BYTES = 36 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
-MAX_IMAGE_SIDE = max(640, min(int(os.environ.get("CV_MAX_IMAGE_SIDE", "1600")), 2400))
-OCR_WAIT_SECONDS = max(1.0, min(float(os.environ.get("CV_OCR_WAIT_SECONDS", "30")), 120.0))
-SOCKET_TIMEOUT_SECONDS = max(5.0, min(float(os.environ.get("CV_SOCKET_TIMEOUT_SECONDS", "15")), 60.0))
-VIDEO_WALL_CLOCK_TIMEOUT_SECONDS = max(5.0, min(float(os.environ.get("CV_VIDEO_TIMEOUT_SECONDS", "60")), 120.0))
+MAX_IMAGE_SIDE = _env_int("CV_MAX_IMAGE_SIDE", 1600, 640, 2400)
+OCR_WAIT_SECONDS = _env_float("CV_OCR_WAIT_SECONDS", 30.0, 1.0, 120.0)
+SOCKET_TIMEOUT_SECONDS = _env_float("CV_SOCKET_TIMEOUT_SECONDS", 15.0, 5.0, 60.0)
+VIDEO_WALL_CLOCK_TIMEOUT_SECONDS = _env_float("CV_VIDEO_TIMEOUT_SECONDS", 60.0, 5.0, 120.0)
 OCR_CONCURRENCY = 1
 IMAGE_RE = re.compile(r"^data:image/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$", re.I)
 VIDEO_RE = re.compile(r"^data:video/(mp4|webm|quicktime|x-matroska);base64,([A-Za-z0-9+/=]+)$", re.I)
@@ -45,12 +70,13 @@ PLATE_RE = re.compile(
     r"([京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼港澳台][A-Z][A-Z0-9]{5,6})"
 )
 PLATE_PREFIXES = set("京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼港澳台")
-VIDEO_MAX_SECONDS = max(3.0, min(float(os.environ.get("CV_VIDEO_MAX_SECONDS", "15")), 30.0))
-VIDEO_SAMPLE_FPS = max(0.5, min(float(os.environ.get("CV_VIDEO_SAMPLE_FPS", "2")), 4.0))
-VIDEO_MIN_STABLE_HITS = max(1, min(int(os.environ.get("CV_VIDEO_MIN_STABLE_HITS", "2")), 5))
+VIDEO_MAX_SECONDS = _env_float("CV_VIDEO_MAX_SECONDS", 15.0, 3.0, 30.0)
+VIDEO_SAMPLE_FPS = _env_float("CV_VIDEO_SAMPLE_FPS", 2.0, 0.5, 4.0)
+VIDEO_MIN_STABLE_HITS = _env_int("CV_VIDEO_MIN_STABLE_HITS", 2, 1, 5)
 
 SAFE_CLIENT_ERROR_CODES = frozenset({
     "REQUEST_TOO_LARGE",
+    "INVALID_CONTENT_LENGTH",
     "INVALID_JSON_OBJECT",
     "INVALID_JSON",
     "UNSUPPORTED_CV_MODE",
@@ -153,17 +179,25 @@ def _local_model_dirs_ready() -> bool:
 
 def runtime_summary() -> dict[str, Any]:
     det_dir, rec_dir = _configured_model_dirs()
-    return {
+    local_only = _env_bool("PADDLEOCR_LOCAL_ONLY", False)
+    local_dirs_ready = _local_model_dirs_ready()
+    deps_available = paddleocr is not None and np is not None and (cv2 is not None or Image is not None)
+    ocr_available = deps_available and (local_dirs_ready if local_only else True)
+    with _OCR_INIT_LOCK:
+        ocr_loaded = _OCR_ENGINE is not None
+        ocr_init_error = _OCR_INIT_ERROR
+    summary: dict[str, Any] = {
         "opencv": cv2 is not None,
         "pillow": Image is not None,
         "numpy": np is not None,
         "paddle": paddle is not None,
         "paddleocr": paddleocr is not None,
         "ocrEngine": "PaddleOCR",
-        "ocrAvailable": paddleocr is not None and np is not None and (cv2 is not None or Image is not None),
-        "ocrLoaded": _OCR_ENGINE is not None,
+        "ocrAvailable": ocr_available,
+        "ocrLoaded": ocr_loaded,
+        "localOnly": local_only,
         "localModelDirsConfigured": bool(det_dir and rec_dir),
-        "localModelDirsReady": _local_model_dirs_ready(),
+        "localModelDirsReady": local_dirs_ready,
         "modelWeightsBundled": False,
         "device": "cpu",
         "maxImageSide": MAX_IMAGE_SIDE,
@@ -174,6 +208,9 @@ def runtime_summary() -> dict[str, Any]:
         "videoSampleFps": VIDEO_SAMPLE_FPS,
         "videoMinStableHits": VIDEO_MIN_STABLE_HITS,
     }
+    if ocr_init_error:
+        summary["ocrInitError"] = ocr_init_error
+    return summary
 
 
 def _png_header_dimensions(raw: bytes) -> tuple[int, int] | None:
@@ -326,7 +363,7 @@ def _parse_upload_image(image_data: str) -> tuple[dict[str, Any], bytes]:
         mime_type == "image/jpeg"
         and len(raw) >= 4
         and raw[:3] == b"\xff\xd8\xff"
-        and raw[-2:] == b"\xff\xd9"
+        and b"\xff\xd9" in raw[max(2, len(raw) - 64):]
     ) or (
         mime_type == "image/webp"
         and len(raw) >= 12
@@ -480,18 +517,19 @@ def _build_ocr_engine() -> tuple[Any, str]:
 
 def _get_ocr_engine() -> tuple[Any, str]:
     global _OCR_ENGINE, _OCR_ENGINE_LABEL, _OCR_INIT_ERROR
-    if _OCR_ENGINE is not None:
-        return _OCR_ENGINE, _OCR_ENGINE_LABEL
     with _OCR_INIT_LOCK:
         if _OCR_ENGINE is not None:
             return _OCR_ENGINE, _OCR_ENGINE_LABEL
         try:
-            _OCR_ENGINE, _OCR_ENGINE_LABEL = _build_ocr_engine()
+            engine, label = _build_ocr_engine()
+            _OCR_ENGINE_LABEL = label
             _OCR_INIT_ERROR = ""
+            _OCR_ENGINE = engine
+            return engine, label
         except Exception as exc:  # pragma: no cover - depends on local model setup
-            _OCR_INIT_ERROR = _safe_runtime_error(exc)
-            raise RuntimeError("PADDLEOCR_NOT_READY") from exc
-    return _OCR_ENGINE, _OCR_ENGINE_LABEL
+            code = _safe_runtime_error(exc)
+            _OCR_INIT_ERROR = code
+            raise RuntimeError(code) from exc
 
 
 def _json_value(value: Any) -> Any:
@@ -622,9 +660,9 @@ def _plate_candidates(records: Iterable[dict[str, Any]]) -> tuple[list[dict[str,
     return list(unique.values()), raw[:8]
 
 
-def _run_paddle_ocr(image: Any) -> tuple[list[dict[str, Any]], str]:
+def _run_paddle_ocr(image: Any, *, locked: bool = False) -> tuple[list[dict[str, Any]], str]:
     engine, label = _get_ocr_engine()
-    if not _OCR_RUN_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
+    if not locked and not _OCR_RUN_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
         raise OcrBusyError("OCR_BUSY")
     try:
         if hasattr(engine, "predict"):
@@ -637,7 +675,8 @@ def _run_paddle_ocr(image: Any) -> tuple[list[dict[str, Any]], str]:
             result = list(result) if result is not None else []
         return _ocr_records(result), label
     finally:
-        _OCR_RUN_LOCK.release()
+        if not locked:
+            _OCR_RUN_LOCK.release()
 
 
 def _video_candidate_summary(temporal: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -690,42 +729,47 @@ def _analyze_video(metadata: dict[str, Any], raw: bytes) -> dict[str, Any]:
         sample_every = max(1, int(round(fps / VIDEO_SAMPLE_FPS)))
         max_decode_frames = max(1, int(math.ceil(VIDEO_MAX_SECONDS * fps)))
 
-        while frames_decoded < max_decode_frames:
-            if time.perf_counter() - started > VIDEO_WALL_CLOCK_TIMEOUT_SECONDS:
-                raise RuntimeError("VIDEO_OCR_TIMEOUT")
-            ok, frame = capture.read()
-            if not ok:
-                break
-            if frame is not None and hasattr(frame, "shape") and len(frame.shape) >= 2:
-                h, w = int(frame.shape[0]), int(frame.shape[1])
-                if h * w > MAX_IMAGE_PIXELS:
-                    raise ValueError("VIDEO_DIMENSIONS_TOO_LARGE")
-            frame_index = frames_decoded
-            frames_decoded += 1
-            if frame_index % sample_every != 0:
-                continue
-            frames_sampled += 1
-            records, _engine_label = _run_paddle_ocr(_resize_image(frame))
-            valid, _raw_candidates = _plate_candidates(records)
-            if not valid:
-                continue
-            best = max(valid, key=lambda item: _number(item.get("score")) or -1)
-            plate = str(best.get("plate") or "").strip()
-            if not plate:
-                continue
-            score = _number(best.get("score"))
-            time_sec = frame_index / fps
-            item = temporal.setdefault(plate, {"hits": 0, "scores": [], "times": []})
-            item["hits"] += 1
-            if score is not None:
-                item["scores"].append(score)
-            item["times"].append(time_sec)
-            if len(observations) < 24:
-                observations.append({
-                    "timeSec": round(time_sec, 2),
-                    "plate": plate,
-                    "score": score,
-                })
+        if not _OCR_RUN_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
+            raise OcrBusyError("OCR_BUSY")
+        try:
+            while frames_decoded < max_decode_frames:
+                if time.perf_counter() - started > VIDEO_WALL_CLOCK_TIMEOUT_SECONDS:
+                    raise RuntimeError("VIDEO_OCR_TIMEOUT")
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                if frame is not None and hasattr(frame, "shape") and len(frame.shape) >= 2:
+                    h, w = int(frame.shape[0]), int(frame.shape[1])
+                    if h * w > MAX_IMAGE_PIXELS:
+                        raise ValueError("VIDEO_DIMENSIONS_TOO_LARGE")
+                frame_index = frames_decoded
+                frames_decoded += 1
+                if frame_index % sample_every != 0:
+                    continue
+                frames_sampled += 1
+                records, _engine_label = _run_paddle_ocr(_resize_image(frame), locked=True)
+                valid, _raw_candidates = _plate_candidates(records)
+                if not valid:
+                    continue
+                best = max(valid, key=lambda item: _number(item.get("score")) or -1)
+                plate = str(best.get("plate") or "").strip()
+                if not plate:
+                    continue
+                score = _number(best.get("score"))
+                time_sec = frame_index / fps
+                item = temporal.setdefault(plate, {"hits": 0, "scores": [], "times": []})
+                item["hits"] += 1
+                if score is not None:
+                    item["scores"].append(score)
+                item["times"].append(time_sec)
+                if len(observations) < 24:
+                    observations.append({
+                        "timeSec": round(time_sec, 2),
+                        "plate": plate,
+                        "score": score,
+                    })
+        finally:
+            _OCR_RUN_LOCK.release()
 
         candidates = _video_candidate_summary(temporal)
         stable = [candidate for candidate in candidates if candidate["hits"] >= VIDEO_MIN_STABLE_HITS]
@@ -832,7 +876,7 @@ def _base_upload_result(metadata: dict[str, Any]) -> dict[str, Any]:
 
 def analyze(payload: dict[str, Any]) -> dict[str, Any]:
     started = time.perf_counter()
-    mode = str(payload.get("mode") or "sample")
+    mode = str(payload.get("mode") or "").strip().lower()
     if mode == "sample":
         return {
             "ok": True,
@@ -993,11 +1037,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(415, {"ok": False, "error": "UNSUPPORTED_MEDIA_TYPE"})
             return
         try:
-            raw_length = (self.headers.get("Content-Length") or "0").strip()
-            if not raw_length.isdigit():
-                raise ValueError("INVALID_REQUEST")
+            raw_length = (self.headers.get("Content-Length") or "").strip()
+            if not raw_length or not raw_length.isdigit():
+                raise ValueError("INVALID_CONTENT_LENGTH")
             length = int(raw_length)
-            if length <= 0 or length > MAX_REQUEST_BYTES:
+            if length <= 0:
+                raise ValueError("INVALID_CONTENT_LENGTH")
+            if length > MAX_REQUEST_BYTES:
                 raise ValueError("REQUEST_TOO_LARGE")
             raw_body = self.rfile.read(length)
             try:
@@ -1022,14 +1068,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    host = os.environ.get("CV_HOST", "127.0.0.1")
-    port = int(os.environ.get("CV_PORT", "5099"))
-    # PaddleOCR's CPU engine is kept strictly single-flight.  A threaded HTTP
-    # server can still let multiple request threads touch Paddle's lazy
-    # runtime state around the semaphore, which has caused intermittent C++
-    # ``std::...`` failures on small VPS instances.  Serialise the whole
-    # request lifecycle at the HTTP boundary; OCR_CONCURRENCY remains 1.
-    HTTPServer((host, port), Handler).serve_forever()
+    host = (os.environ.get("CV_HOST") or "").strip() or "127.0.0.1"
+    port = _env_int("CV_PORT", 5099, 1, 65535)
+    # Use ThreadingHTTPServer so GET /health stays responsive during slow video
+    # OCR while _OCR_INIT_LOCK and _OCR_RUN_LOCK keep PaddleOCR strictly
+    # single-flight (OCR_CONCURRENCY=1).
+    server = ThreadingHTTPServer((host, port), Handler)
+    server.daemon_threads = True
+    server.serve_forever()
 
 
 if __name__ == "__main__":

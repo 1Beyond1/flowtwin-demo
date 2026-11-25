@@ -319,3 +319,64 @@ test("Feishu sync reuses the top-level station snapshot when strategy omits dupl
   assert.equal(fields["承接站"], "承接站");
   assert.ok(Buffer.byteLength(fields["策略输入"], "utf8") <= 1000);
 });
+
+test("Feishu sync persists full error payload for status polling and keys tenant tokens by baseUrl+appId+appSecret", async () => {
+  clearFeishuCaches();
+  const baseConfig = {
+    feishuBaseUrl: "https://open.feishu.cn",
+    feishuAppId: "shared-app-id",
+    feishuAppSecret: "secret-v1",
+    feishuAppToken: "base-token",
+    feishuSnapshotTableId: "tbl-snap",
+    feishuStrategyTableId: "tbl-strat"
+  };
+
+  // 1) Failed sync persists complete error payload into job.public
+  const failed = await startFeishuSync({
+    config: baseConfig,
+    payload: { runId: "run-fail-1", stations: [{ id: "s1", name: "站1" }] },
+    fetchImpl: async () => response({ code: 999, msg: "rate limited" }, 429)
+  });
+  assert.equal(failed.status, "error");
+  assert.equal(failed.code, "FEISHU_AUTH_FAILED");
+  assert.equal(failed.retryable, true);
+
+  const polled = await getFeishuSyncStatus({ syncId: failed.syncId, config: baseConfig });
+  assert.equal(polled.status, "error");
+  assert.equal(polled.syncId, failed.syncId);
+  assert.equal(polled.runId, failed.runId);
+  assert.equal(polled.code, "FEISHU_AUTH_FAILED");
+  assert.equal(polled.retryable, true);
+  assert.equal(polled.message, failed.message);
+
+  // 2) Token cache isolates credentials by (baseUrl, appId, appSecret)
+  const authRequests = [];
+  const tokenFetch = async (url, options = {}) => {
+    const href = String(url);
+    if (href.includes("tenant_access_token")) {
+      const body = JSON.parse(options.body);
+      authRequests.push({ href, secret: body.app_secret });
+      return response({ code: 0, tenant_access_token: `tok-${authRequests.length}`, expire: 7200 });
+    }
+    if (href.includes("batch_create")) return response({ code: 0, data: { records: [{ record_id: "snap-1" }] } });
+    return response({ code: 0, data: { record: { record_id: "strat-1" } } });
+  };
+  await startFeishuSync({ config: baseConfig, payload: { runId: "run-tok-1", stations: [{ id: "s1" }] }, fetchImpl: tokenFetch });
+  // Same config reuses cached token
+  await startFeishuSync({ config: baseConfig, payload: { runId: "run-tok-2", stations: [{ id: "s1" }] }, fetchImpl: tokenFetch });
+  assert.equal(authRequests.length, 1);
+  // Rotated appSecret MUST fetch a fresh token even with the same appId
+  await startFeishuSync({
+    config: { ...baseConfig, feishuAppSecret: "secret-v2" },
+    payload: { runId: "run-tok-3", stations: [{ id: "s1" }] },
+    fetchImpl: tokenFetch
+  });
+  assert.equal(authRequests.length, 2);
+  // Different baseUrl MUST fetch a fresh token even with the same appId+appSecret
+  await startFeishuSync({
+    config: { ...baseConfig, feishuBaseUrl: "https://open.larksuite.com" },
+    payload: { runId: "run-tok-4", stations: [{ id: "s1" }] },
+    fetchImpl: tokenFetch
+  });
+  assert.equal(authRequests.length, 3);
+});

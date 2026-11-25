@@ -31,7 +31,7 @@ test("plan parser uses strict AI JSON and returns locations without exposing sec
       calls.push({ url, options });
       if (url.includes("chat/completions")) {
         return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
-          origin: "能链北京总部", destination: "大兴机场", arrivalDeadline: null,
+          origin: "北京国贸 CBD", destination: "大兴机场", arrivalDeadline: null,
           minArrivalSoc: 60, energyType: "electric", priority: "on_time", maxDetourKm: 5, services: ["餐饮"],
           clarificationNeeded: false, assistantReply: "已识别"
         }) } }] }), { status: 200 });
@@ -42,7 +42,7 @@ test("plan parser uses strict AI JSON and returns locations without exposing sec
   assert.equal(result.aiUsed, true);
   assert.equal(result.destination, "大兴机场");
   assert.equal(result.minArrivalSoc, 60);
-  assert.deepEqual(result.locations.origin.coordinate, [116.491, 39.951]);
+  assert.deepEqual(result.locations.origin.coordinate, [116.461, 39.909]);
   assert.deepEqual(result.locations.destination.coordinate, [116.41, 39.509]);
   assert.equal(calls[0].options.headers.Authorization, "Bearer test-secret");
   assert.equal(calls[0].options.body.includes("departureTime"), false);
@@ -100,7 +100,7 @@ test("plan parser leaves current time and energy to the client controls", async 
 test("simple explicit new trips stay local and do not call AI", async () => {
   const calls = [];
   const result = await parseTripIntent({
-    message: "从能链北京总部去南京，优先准时",
+    message: "从北京国贸 CBD去南京，优先准时",
     config: {
       aiBaseUrl: "https://primary.example/v1",
       aiApiKey: "primary-secret",
@@ -281,7 +281,7 @@ test("AI failure falls back without exposing provider details in analysis", asyn
 
 test("confidence analysis is deterministic for identical local evidence", async () => {
   const input = {
-    message: "从能链北京总部去南京，最晚19:30前到，到达至少保留40%，优先准时",
+    message: "从北京国贸 CBD去南京，最晚19:30前到，到达至少保留40%，优先准时",
     config: {},
     fetchImpl: async () => { throw new Error("offline"); }
   };
@@ -304,7 +304,7 @@ test("plan parser keeps parsing the destination arrival reserve", async () => {
 
 test("plan parser leaves deadline and arrival reserve unset when the user did not request them", async () => {
   const result = await parseTripIntent({
-    message: "从能链北京总部去北京南站，尽量省钱",
+    message: "从北京国贸 CBD去北京南站，尽量省钱",
     context: { arrivalDeadline: "19:30", minArrivalSoc: 40 },
     config: {},
     fetchImpl: async () => { throw new Error("offline"); }
@@ -368,13 +368,13 @@ test("plan parser treats an explicit new destination as a new trip", async () =>
 
 test("an explicit new destination wins over a stale airport completion", async () => {
   const result = await parseTripIntent({
-    message: "从能链北京总部前往燕郊站，到达至少保留30%",
+    message: "从北京国贸 CBD前往燕郊站，到达至少保留30%",
     context: { destination: "北京大兴国际机场" },
     config: { aiBaseUrl: "https://example.com/v1", aiApiKey: "test-secret", aiModel: "test-model" },
     fetchImpl: async (url) => {
       if (url.includes("chat/completions")) {
         return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
-          origin: "能链北京总部", destination: "北京大兴国际机场", arrivalDeadline: null,
+          origin: "北京国贸 CBD", destination: "北京大兴国际机场", arrivalDeadline: null,
           minArrivalSoc: 20, energyType: "electric", priority: "on_time", maxDetourKm: null, services: [], clarificationNeeded: false
         }) } }] }), { status: 200 });
       }
@@ -389,7 +389,7 @@ test("an explicit new destination wins over a stale airport completion", async (
 
 test("national geocoding accepts a destination outside Beijing", async () => {
   const result = await parseTripIntent({
-    message: "从能链北京总部前往燕郊站",
+    message: "从北京国贸 CBD前往燕郊站",
     config: { webServiceKey: "geo-key" },
     fetchImpl: async () => new Response(JSON.stringify({
       status: "1",
@@ -403,7 +403,7 @@ test("national geocoding accepts a destination outside Beijing", async () => {
 
 test("geographic ambiguity is surfaced as a confirmation factor", async () => {
   const result = await parseTripIntent({
-    message: "从能链北京总部前往测试地点",
+    message: "从北京国贸 CBD前往测试地点",
     config: { webServiceKey: "geo-key" },
     fetchImpl: async (url) => {
       const href = String(url);
@@ -426,7 +426,7 @@ test("geographic ambiguity is surfaced as a confirmation factor", async () => {
 test("ambiguous 东方明珠 is canonicalized to the Shanghai landmark before geocoding", async () => {
   const requestedUrls = [];
   const result = await parseTripIntent({
-    message: "从能链北京总部前往东方明珠，最晚23:00前到",
+    message: "从北京国贸 CBD前往东方明珠，最晚23:00前到",
     config: { webServiceKey: "geo-key" },
     fetchImpl: async (url) => {
       requestedUrls.push(String(url));
@@ -445,7 +445,7 @@ test("ambiguous 东方明珠 is canonicalized to the Shanghai landmark before ge
 
 test("the stock 东方明珠 prompt resolves an exact landmark instead of opening a redundant picker", async () => {
   const result = await parseTripIntent({
-    message: "从能链北京总部前往上海东方明珠广播电视塔，优先准时",
+    message: "从北京国贸 CBD前往上海东方明珠广播电视塔，优先准时",
     config: { webServiceKey: "geo-key" },
     fetchImpl: async (url) => {
       if (String(url).includes("place/text")) {
@@ -473,7 +473,7 @@ test("the stock 东方明珠 prompt resolves an exact landmark instead of openin
 test("华山 is canonicalized to 西岳华山风景区 (not the same-named Jinan park) and prefers scenic POI", async () => {
   const requestedUrls = [];
   const result = await parseTripIntent({
-    message: "从能链北京总部前往华山，优先准时",
+    message: "从北京国贸 CBD前往华山，优先准时",
     config: { webServiceKey: "geo-key" },
     fetchImpl: async (url) => {
       const href = String(url);
@@ -513,7 +513,7 @@ test("华山 is canonicalized to 西岳华山风景区 (not the same-named Jinan
 
 test("a bare city query resolves to the city, not a same-prefix station", async () => {
   const result = await parseTripIntent({
-    message: "从能链北京总部去天津",
+    message: "从北京国贸 CBD去天津",
     config: { webServiceKey: "geo-key" },
     fetchImpl: async (url) => {
       const href = String(url);
@@ -601,11 +601,11 @@ test("place scoring prefers a university campus over a same-name metro station",
 
 test("plan response exposes parsed and destinationLocation contract", () => {
   const response = formatPlanResponse({
-    origin: "能链北京总部",
+    origin: "北京国贸 CBD",
     destination: "大兴机场",
     aiUsed: false,
     locations: {
-      origin: { coordinate: [116.491, 39.951], source: "默认", city: "北京市" },
+      origin: { coordinate: [116.461, 39.909], source: "默认", city: "北京市" },
       destination: { coordinate: [116.41, 39.509], source: "高德", name: "北京大兴国际机场", city: "北京市", district: "大兴区" }
     }
   });
@@ -613,7 +613,7 @@ test("plan response exposes parsed and destinationLocation contract", () => {
   assert.deepEqual(response.destinationLocation, [116.41, 39.509]);
   assert.equal(response.locationSources.destination, "高德");
   assert.deepEqual(response.locationMeta, {
-    origin: { name: "能链北京总部", city: "北京市", district: null },
+    origin: { name: "北京国贸 CBD", city: "北京市", district: null },
     destination: { name: "北京大兴国际机场", city: "北京市", district: "大兴区" }
   });
   assert.deepEqual(response.destinationCandidates, []);
@@ -621,7 +621,7 @@ test("plan response exposes parsed and destinationLocation contract", () => {
 
 test("formatPlanResponse includes destination candidates when resolvePlace is ambiguous", () => {
   const response = formatPlanResponse({
-    origin: "能链北京总部",
+    origin: "北京国贸 CBD",
     destination: "测试地点",
     aiUsed: false,
     locations: {
@@ -659,8 +659,8 @@ test("STT base URL validation matches AI base URL safety and public runtime neve
 
 test("cleanTranscriptText strips SenseVoice emotion and language tags", () => {
   assert.equal(
-    cleanTranscriptText("<|zh|><|NEUTRAL|><|Speech|>从能链北京总部前往华山，优先准时"),
-    "从能链北京总部前往华山，优先准时"
+    cleanTranscriptText("<|zh|><|NEUTRAL|><|Speech|>从北京国贸 CBD前往华山，优先准时"),
+    "从北京国贸 CBD前往华山，优先准时"
   );
   assert.equal(cleanTranscriptText("去上海东方明珠"), "去上海东方明珠");
   assert.equal(cleanTranscriptText("我想去。南京大学。"), "我想去 南京大学。");
@@ -693,7 +693,7 @@ test("polishTranscriptText uses AI when tags remain noisy and fails open without
 test("explicit destination coordinate from picker skips re-geocoding", async () => {
   let fetchCount = 0;
   const result = await parseTripIntent({
-    message: "从能链北京总部前往华山",
+    message: "从北京国贸 CBD前往华山",
     context: {
       explicitDestination: "华山风景区",
       destinationLocation: [110.09, 34.48],

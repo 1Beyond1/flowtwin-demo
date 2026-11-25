@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadConfig, parseDotEnv, stripJsComments } from "../lib/config.mjs";
+import { loadConfig, normalizeAiBaseUrl, parseDotEnv, stripJsComments } from "../lib/config.mjs";
 
 async function withTempRoot(run) {
   const dir = await mkdtemp(join(tmpdir(), "flowtwin-config-test-"));
@@ -39,7 +39,7 @@ test("loadConfig parses unquoted boolean publicDemo, numeric port, and ignores c
       publicDemo: true,
       port: 4321,
       amapKey: "real-js-key",
-      aiBaseUrl: "https://ai.example.com/v1", // inline comment
+      aiBaseUrl: "https://ai.flowtwin.dev/v1", // inline comment
       aiApiKey: "real-ai-key",
       aiModel: "demo-model"
     };`, "utf8");
@@ -48,7 +48,7 @@ test("loadConfig parses unquoted boolean publicDemo, numeric port, and ignores c
     assert.equal(loaded.publicDemo, true);
     assert.equal(loaded.port, 4321);
     assert.equal(loaded.amapKey, "real-js-key");
-    assert.equal(loaded.aiBaseUrl, "https://ai.example.com/v1");
+    assert.equal(loaded.aiBaseUrl, "https://ai.flowtwin.dev/v1");
     assert.equal(loaded.aiApiKey, "real-ai-key");
     assert.equal(loaded.aiModel, "demo-model");
   });
@@ -61,7 +61,7 @@ test("loadConfig loads optional .env while keeping process env higher priority t
       "PORT=4400",
       "FLOWTWIN_PUBLIC_DEMO=1",
       "AMAP_JS_KEY=from-dotenv",
-      'AI_BASE_URL="https://dotenv.example.com/v1"',
+      'AI_BASE_URL="https://dotenv.flowtwin.dev/v1"',
       "AI_MODEL=dotenv-model # trailing comment",
       "export FLOWTWIN_TRUST_PROXY=cloudflare"
     ].join("\n"), "utf8");
@@ -77,7 +77,7 @@ test("loadConfig loads optional .env while keeping process env higher priority t
     assert.equal(fromDotEnv.port, 4400);
     assert.equal(fromDotEnv.publicDemo, true);
     assert.equal(fromDotEnv.amapKey, "from-dotenv");
-    assert.equal(fromDotEnv.aiBaseUrl, "https://dotenv.example.com/v1");
+    assert.equal(fromDotEnv.aiBaseUrl, "https://dotenv.flowtwin.dev/v1");
     assert.equal(fromDotEnv.aiModel, "dotenv-model");
     assert.equal(fromDotEnv.aiApiKey, "local-js-secret");
     assert.equal(fromDotEnv.trustProxy, "cloudflare");
@@ -119,4 +119,19 @@ test("parseDotEnv ignores prototype pollution keys, strips UTF-8 BOM, and skips 
     assert.equal(loaded.port, 4499);
     assert.equal(loaded.amapKey, "bom-key");
   });
+});
+
+test("normalizeAiBaseUrl blocks cloud instance metadata hostnames against SSRF", () => {
+  for (const blocked of [
+    "http://metadata.google.internal/computeMetadata/v1/",
+    "http://metadata/v1",
+    "http://instance-data/latest",
+    "http://metadata.goog/computeMetadata/v1/",
+    "http://foo.metadata.bar/v1",
+    "https://metadata.google.internal/computeMetadata/v1/"
+  ]) {
+    assert.equal(normalizeAiBaseUrl(blocked), "", `must block ${blocked}`);
+  }
+  assert.equal(normalizeAiBaseUrl("http://cv-service:5099"), "http://cv-service:5099");
+  assert.equal(normalizeAiBaseUrl("http://127.0.0.1:5099"), "http://127.0.0.1:5099");
 });

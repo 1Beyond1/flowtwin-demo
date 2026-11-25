@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSyntheticVisionResult, buildUploadFallback, buildVideoFallback, DEFAULT_SYNTHETIC_SCENE_IMAGE, VISION_MAX_IMAGE_BYTES, VISION_MAX_VIDEO_BYTES, localVisionFallback, validateVisionResult, visionHealthSummary } from "../lib/cv.mjs";
+import { buildSampleFallback, buildSyntheticVisionResult, buildUploadFallback, buildVideoFallback, DEFAULT_SYNTHETIC_SCENE_IMAGE, VISION_MAX_IMAGE_BYTES, VISION_MAX_VIDEO_BYTES, localVisionFallback, validateVisionResult, visionHealthSummary } from "../lib/cv.mjs";
 
 test("synthetic vision result is deterministic and exposes the business chain", () => {
   const first = buildSyntheticVisionResult({ seed: "test-seed", observedAt: "2026-08-10T00:00:00.000Z" });
@@ -76,10 +76,16 @@ test("vision input never fabricates a sample result without media", () => {
   const missing = localVisionFallback({ mode: "sample", seed: "test-seed" });
   assert.equal(missing.ok, false);
   assert.equal(missing.error, "SAMPLE_IMAGE_REQUIRED");
-  const uploadFallback = localVisionFallback({ mode: "sample", imageData: "data:image/png;base64,iVBORw0KGgo=" });
-  assert.equal(uploadFallback.ok, true);
-  assert.equal(uploadFallback.inferenceStatus, "not-run");
-  assert.equal(uploadFallback.arrivalRecognition.plate, null);
+  const sampleFallback = localVisionFallback({ mode: "sample", imageData: "data:image/png;base64,iVBORw0KGgo=" });
+  assert.equal(sampleFallback.ok, true);
+  assert.equal(sampleFallback.mode, "sample-fallback");
+  assert.equal(sampleFallback.inferenceStatus, "not-run");
+  assert.equal(sampleFallback.source, "内置样例 · 未启用视觉推理模型");
+  assert.equal(sampleFallback.input.kind, "built-in-sample");
+  assert.equal(sampleFallback.note, "内置样板图未启用本地视觉推理服务，仅展示安全降级结构");
+  assert.equal(sampleFallback.arrivalRecognition.plate, null);
+  assert.equal(validateVisionResult(sampleFallback), true);
+  assert.equal(buildSampleFallback({ imageData: "data:image/png;base64,iVBORw0KGgo=" }).mode, "sample-fallback");
 });
 
 test("vision upstream validation rejects a partial success payload", () => {

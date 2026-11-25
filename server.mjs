@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "./lib/config.mjs";
+import { DEFAULT_ORIGIN, loadConfig } from "./lib/config.mjs";
 import { parseTripIntent, formatPlanResponse, planLimits } from "./lib/plan.mjs";
 import { forecastStations, MAX_FORECAST_STATIONS } from "./lib/forecast.mjs";
 import { simulateOperator } from "./lib/operator.mjs";
@@ -32,6 +32,7 @@ let versionInfo = null;
 let versionChecker = null;
 let enterprisePrior = null;
 const executionCache = new Map();
+const executionInFlight = new Map();
 const EXECUTION_CACHE_TTL_MS = 15 * 60 * 1000;
 const EXECUTION_CACHE_MAX = 1_000;
 let cvInFlight = 0;
@@ -44,7 +45,7 @@ let rateLimiter = createRateLimiter({
 
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://webapi.amap.com https://*.amap.com https://*.autonavi.com",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://webapi.amap.com https://*.amap.com https://*.autonavi.com",
   "style-src 'self' 'unsafe-inline' https://*.amap.com",
   "img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com https://*.is.autonavi.com",
   "media-src 'self' data: blob:",
@@ -335,11 +336,13 @@ async function routeApi(requestUrl, response, runtime) {
   const strategies = { fastest: "38", reliable: "33", cheapest: "36" };
   if (!origin || !destination || waypoints === null || !strategies[key]) return json(response, 400, { error: "INVALID_ROUTE_PARAMS" });
 
+  const rawCarType = String(requestUrl.searchParams.get("cartype") ?? "").trim();
+  const cartype = rawCarType === "0" || rawCarType === "1" || rawCarType === "2" ? rawCarType : "1";
   const params = new URLSearchParams({
     origin,
     destination,
     strategy: strategies[key],
-    cartype: requestUrl.searchParams.get("cartype") === "0" ? "0" : "1",
+    cartype,
     ferry: "1",
     show_fields: "cost,navi,polyline"
   });
@@ -551,13 +554,26 @@ async function poiApi(requestUrl, response, runtime) {
 async function runtimeConfig(response, runtime) {
   const activeConfig = runtime.config || config || {};
   const { amapKey, securityJsCode, sttApiKey } = activeConfig;
+  const originConfig = activeConfig.defaultOrigin || DEFAULT_ORIGIN;
+  const originCoord = Array.isArray(originConfig?.coord) && originConfig.coord.length === 2
+    ? originConfig.coord
+    : Array.isArray(originConfig?.coordinate) && originConfig.coordinate.length === 2
+      ? originConfig.coordinate
+      : DEFAULT_ORIGIN.coordinate;
+  const defaultOrigin = {
+    name: typeof originConfig?.name === "string" && originConfig.name.trim()
+      ? originConfig.name.trim()
+      : DEFAULT_ORIGIN.name,
+    coord: [...originCoord]
+  };
   // Only browser-safe map settings leave the server. STT keys stay server-side;
   // expose a boolean so the mic button can show a clear "not configured" state.
   const body = `window.FLOWTWIN_CONFIG=${JSON.stringify({
     amapKey,
     securityJsCode,
     mapMode: amapKey ? "live" : "fallback",
-    sttEnabled: Boolean(sttApiKey)
+    sttEnabled: Boolean(sttApiKey),
+    defaultOrigin
   })};`;
   response.writeHead(200, {
     "Content-Type": "text/javascript; charset=utf-8",
@@ -578,27 +594,61 @@ async function readRawBody(request, maxBytes = 8_000_000) {
   return Buffer.concat(chunks);
 }
 
-function extractMultipartFile(buffer, contentType) {
+export function extractMultipartFile(buffer, contentType) {
+  if (!buffer) return null;
+  const raw = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  if (!raw.length) return null;
   const boundaryMatch = String(contentType || "").match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   if (!boundaryMatch) return null;
-  const boundary = boundaryMatch[1] || boundaryMatch[2];
-  const parts = buffer.toString("binary").split(`--${boundary}`);
-  for (const part of parts) {
-    if (!/name="(?:file|audio)"/i.test(part) || !/Content-Disposition:/i.test(part)) continue;
-    const headerEnd = part.indexOf("\r\n\r\n");
-    if (headerEnd < 0) continue;
-    const headers = part.slice(0, headerEnd);
-    let body = part.slice(headerEnd + 4);
-    if (body.endsWith("\r\n")) body = body.slice(0, -2);
-    if (body.endsWith("--")) body = body.slice(0, -2);
-    if (body.endsWith("\r\n")) body = body.slice(0, -2);
-    const filename = headers.match(/filename="([^"]*)"/i)?.[1] || "audio.webm";
-    const mime = headers.match(/Content-Type:\s*([^\r\n]+)/i)?.[1]?.trim() || "application/octet-stream";
-    return {
-      filename,
-      mime,
-      data: Buffer.from(body, "binary")
-    };
+  const boundary = (boundaryMatch[1] || boundaryMatch[2] || "").trim();
+  if (!boundary) return null;
+
+  const delimiter = Buffer.from(`--${boundary}`, "utf8");
+  const headerSeparator = Buffer.from("\r\n\r\n");
+  let offset = raw.indexOf(delimiter, 0);
+  while (offset !== -1) {
+    let partStart = offset + delimiter.length;
+    // Closing delimiter `--<boundary>--` ends the multipart stream.
+    if (partStart + 1 < raw.length && raw[partStart] === 0x2d && raw[partStart + 1] === 0x2d) {
+      break;
+    }
+    if (partStart + 1 < raw.length && raw[partStart] === 0x0d && raw[partStart + 1] === 0x0a) {
+      partStart += 2;
+    } else if (partStart < raw.length && raw[partStart] === 0x0a) {
+      partStart += 1;
+    }
+    const nextBoundary = raw.indexOf(delimiter, partStart);
+    if (nextBoundary === -1) break;
+
+    const partSlice = raw.subarray(partStart, nextBoundary);
+    const headerEnd = partSlice.indexOf(headerSeparator);
+    if (headerEnd >= 0) {
+      // Decode ONLY the header slice as UTF-8 so binary payloads are never
+      // scanned for field names and non-ASCII filenames stay intact.
+      const headers = partSlice.subarray(0, headerEnd).toString("utf8");
+      const disposition = headers.match(/^Content-Disposition:\s*([^\r\n]+)/im)?.[1] || "";
+      if (/(?:^|;\s*)name="(?:file|audio)"/i.test(disposition)) {
+        let body = partSlice.subarray(headerEnd + headerSeparator.length);
+        if (body.length >= 2 && body[body.length - 2] === 0x0d && body[body.length - 1] === 0x0a) {
+          body = body.subarray(0, body.length - 2);
+        }
+        let filename = disposition.match(/(?:^|;\s*)filename="([^"]*)"/i)?.[1] || "";
+        if (!filename) {
+          const extMatch = disposition.match(/(?:^|;\s*)filename\*=UTF-8''([^;\r\n]+)/i);
+          if (extMatch?.[1]) {
+            try { filename = decodeURIComponent(extMatch[1].trim()); } catch {}
+          }
+        }
+        filename = filename || "audio.webm";
+        const mime = headers.match(/^Content-Type:\s*([^\r\n]+)/im)?.[1]?.trim() || "application/octet-stream";
+        return {
+          filename,
+          mime,
+          data: body
+        };
+      }
+    }
+    offset = nextBoundary;
   }
   return null;
 }
@@ -766,7 +816,8 @@ function copyForecastScenarioFields(source, target) {
 export function buildLongTripApiInput(body = {}) {
   const source = isObject(body) ? body : {};
   const target = {};
-  if (Array.isArray(source.stations)) target.stations = source.stations.slice(0, 40);
+  const stationCap = source.adaptiveMaxStops === true ? 72 : 40;
+  if (Array.isArray(source.stations)) target.stations = source.stations.slice(0, stationCap);
 
   copyNumber(source, target, "distanceKm", 0, 6000, { clamp: false });
   copyNumber(source, target, "durationMinutes", 0, 7 * 24 * 60);
@@ -815,7 +866,10 @@ async function planApi(request, response, runtime) {
   if (!message || message.length > planLimits.MAX_MESSAGE_LENGTH) return json(response, 400, { error: "MESSAGE_REQUIRED_OR_TOO_LONG", maxLength: planLimits.MAX_MESSAGE_LENGTH });
   const context = body.context && typeof body.context === "object" && !Array.isArray(body.context) ? body.context : {};
   const result = await parseTripIntent({ message, context, config: activeConfig, fetchImpl });
-  return json(response, 200, formatPlanResponse(result));
+  return json(response, 200, {
+    ...formatPlanResponse(result),
+    mapConfigured: hasAmapServiceKey(activeConfig)
+  });
 }
 
 async function forecastApi(request, response, runtime) {
@@ -911,15 +965,12 @@ async function longTripApi(request, response, runtime) {
   const activePlanCache = runtime.longTripPlanCache || longTripPlanCache;
   const body = await readJsonBody(request, 128000);
   if (!Array.isArray(body.stations)) return json(response, 400, { error: "STATIONS_REQUIRED" });
-  const scenario = buildForecastApiScenario(body);
-  const enrichedBody = {
-    ...body,
-    stations: enrichStationsWithEnterprisePrior(activePrior, body.stations, scenario)
-  };
-  const input = buildLongTripApiInput(enrichedBody);
+  const input = buildLongTripApiInput(body);
   if (!Number.isFinite(input.distanceKm)) {
     return json(response, 400, { error: "INVALID_DISTANCE" });
   }
+  const scenario = buildForecastApiScenario(body);
+  input.stations = enrichStationsWithEnterprisePrior(activePrior, input.stations, scenario);
   const cached = await activePlanCache.getOrLoad(input, () => buildLongTripPlans(input));
   return json(response, 200, { ...cached.value, cache: cached.cache });
 }
@@ -1058,10 +1109,11 @@ async function cvAnalyzeApi(request, response, runtime) {
     // path so the local OCR model, rather than a synthetic result generator,
     // decides whether a plate is actually present.
     const requestedMode = String(body?.mode || "").trim().toLowerCase();
-    const upstreamBody = requestedMode === "sample" && body?.imageData
-      ? { ...body, mode: "upload" }
-      : body;
-    if (activeConfig.cvServiceUrl && ["upload", "video"].includes(String(upstreamBody?.mode || "").toLowerCase())) {
+    const normalizedMode = requestedMode === "sample" && body?.imageData
+      ? "upload"
+      : requestedMode;
+    const upstreamBody = { ...body, mode: normalizedMode };
+    if (activeConfig.cvServiceUrl && ["upload", "video"].includes(normalizedMode)) {
       // PaddleOCR may load local weights on the first request. Video sampling
       // also needs more time than a single image, but must remain bounded.
       const maxAttempts = 3;
@@ -1070,7 +1122,7 @@ async function cvAnalyzeApi(request, response, runtime) {
       let lastResult = null;
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), upstreamBody.mode === "video" ? 120000 : 60000);
+        const timeout = setTimeout(() => controller.abort(), normalizedMode === "video" ? 120000 : 60000);
         try {
           const upstream = await fetchImpl(`${activeConfig.cvServiceUrl.replace(/\/$/, "")}/analyze`, {
             method: "POST",
@@ -1105,7 +1157,7 @@ async function cvAnalyzeApi(request, response, runtime) {
         return json(response, lastStatus, lastResult && typeof lastResult === "object" ? lastResult : { error: "CV_REQUEST_REJECTED" });
       }
     }
-    const fallback = localVisionFallback(upstreamBody);
+    const fallback = localVisionFallback({ ...body, mode: requestedMode });
     return json(response, fallback.ok === false ? 400 : 200, fallback);
   } finally {
     cvInFlight = Math.max(0, cvInFlight - 1);
@@ -1130,11 +1182,23 @@ async function executionApi(request, response, runtime) {
   if (key) {
     const cached = executionCache.get(key);
     if (cached) return json(response, 200, { ...cached.result, idempotent: true });
+    const pending = executionInFlight.get(key);
+    if (pending) {
+      const result = await pending;
+      return json(response, 200, result?.mode === "error" ? result : { ...result, idempotent: true });
+    }
   }
-  const result = await executeFeishu({ payload: body, config: activeConfig, fetchImpl });
+  const executionPromise = Promise.resolve().then(() => executeFeishu({ payload: body, config: activeConfig, fetchImpl }));
+  if (key) executionInFlight.set(key, executionPromise);
+  let result;
+  try {
+    result = await executionPromise;
+  } finally {
+    if (key && executionInFlight.get(key) === executionPromise) executionInFlight.delete(key);
+  }
   if (key && result?.mode !== "error") {
     if (executionCache.size >= EXECUTION_CACHE_MAX) executionCache.delete(executionCache.keys().next().value);
-    executionCache.set(key, { result, expiresAt: now + EXECUTION_CACHE_TTL_MS });
+    executionCache.set(key, { result, expiresAt: Date.now() + EXECUTION_CACHE_TTL_MS });
   }
   return json(response, 200, result);
 }
@@ -1195,13 +1259,17 @@ export function isBlockedStaticRequest(requestedPath) {
     || !(publicRootFiles.has(requested) || requested.startsWith("assets/"));
 }
 
-async function staticFile(pathname, response) {
+async function staticFile(request, pathname, response) {
+  const method = String(request?.method || "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    return methodNotAllowed(response, ["GET", "HEAD"]);
+  }
   let requested;
   try {
     requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
   } catch {
     response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS });
-    response.end("Bad Request");
+    response.end(method === "HEAD" ? undefined : "Bad Request");
     return;
   }
   if (isBlockedStaticRequest(requested)) {
@@ -1216,21 +1284,21 @@ async function staticFile(pathname, response) {
   try {
     const fileStat = await stat(target);
     if (!fileStat.isFile()) throw new Error("not a file");
-    const content = await readFile(target);
+    const content = method === "HEAD" ? null : await readFile(target);
     const extension = extname(target).toLowerCase();
     response.writeHead(200, {
       "Content-Type": mimeTypes[extension] || "application/octet-stream",
-      // Demo 发布以正确版本优先：入口和脚本禁止复用旧响应，避免服务器已经
-      // 切换 release、评委浏览器却仍执行上一版 app.js。
+      "Content-Length": String(fileStat.size),
+      // 入口和脚本禁止复用旧响应，避免服务端已经切换版本、客户端浏览器却仍执行上一版 app.js。
       "Cache-Control": extension === ".html" || extension === ".js"
         ? "no-store, max-age=0"
         : "public, max-age=300",
       ...SECURITY_HEADERS
     });
-    response.end(content);
+    response.end(method === "HEAD" ? undefined : content);
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...SECURITY_HEADERS });
-    response.end("Not found");
+    response.end(method === "HEAD" ? undefined : "Not found");
   }
 }
 
@@ -1247,7 +1315,14 @@ export function createRequestHandler(overrides = {}) {
     };
     try {
       const requestUrl = parseRequestUrl(request);
-      if (request.method === "OPTIONS") return json(response, 204, {});
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, {
+          "Cache-Control": "no-store",
+          ...SECURITY_HEADERS
+        });
+        response.end();
+        return;
+      }
       if (!applyRateLimit(request, response, runtime.rateLimiter, requestUrl)) return;
       const versionRoute = await resolveVersionRoute({
         method: request.method,
@@ -1338,10 +1413,13 @@ export function createRequestHandler(overrides = {}) {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
         return await runtimeConfig(response, runtime);
       }
-      return await staticFile(requestUrl.pathname, response);
+      return await staticFile(request, requestUrl.pathname, response);
     } catch (error) {
       const status = Number(error?.statusCode) || 500;
-      if (status >= 500) console.error("FlowTwin request failed without logging request data or credentials");
+      if (status >= 500) {
+        const tag = String(error?.code || error?.name || "ERROR").replace(/[^\w.-]/g, "").slice(0, 48);
+        console.error(`FlowTwin request failed (${tag}) without logging request data or credentials`);
+      }
       const code = status === 413
         ? "REQUEST_TOO_LARGE"
         : status === 400
@@ -1365,16 +1443,34 @@ async function startServer() {
   // repeated-demo quota use without replacing live route verification.
   config.amapCache = createAmapFileCache({ root });
   versionInfo = await loadVersionInfo({ root });
-  versionChecker = createVersionChecker({ localVersion: versionInfo });
+  versionChecker = createVersionChecker({ localVersion: versionInfo, repo: versionInfo.repo });
+  const host = config.host || "127.0.0.1";
   const port = config.port;
-  createServer(requestHandler).listen(port, "127.0.0.1", () => {
-    console.log(`FlowTwin running at http://127.0.0.1:${port}`);
+  const server = createServer(requestHandler);
+  server.requestTimeout = 130_000;
+  server.headersTimeout = 30_000;
+  server.keepAliveTimeout = 65_000;
+  server.listen(port, host, () => {
+    console.log(`FlowTwin running at http://${host}:${port}`);
   });
+  let shuttingDown = false;
+  const shutdown = (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`FlowTwin received ${signal}, shutting down`);
+    server.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 5_000).unref();
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  startServer().catch(() => {
-    console.error("FlowTwin failed to start");
+  startServer().catch((error) => {
+    const tag = String(error?.code || error?.name || "UNKNOWN_ERROR").replace(/[^\w.-]/g, "").slice(0, 48);
+    console.error(`FlowTwin failed to start (${tag})`);
     process.exitCode = 1;
   });
 }

@@ -16,15 +16,15 @@ test("static serving keeps internal code, runtime data, and configuration privat
     "docs/算法与数据边界.md",
     "node_modules/pkg/index.js",
     "output/playwright/state.json",
-    "交接记录_增量.md",
-    "本地启动说明.md",
-    "server-4187-local.log",
+    "notes.md",
+    "deploy-notes.md",
+    "server.log",
     "README.md",
     "cv-service\\app.py",
     "../config.local.js"
   ]) assert.equal(isBlockedStaticRequest(path), true, path);
 
-  for (const path of ["index.html", "app.js", "service-intent.js", "assets/vision/default-camera-scene.png", "assets/simulation/ev-front-day.png"]) {
+  for (const path of ["index.html", "app.js", "service-intent.js", "assets/vision/default-camera-scene.jpg", "assets/simulation/ev-front-day.jpg"]) {
     assert.equal(isBlockedStaticRequest(path), false, path);
   }
 });

@@ -4,7 +4,7 @@ import { formatPlanResponse, INTENT_ACTION_TYPES, parseTripIntent } from "../lib
 
 const currentTrip = {
   hasPlannedRoute: true,
-  currentOrigin: "能链北京总部",
+  currentOrigin: "北京国贸 CBD",
   currentDestination: "上海东方明珠广播电视塔",
   currentServices: ["餐饮"]
 };
