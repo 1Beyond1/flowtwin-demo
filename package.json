@@ -1,12 +1,26 @@
 {
   "name": "nengliu-flowtwin",
   "version": "1.1.1",
+  "description": "FlowTwin: EV & fuel trip energy planning, queue forecasting, operator diversion simulation, and optional local OCR demo",
   "license": "MIT",
   "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/1Beyond1/flowtwin-demo.git"
+  },
+  "keywords": [
+    "ev-routing",
+    "energy-planning",
+    "queue-forecast",
+    "pareto-optimization",
+    "simulation",
+    "amap",
+    "paddleocr"
+  ],
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check app.js && node --check service-intent.js && node --check server.mjs && node --check lib/config.mjs && node --check lib/contracts.mjs && node --check lib/number.mjs && node --check lib/amap.mjs && node --check lib/amap-cache.mjs && node --check lib/plan.mjs && node --check lib/energy.mjs && node --check lib/decision.mjs && node --check lib/enterprise-prior.mjs && node --check lib/longtrip.mjs && node --check lib/longtrip-cache.mjs && node --check lib/forecast.mjs && node --check lib/operator.mjs && node --check lib/validate.mjs && node --check lib/feishu.mjs && node --check lib/feishu-bitable.mjs && node --check lib/stt.mjs && node --check lib/version.mjs && node --check lib/rate-limit.mjs && node --check lib/cv.mjs",
+    "check": "node --input-type=module -e \"import { readdirSync } from 'node:fs'; import { execFileSync } from 'node:child_process'; const files = ['app.js', 'service-intent.js', 'server.mjs', ...readdirSync('lib').filter((f) => f.endsWith('.mjs')).map((f) => 'lib/' + f), ...readdirSync('test').filter((f) => f.endsWith('.test.mjs')).map((f) => 'test/' + f)]; for (const file of files) execFileSync(process.execPath, ['--check', file], { stdio: 'inherit' });\"",
     "test": "node --test"
   },
   "engines": {

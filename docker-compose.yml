@@ -1,0 +1,37 @@
+services:
+  flowtwin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${PORT:-4182}:4182"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "4182"
+      # 配合 `--profile cv` 启动本地视觉服务时，请通过环境变量或 .env 传入：
+      #   CV_SERVICE_URL=http://cv-service:5099 docker compose --profile cv up --build
+      CV_SERVICE_URL: "${CV_SERVICE_URL:-}"
+    volumes:
+      - flowtwin-runtime:/app/runtime
+    restart: unless-stopped
+
+  cv-service:
+    profiles: ["cv"]
+    build:
+      context: ./cv-service
+      dockerfile: Dockerfile
+    environment:
+      CV_HOST: "0.0.0.0"
+      CV_PORT: "5099"
+      PADDLEOCR_LOCAL_ONLY: "${PADDLEOCR_LOCAL_ONLY:-1}"
+      PADDLEOCR_TEXT_DET_MODEL_DIR: "${PADDLEOCR_TEXT_DET_MODEL_DIR:-/app/models/det}"
+      PADDLEOCR_TEXT_REC_MODEL_DIR: "${PADDLEOCR_TEXT_REC_MODEL_DIR:-/app/models/rec}"
+    volumes:
+      - ./cv-service/models:/app/models:ro
+    restart: unless-stopped
+
+volumes:
+  flowtwin-runtime:
