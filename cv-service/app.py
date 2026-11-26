@@ -14,8 +14,10 @@ are not inferred from an OCR result and remain explicitly unexecuted.
 
 from __future__ import annotations
 
+import atexit
 import base64
 import binascii
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import math
@@ -147,6 +149,45 @@ _OCR_ENGINE_LABEL = ""
 _OCR_INIT_ERROR = ""
 _OCR_INIT_LOCK = threading.Lock()
 _OCR_RUN_LOCK = threading.BoundedSemaphore(OCR_CONCURRENCY)
+_OCR_EXECUTOR_LOCK = threading.Lock()
+_OCR_EXECUTOR: ThreadPoolExecutor | None = None
+_OCR_WORKER_THREAD_ID: int | None = None
+
+
+def _get_ocr_executor() -> ThreadPoolExecutor:
+    global _OCR_EXECUTOR
+    with _OCR_EXECUTOR_LOCK:
+        if _OCR_EXECUTOR is None:
+            # PaddlePaddle / PaddleX CPU predictors retain thread-local state;
+            # pin both initialization and inference to one persistent worker thread
+            # while ThreadingHTTPServer handles concurrent /health requests.
+            _OCR_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flowtwin-ocr")
+        return _OCR_EXECUTOR
+
+
+def _shutdown_ocr_executor() -> None:
+    global _OCR_EXECUTOR, _OCR_WORKER_THREAD_ID
+    with _OCR_EXECUTOR_LOCK:
+        executor = _OCR_EXECUTOR
+        _OCR_EXECUTOR = None
+        _OCR_WORKER_THREAD_ID = None
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=False)
+
+
+atexit.register(_shutdown_ocr_executor)
+
+
+def _run_on_ocr_thread(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    if _OCR_WORKER_THREAD_ID is not None and threading.get_ident() == _OCR_WORKER_THREAD_ID:
+        return fn(*args, **kwargs)
+
+    def _wrapped() -> Any:
+        global _OCR_WORKER_THREAD_ID
+        _OCR_WORKER_THREAD_ID = threading.get_ident()
+        return fn(*args, **kwargs)
+
+    return _get_ocr_executor().submit(_wrapped).result()
 
 
 def _safe_client_error(exc: Exception) -> str:
@@ -521,7 +562,7 @@ def _get_ocr_engine() -> tuple[Any, str]:
         if _OCR_ENGINE is not None:
             return _OCR_ENGINE, _OCR_ENGINE_LABEL
         try:
-            engine, label = _build_ocr_engine()
+            engine, label = _run_on_ocr_thread(_build_ocr_engine)
             _OCR_ENGINE_LABEL = label
             _OCR_INIT_ERROR = ""
             _OCR_ENGINE = engine
@@ -660,20 +701,24 @@ def _plate_candidates(records: Iterable[dict[str, Any]]) -> tuple[list[dict[str,
     return list(unique.values()), raw[:8]
 
 
+def _invoke_ocr_engine(engine: Any, image: Any) -> list[dict[str, Any]]:
+    if hasattr(engine, "predict"):
+        result = engine.predict(image)
+    elif hasattr(engine, "ocr"):
+        result = engine.ocr(image, cls=True)
+    else:
+        raise RuntimeError("PADDLEOCR_INFERENCE_METHOD_UNAVAILABLE")
+    if not isinstance(result, (list, tuple)):
+        result = list(result) if result is not None else []
+    return _ocr_records(result)
+
+
 def _run_paddle_ocr(image: Any, *, locked: bool = False) -> tuple[list[dict[str, Any]], str]:
-    engine, label = _get_ocr_engine()
     if not locked and not _OCR_RUN_LOCK.acquire(timeout=OCR_WAIT_SECONDS):
         raise OcrBusyError("OCR_BUSY")
     try:
-        if hasattr(engine, "predict"):
-            result = engine.predict(image)
-        elif hasattr(engine, "ocr"):
-            result = engine.ocr(image, cls=True)
-        else:
-            raise RuntimeError("PADDLEOCR_INFERENCE_METHOD_UNAVAILABLE")
-        if not isinstance(result, (list, tuple)):
-            result = list(result) if result is not None else []
-        return _ocr_records(result), label
+        engine, label = _get_ocr_engine()
+        return _run_on_ocr_thread(_invoke_ocr_engine, engine, image), label
     finally:
         if not locked:
             _OCR_RUN_LOCK.release()
@@ -1075,7 +1120,11 @@ def main() -> None:
     # single-flight (OCR_CONCURRENCY=1).
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        _shutdown_ocr_executor()
 
 
 if __name__ == "__main__":

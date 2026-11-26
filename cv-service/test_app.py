@@ -521,6 +521,55 @@ class CvAdapterTests(unittest.TestCase):
                 analyze(payload)
             self.assertEqual(tracker.release_calls, 1)
 
+    def test_ocr_init_and_inference_always_execute_on_same_dedicated_thread(self):
+        build_tids: list[int] = []
+        predict_tids: list[int] = []
+        caller_tids: list[int] = []
+
+        class ThreadCheckedEngine:
+            def __init__(self, owner_tid: int):
+                self.owner_tid = owner_tid
+
+            def predict(self, _img):
+                tid = threading.get_ident()
+                predict_tids.append(tid)
+                if tid != self.owner_tid:
+                    raise RuntimeError("std::exception")
+                return [{"rec_texts": ["京KBT355"], "rec_scores": [0.99]}]
+
+        def fake_build():
+            tid = threading.get_ident()
+            build_tids.append(tid)
+            return ThreadCheckedEngine(tid), "PaddleOCR 本地 CPU（pinned）"
+
+        with mock.patch.object(app, "_OCR_ENGINE", None), \
+             mock.patch.object(app, "_OCR_ENGINE_LABEL", ""), \
+             mock.patch.object(app, "_OCR_INIT_ERROR", ""), \
+             mock.patch.object(app, "_build_ocr_engine", side_effect=fake_build):
+            errors: list[Exception] = []
+            results: list[list[dict[str, object]]] = []
+
+            def request_worker():
+                caller_tids.append(threading.get_ident())
+                try:
+                    records, _label = app._run_paddle_ocr("fake-image")
+                    results.append(records)
+                except Exception as exc:  # pragma: no cover
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=request_worker) for _ in range(5)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5.0)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(build_tids), 1)
+        self.assertEqual(len(predict_tids), 5)
+        self.assertEqual(set(predict_tids), {build_tids[0]})
+        self.assertNotIn(build_tids[0], caller_tids)
+        self.assertTrue(all(rec[0]["text"] == "京KBT355" for rec in results))
+
 
 def json_text(value):
     return str(value)
