@@ -1,5 +1,9 @@
 简体中文 | [English](README.en.md)
 
+<p align="center">
+  <img src="docs/screenshots/logo.png" alt="FlowTwin Logo" width="84" />
+</p>
+
 # 能流智枢 · FlowTwin
 
 [![CI](https://github.com/1Beyond1/flowtwin-demo/actions/workflows/ci.yml/badge.svg)](https://github.com/1Beyond1/flowtwin-demo/actions/workflows/ci.yml)

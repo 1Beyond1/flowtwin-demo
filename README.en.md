@@ -1,5 +1,9 @@
 [简体中文](README.md) | English
 
+<p align="center">
+  <img src="docs/screenshots/logo.png" alt="FlowTwin Logo" width="84" />
+</p>
+
 # FlowTwin
 
 [![CI](https://github.com/1Beyond1/flowtwin-demo/actions/workflows/ci.yml/badge.svg)](https://github.com/1Beyond1/flowtwin-demo/actions/workflows/ci.yml)
