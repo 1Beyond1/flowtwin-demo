@@ -18,11 +18,17 @@ Parses natural-language trip requests into structured constraints and combines l
 
 ![Driver Trip Intelligence Interface](docs/screenshots/driver-trip-intelligence.png)
 
-### Operator View: Regional Supply-Demand & Strategy Console
+### Operator View: Pareto ROI Curve & Live Coupon Redemption Loop
 
-Translates trip demand into station-side diversion and pricing strategies, comparing before/after queue times, diversion share, and scenario ROI with optional Feishu Bitable AI approval sync:
+Translates trip demand into station-side diversion strategies with an interactive **Pareto ROI sensitivity curve** (click any coupon tier to simulate), a live **issue → driver claim → receipt redeem** incentive loop, and optional Feishu Bitable AI approval sync:
 
 ![Operator Regional Supply-Demand and Strategy Console](docs/screenshots/operator-dispatch.png)
+
+### Vision View: Browser Canvas Queue Annotator → Port Forecast Feedback
+
+Draw or auto-populate station bounding boxes (charging, idle, queued, fault) directly on sample or uploaded photos to trigger port-level discrete-event queue re-forecasting across Driver and Operator views, alongside optional local CPU PaddleOCR plate recognition:
+
+![Station Vision Queue Annotator Interface](docs/screenshots/vision-annotator.png)
 
 ### Mobile View: Responsive Layout
 
@@ -40,8 +46,10 @@ Adapts cleanly to 375–430 px mobile viewports with full powertrain/departure c
 - **Natural-Language Intent & Multi-Turn Refinement**: Extracts destination, arrival deadline/SOC margin, EV/fuel/hybrid powertrain, detour limit, priority, and corridor service stops, supporting multi-turn additions, edits, and browser native speech fallback when cloud STT is unconfigured.
 - **Multi-Stop Long-Distance Replenishment**: Plans up to 6 stops on standard trips and up to 12 stops in adaptive extreme-distance mode, preferring AMap Route 2.0 ordered waypoints in live mode backed by layered server-side file caching (`runtime/cache/amap/`).
 - **Arrival-Time Queue & Port-Level Simulation**: Predicts occupancy and P50/P90 waiting time at estimated arrival time using a unified stop-time ledger (`queue + service + payment/exit buffer`), running port-level discrete-event simulation with reservation queues alongside weather-aware pressure factors.
-- **Operator Load-Balancing & Reproducible 1,000-Trip Validation**: Models coupon pricing, target cohorts, capacity caps, diversion response, and scenario ROI; the Validation tab benchmarks four policies across 30 synthetic nodes and 1,000 fixed-seed trips (default `20260719`).
-- **Optional Integrations**: Supports Feishu Bitable snapshot sync + AI field readback, an optional local CPU PaddleOCR adapter (`cv-service/`), and private offline demand priors (`runtime/enterprise-demand-prior.json`).
+- **Departure Window Optimizer (`POST /api/departure-windows`)**: Evaluates 5 departure slots (`Now`, `+30m`, `+60m`, `+90m`, `+120m`) across arrival-time P50/P90 queue forecasts and 4-tier EV time-of-use tariffs (valley / flat / peak / super-peak), recommending the best off-peak shift with one-click replanning.
+- **Multi-Vehicle Preset Library & Cost Ledger (`vehicle-presets.js`)**: Includes 8 built-in EV / fuel / hybrid presets plus custom vehicle profiles with fast-charge taper modeling; breaks down energy cost, highway tolls, diversion coupon savings, TOU savings, and cost/km with local ledger persistence and formula-injection-safe CSV export.
+- **Operator Pareto ROI Curve & Live Coupon Loop (`/api/operator/simulate` · `/api/coupons/*`)**: Plots multi-tier coupon diversion and scenario ROI curves with a `1.0x` breakeven reference, issues live station coupons synced to Driver route cards and payment receipts, and feeds redemptions back into Operator KPIs; the Validation tab benchmarks four policies across 1,000 fixed-seed trips (`20260719`).
+- **Browser Canvas Queue Annotator & Optional Integrations (`POST /api/vision/queue-feedback`)**: Annotate charging / idle / queue / fault slots directly on station images to update port-level discrete-event forecasts in real time; also supports Feishu Bitable AI readback, optional local CPU PaddleOCR (`cv-service/`), and private offline demand priors.
 
 ---
 
@@ -56,9 +64,12 @@ Browser (Vanilla HTML/CSS/JS, zero build step, inline local icons, on-demand AMa
       ├─ /api/stt                          Optional speech-to-text proxy
       ├─ /api/route · /api/poi · /api/weather  Cached AMap driving, corridor POI & weather proxies
       ├─ /api/forecast                     Arrival-time queue simulation (port-level / aggregate)
+      ├─ /api/departure-windows            5-slot off-peak departure & TOU tariff optimizer
       ├─ /api/longtrip                     Multi-stop long-distance replenishment planner
-      ├─ /api/operator/simulate            Coupon pricing & traffic diversion simulation
+      ├─ /api/operator/simulate            Coupon pricing, Pareto ROI curve & diversion simulation
+      ├─ /api/coupons · /api/coupons/*     Live diversion coupon issue, claim, redeem & reset loop
       ├─ /api/validate                     Reproducible 1,000-trip four-policy benchmark
+      ├─ /api/vision/queue-feedback        Canvas queue annotation → port-level forecast feedback
       ├─ /api/cv/health · /api/cv/analyze  Optional local CPU PaddleOCR adapter
       ├─ /api/feishu/* · /api/execution    Optional Feishu Bitable AI sync & Webhook adapter
       └─ /api/version · /api/version/check Build metadata & manual GitHub release check
