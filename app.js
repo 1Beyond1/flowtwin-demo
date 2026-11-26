@@ -13,6 +13,7 @@
   // browser-side intent helper as first-class data.  The fallback keeps an old
   // cached deployment usable while the new helper file is loading.
   const serviceIntent = window.FlowTwinServiceIntent || {};
+  const vehiclePresetsLib = window.FlowTwinVehiclePresets || {};
 
   // 必须和 lib/config.mjs 的 DEFAULT_ORIGIN.name 一致：后端用这个名字判断
   // "用户没说起点"，前端用它判断"这个起点是默认值，不是用户要求的"。
@@ -60,6 +61,7 @@
   const COMPLETED_ROUTE_PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
   const COMPLETED_ROUTE_PLAN_STORAGE_KEY = "flowtwin:completed-route-plan:v2";
   const DEFAULT_VISION_SAMPLE_URL = "/assets/vision/default-camera-scene.jpg";
+  const DEFAULT_VISION_QUEUE_SAMPLE_URL = "/assets/vision/station-queue-overview.jpg";
   // 地图/演示输入没有支付与驶离事件时间。单独保留一个透明的缓冲项，
   // 避免把这段时间偷偷塞进“排队”等字段；后续企业适配器可以按站点覆盖。
   const DEFAULT_PAYMENT_EXIT_MINUTES = Object.freeze({ fuel: 3, electric: 5 });
@@ -286,6 +288,30 @@
     visionResult: null,
     visionFile: null,
     visionRequestVersion: 0,
+    departureWindowRequestVersion: 0,
+    departureApplyVersion: 0,
+    departureWindowAbortController: null,
+    departureWindowPendingKey: null,
+    departureWindowPayload: null,
+    departureWindowKey: null,
+    activeVehiclePresetId: "ev-standard",
+    activeVehiclePreset: null,
+    activeVehiclePresetByEnergy: null,
+    customVehiclePresets: [],
+    costLedger: [],
+    recordedPaymentLedgerKeys: new Set(),
+    activeCoupons: [],
+    couponSummary: null,
+    claimedCouponsByStation: new Map(),
+    redeemedCouponsByStation: new Map(),
+    couponRequestVersion: 0,
+    visionAnnotations: [],
+    visionActiveBoxKind: "charging",
+    visionDrawingBox: null,
+    visionLastFeedbackStationId: null,
+    visionFeedbackBusy: false,
+    visionResizeObserver: null,
+    visionBoxSeq: 0,
     simulation: {
       active: false,
       paused: false,
@@ -351,6 +377,11 @@
   const ENERGY_TYPES = ["electric", "fuel", "hybrid"];
   const VOICE_AUTO_PLAN_STORAGE_KEY = "FLOWTWIN_VOICE_AUTO_PLAN";
   const DISPLAY_MODE_STORAGE_KEY = "FLOWTWIN_DISPLAY_MODE";
+  const ACTIVE_VEHICLE_STORAGE_KEY = "FLOWTWIN_ACTIVE_VEHICLE_V1";
+  const CUSTOM_VEHICLES_STORAGE_KEY = "FLOWTWIN_CUSTOM_VEHICLES_V1";
+  const COST_LEDGER_STORAGE_KEY = "FLOWTWIN_COST_LEDGER_V1";
+  const CLAIMED_COUPONS_STORAGE_KEY = "FLOWTWIN_CLAIMED_COUPONS_V1";
+  const REDEEMED_COUPONS_STORAGE_KEY = "FLOWTWIN_REDEEMED_COUPONS_V1";
   const SAFE_IMAGE_SRC_RE = /^(?:data:image\/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=\s]+|\/assets\/(?!.*\.\.)[A-Za-z0-9._/-]+)$/i;
   const SAFE_VIDEO_SRC_RE = /^(?:blob:[^\s"'<>]+|data:video\/(?:mp4|webm|quicktime);base64,[A-Za-z0-9+/=\s]+|\/assets\/(?!.*\.\.)[A-Za-z0-9._/-]+)$/i;
 
@@ -363,6 +394,7 @@
     "arrow-right": '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
     "arrow-right-circle": '<circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="m12 16 4-4-4-4"/>',
     "arrow-up": '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+    award: '<path d="m15.477 12.89 1.515 8.526a.5.5 0 0 1-.81.47l-3.58-2.687a1 1 0 0 0-1.197 0l-3.586 2.686a.5.5 0 0 1-.81-.469l1.514-8.526"/><circle cx="12" cy="8" r="6"/>',
     "bar-chart-3": '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
     "battery-charging": '<path d="M15 7h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-2"/><path d="M6 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1"/><path d="m11 7-3 5h4l-3 5"/><line x1="22" x2="22" y1="11" y2="13"/>',
     "battery-medium": '<rect width="16" height="10" x="2" y="7" rx="2" ry="2"/><line x1="22" x2="22" y1="11" y2="13"/><line x1="6" x2="6" y1="11" y2="13"/><line x1="10" x2="10" y1="11" y2="13"/>',
@@ -370,11 +402,13 @@
     "building-2": '<path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/>',
     calculator: '<rect width="16" height="20" x="4" y="2" rx="2"/><line x1="8" x2="16" y1="6" y2="6"/><line x1="16" x2="16" y1="14" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/>',
     "calendar-clock": '<path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h5"/><path d="M17.5 17.5 16 16.3V14"/><circle cx="16" cy="16" r="6"/>',
+    car: '<path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/>',
     check: '<path d="M20 6 9 17l-5-5"/>',
     "check-circle-2": '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
     "chevron-down": '<path d="m6 9 6 6 6-6"/>',
     "chevron-up": '<path d="m18 15-6-6-6 6"/>',
     "circle-dot": '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
     "clock-3": '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16.5 12"/>',
     "clock-alert": '<path d="M12 6v6l4 2"/><path d="M16 21.16a10 10 0 1 1 5-13.516"/><path d="M20 11.5v6"/><path d="M20 21.5h.01"/>',
     cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
@@ -384,12 +418,14 @@
     "cloud-sun": '<path d="M12 2v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="M20 12h2"/><path d="m19.07 4.93-1.41 1.41"/><path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/>',
     coffee: '<path d="M10 2v2"/><path d="M14 2v2"/><path d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/><path d="M6 2v2"/>',
     database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
     "external-link": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
     "flask-conical": '<path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2"/><path d="M6.453 15h11.094"/><path d="M8.5 2h7"/>',
     fuel: '<line x1="3" x2="15" y1="22" y2="22"/><line x1="4" x2="14" y1="9" y2="9"/><path d="M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18"/><path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2 2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5"/>',
     "git-compare-arrows": '<circle cx="5" cy="6" r="3"/><path d="M12 6h5a2 2 0 0 1 2 2v7"/><path d="m15 9-3-3 3-3"/><circle cx="19" cy="18" r="3"/><path d="M12 18H7a2 2 0 0 1-2-2V9"/><path d="m9 15 3 3-3 3"/>',
     hand: '<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
     info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+    layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
     "loader-circle": '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
     "locate-fixed": '<line x1="2" x2="5" y1="12" y2="12"/><line x1="19" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="5"/><line x1="12" x2="12" y1="19" y2="22"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/>',
     "log-out": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>',
@@ -404,6 +440,7 @@
     "panel-right-open": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/>',
     pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
     play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+    plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
     receipt: '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/>',
     "refresh-cw": '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
     "rotate-ccw": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
@@ -417,12 +454,18 @@
     "skip-forward": '<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/>',
     snowflake: '<line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
     sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/>',
+    "square-dashed": '<path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M21 19a2 2 0 0 1-2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h1"/><path d="M14 3h1"/><path d="M14 21h1"/><path d="M3 9v1"/><path d="M21 9v1"/><path d="M3 14v1"/><path d="M21 14v1"/>',
     store: '<path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/><path d="M2 7h20"/><path d="M22 7v3a2 2 0 0 1-2 2a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12a2 2 0 0 1-2-2V7"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+    tag: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>',
+    ticket: '<path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/>',
+    "trash-2": '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
     "trending-down": '<polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>',
     "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    "undo-2": '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
     upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
     utensils: '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
+    wallet: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>',
     "wallet-cards": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2"/><path d="M3 11h3c.8 0 1.6.3 2.1.9l1.1.9c1.6 1.6 4.1 1.6 5.7 0l1.1-.9c.5-.5 1.3-.9 2.1-.9H21"/>',
     wifi: '<path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/>',
     "wifi-off": '<path d="M12 20h.01"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/><path d="M5 12.859a10 10 0 0 1 5.17-2.69"/><path d="M19 12.859a10 10 0 0 0-2.007-1.523"/><path d="M2 8.82a15 15 0 0 1 4.177-2.643"/><path d="M22 8.82a15 15 0 0 0-11.288-3.764"/><path d="m2 2 20 20"/>',
@@ -574,6 +617,8 @@
     // panels available without duplicating a second DOM tree.
     if (next === "user" && state.mode !== "driver") setMode("driver");
     if (state.hasPlannedRoute) renderRouteCards();
+    if (state.departureWindowPayload) renderDepartureWindows(state.departureWindowPayload);
+    if (state.selectedStation) renderStationCouponBanner(state.selectedStation);
   }
 
   function refreshIcons(root = document) {
@@ -1122,7 +1167,7 @@
     }
   }
 
-  function openSettings() {
+  function openSettings(scrollToId = null) {
     const backdrop = byId("settingsBackdrop");
     const panel = byId("settingsPanel");
     const trigger = byId("settingsButton");
@@ -1131,9 +1176,20 @@
     backdrop.hidden = false;
     document.body.classList.add("settings-open");
     trigger?.setAttribute("aria-expanded", "true");
+    renderVehiclePresetControls();
+    renderCostLedger();
     window.setTimeout(() => {
       const first = settingsFocusableElements()[0];
-      (first || panel).focus();
+      const focusTarget = first || panel;
+      if (focusTarget && typeof focusTarget.focus === "function") {
+        focusTarget.focus({ preventScroll: true });
+      }
+      const scrollTarget = typeof scrollToId === "string" && scrollToId ? byId(scrollToId) : null;
+      if (scrollTarget && typeof scrollTarget.scrollIntoView === "function") {
+        window.requestAnimationFrame(() => {
+          scrollTarget.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      }
     }, 0);
     renderSettingsOrigin();
     setSettingsOriginStatus(
@@ -5413,8 +5469,26 @@
       const rate = Math.max(3, Math.min(16, Number(station?.estimatedRefuelRateLpm) || 8));
       return Math.max(4, Math.ceil(amount / rate + 2));
     }
-    const power = Math.max(50, Math.min(300, Number(station?.estimatedChargePowerKw) || 110));
-    return Math.max(4, Math.ceil(amount / power * 60 + 3));
+    const presetPower = Number(state.activeVehiclePreset?.peakPowerKw || state.activeVehiclePreset?.electricPeakPowerKw || 0);
+    const stationPower = Number(station?.estimatedChargePowerKw) || 120;
+    const peakPowerKw = presetPower > 0 ? Math.max(40, Math.min(600, presetPower)) : Math.max(50, Math.min(300, stationPower));
+    if (typeof vehiclePresetsLib.estimateFastChargeMinutes === "function") {
+      const profile = getEnergyProfile(false);
+      const fromSoc = Math.max(5, Math.min(80, Number(state.energyPercent) || 20));
+      const addedSoc = profile?.capacity > 0 ? (amount / profile.capacity) * 100 : 45;
+      const toSoc = Math.min(100, Math.max(fromSoc + 5, fromSoc + addedSoc));
+      const estimate = vehiclePresetsLib.estimateFastChargeMinutes({
+        energyKwh: amount,
+        peakPowerKw,
+        fromSoc,
+        toSoc
+      });
+      const estMinutes = typeof estimate === "number" ? estimate : Number(estimate?.minutes);
+      if (Number.isFinite(estMinutes) && estMinutes > 0) {
+        return Math.max(4, Math.ceil(estMinutes));
+      }
+    }
+    return Math.max(4, Math.ceil(amount / peakPowerKw * 60 + 3));
   }
 
   function longTripChargeMinutes(amount, station) {
@@ -6617,6 +6691,7 @@
       else if (record.stableCollision) tag.textContent = "备选";
       else tag.textContent = `省 ¥${Math.max(1, Math.round(state.routeRecords.fastest.cost - record.cost))}`;
     }
+    renderRouteCardCouponBadge(button, record);
     // 服务区候选点是真实的高德服务区 POI，但高德不告诉我们里面到底有没有
     // 充电桩/油枪——站点面板早就标了"补能设施待确认"，路线卡片却没有。
     // 对纯电用户来说，一个名字就叫"加油站"的候选点不带这句就是误导。
@@ -7563,6 +7638,16 @@
       if (Number.isInteger(phase.stopIndex)) simulation.paymentCompletedStopIndexes.add(phase.stopIndex);
       if (simulation.paymentNotifiedFor !== paymentKey) {
         simulation.paymentNotifiedFor = paymentKey;
+        const simStop = phase.stop || state.selectedStation;
+        const simRecord = state.simulation?.record || state.routeRecords[state.selectedRoute];
+        if (simStop) {
+          void finalizeStationPaymentWithCoupon({
+            station: simStop,
+            record: simRecord,
+            dedupeKey: `sim:${state.simulationSessionId}:${paymentKey}`,
+            openReceipt: false
+          });
+        }
         showToast("已扣款成功 · 电子收据已生成（演示）", 4200);
       }
     }
@@ -8340,27 +8425,37 @@
   // 运营端若对当前这站执行过引流策略，司机在这站付费时就应当享受到那张券。
   // 这是"运营发券 -> 司机被引流 -> 司机实付减免"的闭环，没有它，运营页的优惠
   // 和出行页的扣款就是两个互不相干的数字。只在站点 id 吻合且策略已执行时计入。
-  function activeDiversionDiscount(stationId) {
+  function activeDiversionDiscount(stationId, stationName = "") {
+    const voucher = resolveActiveVoucherForStation({ id: stationId, name: stationName });
+    if (voucher && Number(voucher.discountAmount) > 0) {
+      return Number(voucher.discountAmount);
+    }
     const payload = state.pendingOperatorPayload;
     if (!payload || state.executionState !== "after") return 0;
-    if (payload.targetStation?.id !== stationId) return 0;
+    if (String(payload.targetStation?.id) !== String(stationId)) return 0;
     return Math.max(0, Number(payload.discountAmount || 0));
   }
 
-  function renderPaymentReceipt(target) {
+  function renderPaymentReceipt(target, couponContext = null) {
     const station = target.station;
-    const unit = target.record.energyUnit || station.priceUnit || "kWh";
-    // 多停方案的 station 是 stop 对象，带 energyAmount；单停方案的 station 是
-    // record.station，没有这个字段（总量在 record.energyAmount 上）。用 ?? 兜底，
-    // 别让单停收据印出"0.0 kWh"。
-    const energyAmount = Number(station.energyAmount ?? target.record.energyAmount ?? 0);
-    const unitPrice = Number(station.price || 0);
-    const energyFee = Number.isFinite(Number(station.energyCost))
-      ? Number(station.energyCost)
-      : Number((energyAmount * unitPrice).toFixed(1));
-    const discount = activeDiversionDiscount(station.id);
+    const pricing = resolveStationPaymentPricing(station, target.record);
+    const unit = pricing.unit;
+    const energyAmount = pricing.energyAmount;
+    const unitPrice = pricing.effectiveUnitPrice;
+    const energyFee = pricing.grossAmount;
+    const forceNoDiscount = Boolean(couponContext && couponContext.forceNoDiscount === true);
+    const voucher = forceNoDiscount ? null : (couponContext || resolveActiveVoucherForStation(station));
+    const discount = forceNoDiscount
+      ? 0
+      : (couponContext && Number.isFinite(Number(couponContext.discountApplied))
+          ? Math.max(0, Number(couponContext.discountApplied))
+          : activeDiversionDiscount(station.id, station.name));
+    const voucherCode = forceNoDiscount ? "" : (voucher?.voucherCode || voucher?.code || "");
     const paid = Math.max(0, Number((energyFee - discount).toFixed(1)));
     const noun = isFuelActive() ? "加油" : "补能";
+    const unitPriceDisplay = pricing.tariffTier
+      ? `¥${unitPrice.toFixed(2)}/${unit} · ${pricing.tariffTier}`
+      : `¥${unitPrice.toFixed(2)}/${unit}`;
 
     setText("paymentReceiptTime", formatClock(Number(target.station.arrivalMinute) || state.departureMinutes));
     const receiptStation = byId("paymentReceiptStation");
@@ -8373,24 +8468,40 @@
         document.createTextNode(` · ${station.name || ""}`)
       );
     }
-    const safeUnit = escapeHtml(unit);
     const rows = byId("paymentReceiptRows");
     if (rows) {
-      rows.innerHTML = `
-        <div class="payment-receipt-row"><span>${noun}量</span><b>${energyAmount.toFixed(1)} ${safeUnit}</b></div>
-        <div class="payment-receipt-row"><span>单价</span><b>¥${unitPrice.toFixed(2)}/${safeUnit}</b></div>
-        <div class="payment-receipt-row"><span>能源费</span><b>¥${energyFee.toFixed(1)}</b></div>
-        ${discount > 0 ? `<div class="payment-receipt-row discount"><span>运营引流优惠</span><b>−¥${discount.toFixed(1)}</b></div>` : ""}`;
+      const makeRow = (label, valueText, extraClass = "") => {
+        const row = document.createElement("div");
+        row.className = extraClass ? `payment-receipt-row ${extraClass}` : "payment-receipt-row";
+        const span = document.createElement("span");
+        span.textContent = label;
+        const bold = document.createElement("b");
+        bold.textContent = valueText;
+        row.append(span, bold);
+        return row;
+      };
+      const rowNodes = [
+        makeRow(`${noun}量`, `${energyAmount.toFixed(1)} ${unit}`),
+        makeRow("单价", unitPriceDisplay),
+        makeRow("能源费", `¥${energyFee.toFixed(1)}`)
+      ];
+      if (discount > 0) {
+        const label = voucherCode ? `运营分流券抵扣（码 ${voucherCode}）` : "运营分流券抵扣";
+        rowNodes.push(makeRow(label, `−¥${discount.toFixed(1)}`, "discount"));
+      }
+      rows.replaceChildren(...rowNodes);
     }
     setText("paymentReceiptTotal", `¥${paid.toFixed(1)}`);
     setText("paymentReceiptFoot", discount > 0
-      ? `车牌识别自动扣款 · 已核销运营端 ¥${discount.toFixed(1)} 引流券`
+      ? voucherCode
+        ? `车牌识别自动扣款 · 已核销分流券 ${voucherCode}（−¥${discount.toFixed(1)}）并回流运营端`
+        : `车牌识别自动扣款 · 已核销运营端 ¥${discount.toFixed(1)} 分流券`
       : "车牌识别自动扣款 · 已授权");
     const overlay = byId("paymentReceiptOverlay");
     window.clearTimeout(closePaymentReceipt.timer);
     if (overlay) { overlay.hidden = false; overlay.classList.add("visible"); }
     refreshIcons();
-    return { energyFee, discount, paid };
+    return { energyFee, discount, paid, voucherCode };
   }
 
   function closePaymentReceipt() {
@@ -8413,17 +8524,29 @@
     if (label) label.textContent = "识别车牌…";
     await new Promise((resolve) => window.setTimeout(resolve, 650));
     state.paymentState = "paid";
-    const breakdown = renderPaymentReceipt(target);
+    const result = await finalizeStationPaymentWithCoupon({
+      station: target.station,
+      record: target.record,
+      dedupeKey: `arrival:${state.selectedRoute}:${target.station.id}:${state.departureMinutes}`,
+      openReceipt: true
+    });
+    const breakdown = result.breakdown;
     state.paymentReceipt = {
       stationId: target.station.id,
       stationName: target.station.name,
       amount: breakdown.paid,
       energyFee: breakdown.energyFee,
       discount: breakdown.discount,
+      voucherCode: breakdown.voucherCode || null,
       createdAt: Date.now()
     };
     syncArrivalPayment();
-    showToast(`已扣款成功 · 实付 ¥${breakdown.paid.toFixed(1)} · 电子收据已生成`, 4200);
+    showToast(
+      breakdown.discount > 0
+        ? `已扣款成功 · 实付 ¥${breakdown.paid.toFixed(1)}（分流券抵扣 ¥${breakdown.discount.toFixed(1)}）`
+        : `已扣款成功 · 实付 ¥${breakdown.paid.toFixed(1)} · 电子收据已生成`,
+      4200
+    );
     refreshIcons();
   }
 
@@ -8506,6 +8629,7 @@
       return;
     }
     selectStation(record.station, false);
+    renderTripCostBreakdown(record.station, record);
     renderStopTimeline(record);
     const reliable = Object.values(state.routeRecords).find((candidate) => candidate.isActualStable) || state.routeRecords.reliable || record;
     const evidence = $$(".evidence-row span");
@@ -8563,6 +8687,9 @@
     if (price) price.innerHTML = "— <small>无需补能</small>";
     const forecastCard = byId("forecastChart")?.closest(".forecast-card");
     if (forecastCard) forecastCard.style.display = "none";
+    hideDepartureWindows();
+    renderStationCouponBanner(null);
+    renderTripCostBreakdown(null, record);
     const evidence = $$(".evidence-row span");
     if (evidence[0]) evidence[0].textContent = `直达 ${state.destinationName}，不经过补能站，也不增加绕行。`;
     if (evidence[1]) evidence[1].textContent = `预计到达剩余 ${record.arrivalSoc}%（${arrivalReserveDescription(record)}）。`;
@@ -8593,6 +8720,9 @@
     if (price) price.innerHTML = "— <small>服务停靠</small>";
     const forecastCard = byId("forecastChart")?.closest(".forecast-card");
     if (forecastCard) forecastCard.style.display = "none";
+    hideDepartureWindows();
+    renderStationCouponBanner(null);
+    renderTripCostBreakdown(null, record);
     const evidence = $$(".evidence-row span");
     if (evidence[0]) evidence[0].textContent = `已将 ${record.servicePlan?.name || "沿线服务"} 作为独立停靠点加入高德路线。`;
     if (evidence[1]) evidence[1].textContent = `服务预计 ${record.servicePlan?.durationMinutes || 0} 分钟，额外增加 ${record.servicePlan?.extraMinutes || 0} 分钟。`;
@@ -8618,6 +8748,9 @@
     if (price) price.innerHTML = "— <small>暂无站点</small>";
     const forecastCard = byId("forecastChart")?.closest(".forecast-card");
     if (forecastCard) forecastCard.style.display = "none";
+    hideDepartureWindows();
+    renderStationCouponBanner(null);
+    renderTripCostBreakdown(null, record);
     const evidence = $$(".evidence-row span");
     if (hasLongTripFailure) {
       if (evidence[0]) evidence[0].textContent = record.planningFailure;
@@ -10053,6 +10186,8 @@
       ? `¥${Number(station.price).toFixed(2)} <small>/${escapeHtml(station.priceUnit || (isFuelActive() ? "L" : "kWh"))}</small>`
        : "— <small>待确认</small>";
     renderReservationAction(station);
+    renderStationCouponBanner(station);
+    renderTripCostBreakdown(station, stationRecord || selectedRecord);
     const forecastEvidencePanel = byId("forecastEvidencePanel");
     const forecastEvidenceToggle = byId("forecastEvidenceToggle");
     if (forecastEvidencePanel) forecastEvidencePanel.hidden = true;
@@ -10062,6 +10197,7 @@
       if (label) label.textContent = "查看计算依据";
     }
     requestForecast(station);
+    void requestDepartureWindows(station, stationRecord || selectedRecord);
     refreshIcons();
     if (showPanel !== false) {
       const panel = byId("insightPanel");
@@ -10150,13 +10286,18 @@
     byId("validationPanel").classList.toggle("visible", mode === "validation");
     byId("visionPanel")?.classList.toggle("visible", mode === "vision");
     byId("routeSheet").style.display = mode === "driver" && !state.mobileInsightOpen ? "" : "none";
-    if (mode === "driver") byId("mapAttribution").textContent = state.live ? "高德地图 · 真实路线与 POI / 演示预测状态" : "离线沙盒地图 · 走廊示意 / 仿真预测状态";
+    if (mode === "driver") {
+      byId("mapAttribution").textContent = state.live ? "高德地图 · 真实路线与 POI / 演示预测状态" : "离线沙盒地图 · 走廊示意 / 仿真预测状态";
+      void loadCoupons();
+    }
     if (mode === "operator") {
       byId("mapAttribution").textContent = state.live
         ? "高德地图 · 真实路线与 POI / 演示运营负载"
         : "离线沙盒地图 · 走廊示意 / 仿真运营负载";
       syncOperatorPanelTitle();
       renderOperatorFlow(state.pendingOperatorPayload);
+      void loadCoupons();
+      renderOperatorCouponLoop();
       if (state.map && state.stations.length) state.map.setFitView(state.stationOverlays, false, amapFitPadding("operator"), 11);
     }
     if (mode === "validation") byId("mapAttribution").textContent = state.live
@@ -10166,6 +10307,8 @@
     if (mode === "vision") {
       byId("mapAttribution").textContent = "站内视觉演示 · 内置样例/上传媒体 · 本地 OCR";
       void refreshVisionHealth();
+      populateVisionTargetStations();
+      ensureVisionSampleLoadedForAnnotation();
     }
   }
 
@@ -10767,6 +10910,7 @@
       }
     }
     renderOperatorFlow(payload);
+    renderOperatorParetoCurve(payload?.paretoCurve || []);
     return snapshot;
   }
 
@@ -10876,6 +11020,7 @@
       state.operatorAfter = null;
       renderOperatorMetrics(state.operatorBefore || computeOperatorSnapshot(state.stations), false);
       renderOperatorFlow(null);
+      renderOperatorParetoCurve([]);
       setOperatorAnalysisStep("simulation", "error", "计算失败");
       showToast("策略计算失败，请稍后重试", 3600, "error");
     } finally {
@@ -11008,6 +11153,8 @@
     const inferenceNotRun = inferenceStatus === "not-run";
     const preview = byId("visionPreviewImage");
     const previewVideo = byId("visionPreviewVideo");
+    const stageFrame = byId("visionStageFrame");
+    const annotatorCanvas = byId("visionAnnotatorCanvas");
     const empty = byId("visionPreviewEmpty");
     const rawAnnotated = isSafeImageSrc(result?.annotatedImage) ? result.annotatedImage : null;
     const rawPreview = isSafeImageSrc(result?.previewImage) ? result.previewImage : null;
@@ -11015,10 +11162,17 @@
     const isVideoMode = String(result?.mode || "").trim().toLowerCase() === "video";
     const videoSource = isVideoMode && isSafeVideoSrc(result?.previewVideo) ? result.previewVideo.trim() : null;
     if (preview && image && !videoSource) {
-      preview.src = image;
-      preview.hidden = false;
+      const inferredKind = result?._sceneKind
+        || (String(result?.mode || "").trim().toLowerCase() === "sample" ? "sample-single" : "upload");
+      showVisionImageInStage(image, { sceneKind: inferredKind });
     } else {
+      state.visionSceneKind = videoSource ? "video" : null;
+      state.visionAnnotations = [];
+      state.visionDrawingBox = null;
+      updateVisionAnnotatorStats();
       if (preview) { preview.hidden = true; preview.removeAttribute("src"); }
+      if (stageFrame) stageFrame.hidden = true;
+      if (annotatorCanvas) annotatorCanvas.hidden = true;
     }
     if (previewVideo && videoSource) {
       previewVideo.src = videoSource;
@@ -11189,7 +11343,10 @@
         else delete sanitizedResult.previewVideo;
       } else {
         delete sanitizedResult.previewVideo;
-        if (previewImage) sanitizedResult.previewImage = previewImage;
+        if (previewImage) {
+          sanitizedResult.previewImage = previewImage;
+          sanitizedResult._sceneKind = body.mode === "sample" ? "sample-single" : "upload";
+        }
       }
       renderVisionResult(sanitizedResult);
     } catch (error) {
@@ -11370,6 +11527,7 @@
     }
     if (reset) reset.classList.add("hidden");
     renderOperatorMetrics(state.operatorBefore, false);
+    renderOperatorParetoCurve([]);
     renderValidationMetrics(null);
     calculateRouteRecords();
     renderRouteCards();
@@ -11469,7 +11627,7 @@
     return hybridBranchRangeKm("electric") + hybridBranchRangeKm("fuel");
   }
 
-  function updateEnergyControls() {
+  function updateEnergyControls(options = {}) {
     const isFuel = isFuelActive();
     const hybrid = isHybrid();
     const stateLabel = byId("vehicleEnergyLabel");
@@ -11496,8 +11654,11 @@
       if (fuelInput && document.activeElement !== fuelInput) fuelInput.value = String(Math.round(hybridBranchLevel("fuel")));
     }
     syncManualControls();
+    renderVehiclePresetSummary();
     refreshIcons();
-    updateInsight(state.routeRecords[state.selectedRoute]);
+    if (options.skipInsight !== true) {
+      updateInsight(state.routeRecords[state.selectedRoute]);
+    }
   }
 
   // Switching the vehicle type has to re-seed the hybrid levels before anything
@@ -11522,6 +11683,7 @@
     state.hybridComparison = null;
     state.reservationOverrides = {};
     state.stationForecastScenarioKey = null;
+    syncVehiclePresetForEnergyType(type);
     return true;
   }
 
@@ -11644,7 +11806,8 @@
       departureBucket,
       state.activeServicePlan?.id || state.selectedService || "none",
       `weather:${weatherKey}`,
-      `reservations:${reservationKey}`
+      `reservations:${reservationKey}`,
+      `vehicle:${state.activeVehiclePresetId || "ev-standard"}`
     ].join("::");
   }
 
@@ -11970,11 +12133,2539 @@
     return width > 0 && width <= 72;
   }
 
+  // =========================================================================
+  // Wave 3 Features:
+  //   F2: Departure Window Optimizer (#departureWindowCard)
+  //   F3: Vehicle Presets Library & Trip Cost Ledger (#settingsPanel + #insightPanel)
+  //   F4: Operator Pareto ROI Curve & Driver Coupon Loop (#operatorPanel + #insightPanel)
+  //   F5: Vision Browser Canvas Queue Annotator (#visionPanel)
+  // =========================================================================
+
+  const FALLBACK_BUILTIN_VEHICLE_PRESETS = Object.freeze([
+    { id: "ev-standard", name: "主流纯电轿车", energyType: "electric", batteryKwh: 108, consumptionPer100Km: 18.0, peakPowerKw: 150, nominalRangeKm: 600 },
+    { id: "ev-800v-fast", name: "800V 超充轿跑", energyType: "electric", batteryKwh: 100, consumptionPer100Km: 16.2, peakPowerKw: 320, nominalRangeKm: 617 },
+    { id: "ev-urban-compact", name: "城市代步小型纯电", energyType: "electric", batteryKwh: 52, consumptionPer100Km: 13.5, peakPowerKw: 65, nominalRangeKm: 385 },
+    { id: "ev-long-suv", name: "中大型长续航纯电 SUV", energyType: "electric", batteryKwh: 118, consumptionPer100Km: 20.5, peakPowerKw: 220, nominalRangeKm: 576 },
+    { id: "fuel-sedan", name: "紧凑型燃油轿车", energyType: "fuel", tankLiters: 55, consumptionPer100Km: 7.5, nominalRangeKm: 733 },
+    { id: "fuel-suv", name: "中大型燃油 SUV", energyType: "fuel", tankLiters: 68, consumptionPer100Km: 9.6, nominalRangeKm: 708 },
+    { id: "hybrid-commuter", name: "主流插混通勤轿车", energyType: "hybrid", batteryKwh: 20, tankLiters: 60, electricConsumptionPer100Km: 16.5, fuelConsumptionPer100Km: 5.6, peakPowerKw: 45, nominalRangeKm: 1192 },
+    { id: "hybrid-erev-suv", name: "大电池增程 SUV", energyType: "hybrid", batteryKwh: 44, tankLiters: 65, electricConsumptionPer100Km: 19.5, fuelConsumptionPer100Km: 6.8, peakPowerKw: 90, nominalRangeKm: 1181 }
+  ]);
+  const FALLBACK_DEFAULT_PRESET_BY_ENERGY = Object.freeze({
+    electric: "ev-standard",
+    fuel: "fuel-sedan",
+    hybrid: "hybrid-commuter"
+  });
+
+  function getVehiclePresetsApi() {
+    return window.FlowTwinVehiclePresets || vehiclePresetsLib || {};
+  }
+
+  function getBuiltinVehiclePresets() {
+    const api = getVehiclePresetsApi();
+    return Array.isArray(api.BUILTIN_VEHICLE_PRESETS) && api.BUILTIN_VEHICLE_PRESETS.length
+      ? api.BUILTIN_VEHICLE_PRESETS
+      : FALLBACK_BUILTIN_VEHICLE_PRESETS;
+  }
+
+  function getDefaultPresetIdForEnergy(energyType) {
+    const api = getVehiclePresetsApi();
+    const map = api.DEFAULT_PRESET_BY_ENERGY || FALLBACK_DEFAULT_PRESET_BY_ENERGY;
+    return map[energyType] || map.electric || "ev-standard";
+  }
+
+  function loadCustomVehiclePresetsFromStorage() {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(CUSTOM_VEHICLES_STORAGE_KEY) || "[]");
+      if (!Array.isArray(parsed)) return [];
+      const api = getVehiclePresetsApi();
+      return parsed
+        .map((item) => (typeof api.sanitizeCustomPreset === "function" ? api.sanitizeCustomPreset(item) : item))
+        .filter((item) => item && item.id && item.name);
+    } catch {
+      return [];
+    }
+  }
+
+  function saveCustomVehiclePresetsToStorage() {
+    try {
+      window.localStorage.setItem(CUSTOM_VEHICLES_STORAGE_KEY, JSON.stringify(state.customVehiclePresets || []));
+    } catch { /* ignore storage limits */ }
+  }
+
+  function listPresetsForEnergyType(energyType) {
+    const api = getVehiclePresetsApi();
+    if (typeof api.getPresetsForEnergyType === "function") {
+      const list = api.getPresetsForEnergyType(energyType, state.customVehiclePresets);
+      if (Array.isArray(list) && list.length) return list;
+    }
+    const all = getBuiltinVehiclePresets().concat(state.customVehiclePresets || []);
+    return all.filter((preset) => preset && preset.energyType === energyType);
+  }
+
+  function resolvePresetById(id) {
+    const api = getVehiclePresetsApi();
+    if (typeof api.getPresetById === "function") {
+      const found = api.getPresetById(id, state.customVehiclePresets);
+      if (found) return found;
+    }
+    const all = getBuiltinVehiclePresets().concat(state.customVehiclePresets || []);
+    return all.find((preset) => preset && preset.id === id) || null;
+  }
+
+  function extractPresetSpecs(preset) {
+    if (!preset) return { capacity: 108, consumptionPer100: 18, peakPowerKw: 150, rangeKm: 600, unit: "kWh" };
+    const api = getVehiclePresetsApi();
+    const profiles = typeof api.presetToEnergyProfiles === "function" ? api.presetToEnergyProfiles(preset) : null;
+    if (preset.energyType === "fuel") {
+      const capacity = Number(profiles?.fuel?.capacity ?? preset.tankLiters ?? preset.capacity ?? 55);
+      const perKm = Number(profiles?.fuel?.consumptionPerKm ?? ((Number(preset.consumptionPer100Km) || 7.5) / 100));
+      const rangeKm = Math.round(capacity / Math.max(0.01, perKm));
+      return { capacity, consumptionPer100: Number((perKm * 100).toFixed(1)), peakPowerKw: 0, rangeKm, unit: "L" };
+    }
+    if (preset.energyType === "hybrid") {
+      const evCap = Number(profiles?.hybridElectric?.capacity ?? preset.capacity ?? preset.batteryKwh ?? 20);
+      const evPerKm = Number(profiles?.hybridElectric?.consumptionPerKm ?? ((Number(preset.consumptionPer100Km ?? preset.electricConsumptionPer100Km) || 16.5) / 100));
+      const fuelCap = Number(profiles?.hybridFuel?.capacity ?? preset.fuelCapacity ?? preset.tankLiters ?? 60);
+      const fuelPerKm = Number(profiles?.hybridFuel?.consumptionPerKm ?? ((Number(preset.fuelConsumptionPer100Km) || 5.6) / 100));
+      const peakPowerKw = Number(preset.peakPowerKw ?? preset.electricPeakPowerKw ?? 60);
+      const rangeKm = Math.round(evCap / Math.max(0.01, evPerKm) + fuelCap / Math.max(0.01, fuelPerKm));
+      return {
+        capacity: evCap,
+        tankLiters: fuelCap,
+        consumptionPer100: Number((evPerKm * 100).toFixed(1)),
+        fuelConsumptionPer100: Number((fuelPerKm * 100).toFixed(1)),
+        peakPowerKw,
+        rangeKm,
+        unit: "kWh"
+      };
+    }
+    const capacity = Number(profiles?.electric?.capacity ?? preset.batteryKwh ?? preset.capacity ?? 108);
+    const perKm = Number(profiles?.electric?.consumptionPerKm ?? ((Number(preset.consumptionPer100Km) || 18.0) / 100));
+    const peakPowerKw = Number(preset.peakPowerKw ?? 150);
+    const rangeKm = Math.round(capacity / Math.max(0.01, perKm));
+    return { capacity, consumptionPer100: Number((perKm * 100).toFixed(1)), peakPowerKw, rangeKm, unit: "kWh" };
+  }
+
+  function formatPresetOptionLabel(preset) {
+    const specs = extractPresetSpecs(preset);
+    const tag = preset.custom ? "自定义 · " : "";
+    if (preset.energyType === "fuel") {
+      return `${tag}${preset.name} · ${specs.capacity}L · ${specs.consumptionPer100}L/百km`;
+    }
+    if (preset.energyType === "hybrid") {
+      return `${tag}${preset.name} · ${specs.capacity}kWh+${specs.tankLiters}L · ${specs.peakPowerKw}kW`;
+    }
+    return `${tag}${preset.name} · ${specs.capacity}kWh · ${specs.peakPowerKw}kW`;
+  }
+
+  function formatPresetSpecLine(preset) {
+    if (!preset) return "";
+    const specs = extractPresetSpecs(preset);
+    if (preset.energyType === "fuel") {
+      return `油箱 ${specs.capacity} L · 百公里 ${specs.consumptionPer100} L · 满油续航约 ${specs.rangeKm} km`;
+    }
+    if (preset.energyType === "hybrid") {
+      return `电池 ${specs.capacity} kWh + 油箱 ${specs.tankLiters} L · 峰值 ${specs.peakPowerKw} kW · 综合续航约 ${specs.rangeKm} km`;
+    }
+    return `电池 ${specs.capacity} kWh · 百公里 ${specs.consumptionPer100} kWh · 峰值 ${specs.peakPowerKw} kW · 续航 ${specs.rangeKm} km`;
+  }
+
+  function applyVehiclePresetToProfiles(preset) {
+    if (!preset) return;
+    const api = getVehiclePresetsApi();
+    const mapped = typeof api.presetToEnergyProfiles === "function" ? api.presetToEnergyProfiles(preset) : null;
+    if (mapped && typeof mapped === "object") {
+      if (mapped.electric) Object.assign(ENERGY_PROFILES.electric, mapped.electric);
+      if (mapped.fuel) Object.assign(ENERGY_PROFILES.fuel, mapped.fuel);
+      if (mapped.hybridElectric) Object.assign(ENERGY_PROFILES.hybridElectric, mapped.hybridElectric);
+      if (mapped.hybridFuel) Object.assign(ENERGY_PROFILES.hybridFuel, mapped.hybridFuel);
+    } else {
+      const specs = extractPresetSpecs(preset);
+      if (preset.energyType === "electric") {
+        ENERGY_PROFILES.electric.capacity = specs.capacity;
+        ENERGY_PROFILES.electric.consumptionPerKm = specs.consumptionPer100 / 100;
+        ENERGY_PROFILES.electric.nominalFullRangeKm = specs.rangeKm;
+      } else if (preset.energyType === "fuel") {
+        ENERGY_PROFILES.fuel.capacity = specs.capacity;
+        ENERGY_PROFILES.fuel.consumptionPerKm = specs.consumptionPer100 / 100;
+        ENERGY_PROFILES.fuel.nominalFullRangeKm = specs.rangeKm;
+      } else if (preset.energyType === "hybrid") {
+        ENERGY_PROFILES.hybridElectric.capacity = specs.capacity;
+        ENERGY_PROFILES.hybridElectric.consumptionPerKm = specs.consumptionPer100 / 100;
+        ENERGY_PROFILES.hybridElectric.nominalFullRangeKm = Math.round(specs.capacity / Math.max(0.01, specs.consumptionPer100 / 100));
+        if (specs.tankLiters) {
+          ENERGY_PROFILES.hybridFuel.capacity = specs.tankLiters;
+          ENERGY_PROFILES.hybridFuel.consumptionPerKm = (specs.fuelConsumptionPer100 || 5.6) / 100;
+          ENERGY_PROFILES.hybridFuel.nominalFullRangeKm = Math.round(specs.tankLiters / Math.max(0.01, (specs.fuelConsumptionPer100 || 5.6) / 100));
+        }
+      }
+    }
+    VEHICLE_RANGE_GUIDANCE.electricFullRangeKm = Math.round(ENERGY_PROFILES.electric.capacity / Math.max(0.01, ENERGY_PROFILES.electric.consumptionPerKm));
+    VEHICLE_RANGE_GUIDANCE.fuelFullRangeKm = Math.round(ENERGY_PROFILES.fuel.capacity / Math.max(0.01, ENERGY_PROFILES.fuel.consumptionPerKm));
+    VEHICLE_RANGE_GUIDANCE.hybridCombinedFullRangeKm = Math.round(
+      ENERGY_PROFILES.hybridElectric.capacity / Math.max(0.01, ENERGY_PROFILES.hybridElectric.consumptionPerKm)
+      + ENERGY_PROFILES.hybridFuel.capacity / Math.max(0.01, ENERGY_PROFILES.hybridFuel.consumptionPerKm)
+    );
+  }
+
+  function renderVehiclePresetSummary() {
+    const preset = state.activeVehiclePreset || resolvePresetById(state.activeVehiclePresetId) || getBuiltinVehiclePresets()[0];
+    const pillText = byId("activeVehiclePillText");
+    if (pillText && preset) pillText.textContent = `当前车型：${preset.name}`;
+    const specLine = byId("vehiclePresetSpecLine");
+    if (specLine && preset) specLine.textContent = formatPresetSpecLine(preset);
+    const deleteBtn = byId("deleteCustomVehicleButton");
+    if (deleteBtn) deleteBtn.hidden = !preset?.custom;
+    const capLabel = byId("customVehicleCapacityLabel");
+    const consLabel = byId("customVehicleConsumptionLabel");
+    const peakField = byId("customVehiclePeakPower")?.closest(".custom-vehicle-field");
+    if (capLabel) capLabel.textContent = state.energyType === "fuel" ? "油箱容量 (L)" : "电池容量 (kWh)";
+    if (consLabel) consLabel.textContent = state.energyType === "fuel" ? "百公里油耗 (L)" : "百公里电耗 (kWh)";
+    if (peakField) peakField.hidden = state.energyType === "fuel";
+  }
+
+  function renderVehiclePresetControls() {
+    const select = byId("vehiclePresetSelect");
+    const presets = listPresetsForEnergyType(state.energyType);
+    if (select) {
+      const options = presets.map((preset) => {
+        const opt = document.createElement("option");
+        opt.value = preset.id;
+        opt.textContent = formatPresetOptionLabel(preset);
+        return opt;
+      });
+      select.replaceChildren(...options);
+      if (presets.some((item) => item.id === state.activeVehiclePresetId)) {
+        select.value = state.activeVehiclePresetId;
+      } else if (presets[0]) {
+        select.value = presets[0].id;
+      }
+    }
+    renderVehiclePresetSummary();
+  }
+
+  function loadActiveVehiclePresetMap() {
+    const defaults = {
+      electric: getDefaultPresetIdForEnergy("electric"),
+      fuel: getDefaultPresetIdForEnergy("fuel"),
+      hybrid: getDefaultPresetIdForEnergy("hybrid")
+    };
+    try {
+      const raw = window.localStorage.getItem(ACTIVE_VEHICLE_STORAGE_KEY);
+      if (!raw) return defaults;
+      const trimmed = raw.trim();
+      if (trimmed.startsWith("{")) {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          ENERGY_TYPES.forEach((et) => {
+            if (typeof parsed[et] === "string" && parsed[et].trim()) {
+              defaults[et] = parsed[et].trim();
+            }
+          });
+          return defaults;
+        }
+      }
+      const legacyPreset = resolvePresetById(trimmed);
+      if (legacyPreset && ENERGY_TYPES.includes(legacyPreset.energyType)) {
+        defaults[legacyPreset.energyType] = legacyPreset.id;
+      }
+    } catch { /* ignore */ }
+    return defaults;
+  }
+
+  function saveActiveVehiclePresetId(energyType, presetId) {
+    const key = ENERGY_TYPES.includes(energyType) ? energyType : state.energyType;
+    if (!state.activeVehiclePresetByEnergy || typeof state.activeVehiclePresetByEnergy !== "object") {
+      state.activeVehiclePresetByEnergy = loadActiveVehiclePresetMap();
+    }
+    if (presetId) state.activeVehiclePresetByEnergy[key] = presetId;
+    try {
+      window.localStorage.setItem(ACTIVE_VEHICLE_STORAGE_KEY, JSON.stringify(state.activeVehiclePresetByEnergy));
+    } catch { /* ignore */ }
+  }
+
+  function syncVehiclePresetForEnergyType(energyType) {
+    if (!state.activeVehiclePresetByEnergy || typeof state.activeVehiclePresetByEnergy !== "object") {
+      state.activeVehiclePresetByEnergy = loadActiveVehiclePresetMap();
+    }
+    const matching = listPresetsForEnergyType(energyType);
+    const savedId = state.activeVehiclePresetByEnergy[energyType];
+    const savedPreset = savedId ? resolvePresetById(savedId) : null;
+    const current = resolvePresetById(state.activeVehiclePresetId);
+    const chosen = (savedPreset && savedPreset.energyType === energyType)
+      ? savedPreset
+      : (current && current.energyType === energyType)
+        ? current
+        : (resolvePresetById(getDefaultPresetIdForEnergy(energyType)) || matching[0] || getBuiltinVehiclePresets()[0]);
+    if (!chosen) return;
+    state.activeVehiclePresetId = chosen.id;
+    state.activeVehiclePreset = chosen;
+    applyVehiclePresetToProfiles(chosen);
+    saveActiveVehiclePresetId(energyType, chosen.id);
+    renderVehiclePresetControls();
+  }
+
+  function applyVehiclePresetById(presetId, options = {}) {
+    const preset = resolvePresetById(presetId);
+    if (!preset) return;
+    const wasMultiStop = Boolean(state.multiStopRouteRecords);
+    state.activeVehiclePresetId = preset.id;
+    state.activeVehiclePreset = preset;
+    applyVehiclePresetToProfiles(preset);
+    saveActiveVehiclePresetId(preset.energyType || state.energyType, preset.id);
+    state.lastIntentSignature = null;
+    state.multiStopRouteRecords = null;
+    renderVehiclePresetControls();
+    updateEnergyControls({ skipInsight: state.hasPlannedRoute });
+    if (state.hasPlannedRoute) {
+      const base = state.baseRouteRecords[state.selectedRoute]
+        || state.baseRouteRecords.reliable
+        || state.routeRecords.reliable;
+      const needsReplan = wasMultiStop || Boolean(base && !directEnergyState(base).canDirect);
+      if (needsReplan) {
+        const switchVer = ++state.energySwitchVersion;
+        if (state.live && state.AMap) {
+          void replanRoutesViaStations().then(() => {
+            if (switchVer !== state.energySwitchVersion) return;
+            drawAmapRoutes();
+            renderRouteCards();
+          });
+        } else {
+          void finalizeOfflinePlan(() => switchVer === state.energySwitchVersion).then((completed) => {
+            if (!completed || switchVer !== state.energySwitchVersion) return;
+            renderRouteCards();
+          });
+        }
+      } else {
+        calculateRouteRecords();
+        renderRouteCards();
+      }
+    }
+    if (options.announce !== false) {
+      showToast(`已切换车型：${preset.name}`, 2400, "success");
+    }
+  }
+
+  function handleSaveCustomVehicle() {
+    const nameInput = byId("customVehicleName");
+    const capInput = byId("customVehicleCapacity");
+    const consInput = byId("customVehicleConsumption");
+    const peakInput = byId("customVehiclePeakPower");
+    const rawName = String(nameInput?.value || "").trim();
+    if (!rawName) {
+      showToast("请先输入自定义车型名称", 2400, "warning");
+      nameInput?.focus();
+      return;
+    }
+    const capacity = Math.max(10, Math.min(200, Number(capInput?.value) || (state.energyType === "fuel" ? 55 : 85)));
+    const consumptionPer100Km = Math.max(3, Math.min(40, Number(consInput?.value) || (state.energyType === "fuel" ? 8.2 : 16.5)));
+    const peakPowerKw = Math.max(30, Math.min(600, Number(peakInput?.value) || 180));
+    const raw = {
+      id: `custom-${Date.now()}`,
+      name: rawName.slice(0, 32),
+      energyType: state.energyType,
+      custom: true,
+      capacity,
+      consumptionPer100Km,
+      ...(state.energyType === "fuel"
+        ? { tankLiters: capacity, peakPowerKw: null }
+        : state.energyType === "hybrid"
+          ? { batteryKwh: capacity, fuelCapacity: 55, tankLiters: 55, electricConsumptionPer100Km: consumptionPer100Km, fuelConsumptionPer100Km: 5.8, peakPowerKw }
+          : { batteryKwh: capacity, peakPowerKw })
+    };
+    const api = getVehiclePresetsApi();
+    const sanitized = typeof api.sanitizeCustomPreset === "function"
+      ? Object.assign({ custom: true }, api.sanitizeCustomPreset(raw))
+      : raw;
+    if (!sanitized || !sanitized.name) {
+      showToast("车型参数无效，请检查后重试", 2600, "warning");
+      return;
+    }
+    sanitized.custom = true;
+    state.customVehiclePresets = state.customVehiclePresets.filter((item) => item.id !== sanitized.id).concat(sanitized);
+    saveCustomVehiclePresetsToStorage();
+    if (nameInput) nameInput.value = "";
+    const details = byId("customVehicleDetails");
+    if (details) details.open = false;
+    applyVehiclePresetById(sanitized.id, { announce: false });
+    showToast(`已保存并应用自定义车型「${sanitized.name}」`, 2800, "success");
+  }
+
+  function handleDeleteCustomVehicle() {
+    const active = state.activeVehiclePreset;
+    if (!active?.custom) return;
+    const removedName = active.name;
+    state.customVehiclePresets = state.customVehiclePresets.filter((item) => item.id !== active.id);
+    saveCustomVehiclePresetsToStorage();
+    const fallbackId = getDefaultPresetIdForEnergy(state.energyType);
+    applyVehiclePresetById(fallbackId, { announce: false });
+    showToast(`已删除自定义车型「${removedName}」`, 2400, "info");
+  }
+
+  // ---- F2: Departure Window Optimizer ----
+  function resolveTouBadgeSpec(win = {}) {
+    const code = String(win.tariffCode || "").toLowerCase();
+    const tier = String(win.tariffTier || "");
+    if (code.includes("valley") || code.includes("off") || tier.includes("谷")) {
+      return { label: tier || "谷时", cls: "tou-valley" };
+    }
+    if (code.includes("critical") || code.includes("super") || tier.includes("尖峰")) {
+      return { label: tier || "尖峰", cls: "tou-critical" };
+    }
+    if (code.includes("peak") || tier.includes("峰")) {
+      return { label: tier || "峰时", cls: "tou-peak" };
+    }
+    return { label: tier || "平时", cls: "tou-flat" };
+  }
+
+  function hideDepartureWindows() {
+    ++state.departureWindowRequestVersion;
+    if (state.departureWindowAbortController) {
+      try { state.departureWindowAbortController.abort(); } catch { /* ignore */ }
+      state.departureWindowAbortController = null;
+    }
+    state.departureWindowPendingKey = null;
+    state.departureWindowPayload = null;
+    state.departureWindowKey = null;
+    const card = byId("departureWindowCard");
+    if (card) card.hidden = true;
+  }
+
+  function resolveLocalTouTariff(minutes, energyKind = activeEnergyKind()) {
+    if (energyKind === "fuel" || energyKind === "hybridFuel") {
+      return { tariffTier: "基准油价", tariffCode: "flat", touMultiplier: 1.0 };
+    }
+    const m = (((Math.round(Number(minutes) || 0)) % 1440) + 1440) % 1440;
+    if (m >= 23 * 60 || m < 7 * 60) {
+      return { tariffTier: "谷时", tariffCode: "valley", touMultiplier: 0.68 };
+    }
+    if (m >= 19 * 60 && m < 21 * 60) {
+      return { tariffTier: "尖峰", tariffCode: "super-peak", touMultiplier: 1.38 };
+    }
+    if ((m >= 10 * 60 && m < 15 * 60)
+      || (m >= 18 * 60 && m < 19 * 60)
+      || (m >= 21 * 60 && m < 22 * 60)) {
+      return { tariffTier: "峰时", tariffCode: "peak", touMultiplier: 1.28 };
+    }
+    return { tariffTier: "平时", tariffCode: "flat", touMultiplier: 1.0 };
+  }
+
+  function resolveStationTouContext(station, record) {
+    const isFuel = isFuelActive();
+    const energyKind = isFuel ? "fuel" : "electric";
+    if (isFuel) {
+      return { tariffTier: "基准油价", tariffCode: "flat", touMultiplier: 1.0 };
+    }
+    if (station && state.departureWindowPayload
+      && String(state.departureWindowPayload.stationId) === String(station.id)
+      && Array.isArray(state.departureWindowPayload.windows)) {
+      const currentWin = state.departureWindowPayload.windows.find((w) => w.isCurrent)
+        || state.departureWindowPayload.windows[0];
+      if (currentWin && Number.isFinite(Number(currentWin.touMultiplier))) {
+        return {
+          tariffTier: currentWin.tariffTier || resolveLocalTouTariff(currentWin.departureMinutes, energyKind).tariffTier,
+          tariffCode: currentWin.tariffCode || "flat",
+          touMultiplier: Number(currentWin.touMultiplier)
+        };
+      }
+    }
+    const arrivalOffset = Math.max(0, Math.round(Number(station?.arrivalOffsetMinutes) || Number(record?.firstLegKm || 0) * 1.1 || 15));
+    const arrivalMin = Number.isFinite(Number(station?.arrivalMinute))
+      ? Number(station.arrivalMinute)
+      : (Number(state.departureMinutes) || 0) + arrivalOffset;
+    return resolveLocalTouTariff(arrivalMin, energyKind);
+  }
+
+  function resolveStationPaymentPricing(station, record) {
+    const isFuel = isFuelActive();
+    const unit = record?.energyUnit || station?.priceUnit || (isFuel ? "L" : "kWh");
+    const energyAmount = Number(station?.energyAmount ?? record?.energyAmount ?? (isFuel ? 30 : 40));
+    const baseUnitPrice = Number(station?.price || record?.energyUnitPrice || referenceEnergyPrice(isFuel));
+    const tou = resolveStationTouContext(station, record);
+    const effectiveUnitPrice = Number((baseUnitPrice * tou.touMultiplier).toFixed(2));
+    const grossAmount = Number(Number((energyAmount * effectiveUnitPrice).toFixed(2)).toFixed(1));
+    return {
+      unit,
+      energyAmount,
+      baseUnitPrice,
+      touMultiplier: tou.touMultiplier,
+      tariffTier: tou.tariffTier,
+      tariffCode: tou.tariffCode,
+      effectiveUnitPrice,
+      grossAmount
+    };
+  }
+
+  function syncStationForecastsIntoRouteCandidates() {
+    if (!state.routeCandidates || typeof state.routeCandidates !== "object") return;
+    const byStationId = new Map((state.stations || []).map((s) => [String(s.id), s]));
+    const forecastFields = [
+      "wait", "p50", "p90", "occupancy", "forecast", "prediction",
+      "arrivalForecast", "arrivalOffsetMinutes", "arrivalMinute",
+      "method", "forecastMethod", "inputSnapshot", "forecastInputSnapshot",
+      "dataSource", "forecastSource", "asOf", "forecastAsOf", "dataAsOf",
+      "forecastDataAsOf", "status", "riskLabel", "explanation",
+      "confidence", "confidenceScore", "confidenceLevel", "confidenceLabel",
+      "confidenceReasons", "horizonMinutes", "simulation"
+    ];
+    Object.values(state.routeCandidates).forEach((candidate) => {
+      if (!candidate?.station) return;
+      const latest = byStationId.get(String(candidate.station.id));
+      if (!latest) return;
+      const patch = {};
+      forecastFields.forEach((field) => {
+        if (latest[field] !== undefined) patch[field] = latest[field];
+      });
+      candidate.station = Object.assign({}, candidate.station, patch, { detour: candidate.station.detour });
+    });
+  }
+
+  function recomputeMultiStopRecordsFromStations() {
+    if (!state.multiStopRouteRecords || typeof state.multiStopRouteRecords !== "object") return;
+    const byStationId = new Map((state.stations || []).map((s) => [String(s.id), s]));
+    const updatedMap = new Map();
+    const rebuildRecord = (rec) => {
+      if (!rec || !Array.isArray(rec.stops) || !rec.stops.length) return rec;
+      if (updatedMap.has(rec)) return updatedMap.get(rec);
+      const legs = Array.isArray(rec.legs) ? rec.legs : [];
+      const totalDist = Math.max(1, Number(rec.distance || 1));
+      const totalDriveDuration = Math.max(0, Number(rec.duration || 0));
+      let elapsedMinutes = 0;
+      let p50Wait = 0;
+      let waitVariance = 0;
+      let chargeMinutes = 0;
+      let paymentExitMinutesTotal = 0;
+      const stops = rec.stops.map((stop, idx) => {
+        const latest = byStationId.get(String(stop.id));
+        const merged = latest
+          ? Object.assign({}, stop, {
+            wait: latest.wait,
+            p50: latest.p50,
+            p90: latest.p90,
+            occupancy: latest.occupancy,
+            forecast: latest.forecast,
+            prediction: latest.prediction,
+            arrivalForecast: latest.arrivalForecast,
+            method: latest.method ?? latest.forecastMethod ?? stop.method,
+            forecastMethod: latest.forecastMethod ?? latest.method ?? stop.forecastMethod,
+            inputSnapshot: latest.inputSnapshot ?? latest.forecastInputSnapshot ?? stop.inputSnapshot,
+            forecastInputSnapshot: latest.forecastInputSnapshot ?? latest.inputSnapshot ?? stop.forecastInputSnapshot,
+            dataSource: latest.dataSource ?? stop.dataSource,
+            asOf: latest.asOf ?? latest.forecastAsOf ?? stop.asOf,
+            status: latest.status ?? stop.status,
+            riskLabel: latest.riskLabel ?? stop.riskLabel
+          })
+          : Object.assign({}, stop);
+        const legDuration = legs[idx] && Number.isFinite(Number(legs[idx].duration))
+          ? Number(legs[idx].duration)
+          : (Number(stop.legDistanceKm || 0) / totalDist) * totalDriveDuration;
+        elapsedMinutes += Math.max(0, legDuration);
+        const rawP50Val = Number(merged.p50);
+        const rawP90Val = Number(merged.p90);
+        const rawWaitVal = Number(merged.wait);
+        const plannedP50 = Math.max(0, Number.isFinite(rawP50Val) ? rawP50Val : Number.isFinite(rawWaitVal) ? rawWaitVal : Number(stop.plannedP50 || 0));
+        const plannedP90 = Math.max(plannedP50, Number.isFinite(rawP90Val) ? rawP90Val : Number.isFinite(rawWaitVal) ? rawWaitVal : Number(stop.plannedP90 || plannedP50));
+        const stCharge = Math.max(0, Number(merged.chargeMinutes || 0));
+        const stPayExit = Math.max(0, Number(merged.paymentExitMinutes || paymentExitMinutesFor(isFuelActive() ? "fuel" : "electric", merged)));
+        const arrivalMinute = Math.round(state.departureMinutes + elapsedMinutes);
+        p50Wait += plannedP50;
+        const sigma = Math.max(0, (plannedP90 - plannedP50) / Z90);
+        waitVariance += sigma * sigma;
+        chargeMinutes += stCharge;
+        paymentExitMinutesTotal += stPayExit;
+        elapsedMinutes += plannedP50 + stCharge + stPayExit;
+        return Object.assign(merged, {
+          arrivalMinute,
+          plannedP50: Number(plannedP50.toFixed(1)),
+          plannedP90: Number(plannedP90.toFixed(1)),
+          stopMinutesP50: Number((plannedP50 + stCharge + stPayExit).toFixed(1)),
+          stopMinutesP90: Number((plannedP90 + stCharge + stPayExit).toFixed(1))
+        });
+      });
+      const p90Wait = p50Wait + Z90 * Math.sqrt(waitVariance);
+      const serviceExtraMinutes = Math.max(0, Number(rec.servicePlan?.extraMinutes || 0));
+      const totalStopMinutesP50 = Math.round(p50Wait + chargeMinutes + paymentExitMinutesTotal);
+      const totalStopMinutesP90 = Math.round(p90Wait + chargeMinutes + paymentExitMinutesTotal);
+      const total = totalDriveDuration + totalStopMinutesP50 + serviceExtraMinutes;
+      const p90Total = totalDriveDuration + totalStopMinutesP90 + serviceExtraMinutes;
+      const arrival = state.departureMinutes + total;
+      const lateMinutes = hasArrivalDeadline() ? Math.max(0, Math.ceil(arrival - state.deadlineMinutes)) : 0;
+      const baseFeasible = rec.canReachAllStops !== false && rec.targetSocMet !== false && rec.detourWithinLimit !== false && !rec.planningFailure;
+      const feasible = baseFeasible && lateMinutes === 0;
+      const onTime = Math.max(50, Math.min(99, 98 - lateMinutes * 3 - Math.round(p90Wait) * 0.18 - stops.length * 1.5));
+      const next = Object.assign({}, rec, {
+        station: stops[0] || rec.station,
+        stops,
+        wait: Math.round(p50Wait),
+        queueWaitMinutes: Math.round(p50Wait),
+        p50Wait: Math.round(p50Wait),
+        p90Wait: Math.round(p90Wait),
+        totalStopMinutesP50,
+        totalStopMinutesP90,
+        total,
+        p90Total,
+        arrival,
+        lateMinutes,
+        feasible,
+        onTime
+      });
+      updatedMap.set(rec, next);
+      return next;
+    };
+    const nextRecords = {};
+    Object.entries(state.multiStopRouteRecords).forEach(([k, rec]) => {
+      nextRecords[k] = rebuildRecord(rec);
+    });
+    state.multiStopRouteRecords = nextRecords;
+    state.routeCandidates = Object.assign({}, nextRecords);
+  }
+
+  function buildLocalFallbackDepartureWindows(station, record) {
+    const offsets = [0, 30, 60, 90, 120];
+    const baseDepartureMinutes = Number(state.departureMinutes) || 0;
+    const arrivalOffset = Math.max(0, Math.round(Number(station?.arrivalOffsetMinutes) || Number(record?.firstLegKm || 0) * 1.1 || 15));
+    const energyKind = activeEnergyKind();
+    const energyUnits = Math.max(5, Number(record?.energyAmount || station?.energyAmount || (energyKind === "fuel" ? 30 : 42)));
+    const baseUnitPrice = Number(station?.price || referenceEnergyPrice(energyKind === "fuel"));
+    const baseP90 = Math.max(2, Number(station?.p90 || station?.wait || 10));
+    const baseP50 = Math.max(1, Number(station?.p50 || Math.round(baseP90 * 0.65)));
+    const touForMinutes = (mins) => {
+      if (energyKind === "fuel" || energyKind === "hybridFuel") {
+        return { tier: "基准油价", code: "flat", mult: 1.0 };
+      }
+      const m = (((Math.round(Number(mins) || 0)) % 1440) + 1440) % 1440;
+      if (m >= 23 * 60 || m < 7 * 60) return { tier: "谷时", code: "valley", mult: 0.68 };
+      if (m >= 19 * 60 && m < 21 * 60) return { tier: "尖峰", code: "super-peak", mult: 1.38 };
+      if ((m >= 10 * 60 && m < 15 * 60)
+        || (m >= 18 * 60 && m < 19 * 60)
+        || (m >= 21 * 60 && m < 22 * 60)) {
+        return { tier: "峰时", code: "peak", mult: 1.28 };
+      }
+      return { tier: "平时", code: "flat", mult: 1.0 };
+    };
+    const windows = offsets.map((offsetMinutes) => {
+      const departureMinutes = (baseDepartureMinutes + offsetMinutes) % 1440;
+      const arrivalMinutes = (departureMinutes + arrivalOffset) % 1440;
+      const tou = touForMinutes(arrivalMinutes);
+      const waveFactor = (tou.code === "super-peak" || tou.code === "critical")
+        ? 1.25
+        : tou.code === "peak"
+          ? 1.08
+          : tou.code === "valley"
+            ? 0.58
+            : 0.85;
+      const p90Minutes = offsetMinutes === 0 ? Math.round(baseP90) : Math.max(2, Math.round(baseP90 * waveFactor));
+      const p50Minutes = offsetMinutes === 0 ? Math.round(baseP50) : Math.max(1, Math.round(baseP50 * waveFactor));
+      const unitPrice = Number((baseUnitPrice * tou.mult).toFixed(2));
+      const estimatedEnergyCost = Number((energyUnits * unitPrice).toFixed(1));
+      return {
+        offsetMinutes,
+        label: offsetMinutes === 0 ? "现在" : `+${offsetMinutes}分`,
+        departureMinutes,
+        departureClock: formatClock(departureMinutes),
+        arrivalClock: formatClock(arrivalMinutes),
+        waitMinutes: p50Minutes,
+        p50Minutes,
+        p90Minutes,
+        occupancy: Number(station?.occupancy || 0.6),
+        risk: p90Minutes >= 20 ? "forecast-risk" : "forecast-ready",
+        tariffTier: tou.tier,
+        tariffCode: tou.code,
+        touMultiplier: tou.mult,
+        baseUnitPrice,
+        unitPrice,
+        estimatedEnergyCost,
+        waitSavingVsNow: 0,
+        p90SavingVsNow: 0,
+        costSavingVsNow: 0,
+        score: p90Minutes * 1.4 + estimatedEnergyCost * 0.25 + offsetMinutes * 0.04,
+        isCurrent: offsetMinutes === 0,
+        isRecommended: false
+      };
+    });
+    const nowWin = windows[0];
+    windows.forEach((win) => {
+      win.waitSavingVsNow = Math.round(nowWin.waitMinutes - win.waitMinutes);
+      win.p90SavingVsNow = Math.round(nowWin.p90Minutes - win.p90Minutes);
+      win.costSavingVsNow = Number((nowWin.estimatedEnergyCost - win.estimatedEnergyCost).toFixed(1));
+    });
+    const best = windows.slice().sort((a, b) => a.score - b.score)[0] || nowWin;
+    best.isRecommended = true;
+    const recommendation = best.isCurrent
+      ? `当前 ${best.departureClock} 出发综合排队与费用已处于较优窗口（${best.tariffTier}）。`
+      : `延后 ${best.offsetMinutes} 分钟至 ${best.departureClock} 出发（${best.tariffTier}），预计减少排队 ${Math.max(0, best.p90SavingVsNow)} 分、节省补能 ¥${Math.max(0, best.costSavingVsNow).toFixed(1)}。`;
+    return {
+      stationId: String(station?.id || ""),
+      stationName: station?.name || "补能站",
+      energyType: energyKind,
+      energyUnits,
+      baseDepartureMinutes,
+      baseDepartureClock: formatClock(baseDepartureMinutes),
+      windows,
+      bestWindow: best,
+      recommendation
+    };
+  }
+
+  function renderDepartureWindows(payload) {
+    const card = byId("departureWindowCard");
+    const list = byId("departureWindowList");
+    const summary = byId("departureWindowSummary");
+    if (!card || !list) return;
+    const windows = Array.isArray(payload?.windows) ? payload.windows : [];
+    if (!windows.length) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    if (summary) {
+      summary.textContent = displayCopy(payload.recommendation || "对比当前与延后 30–120 分钟出发的排队与电价。");
+    }
+    const nodes = windows.map((win) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "departure-window-pill";
+      if (win.isCurrent) btn.classList.add("is-current");
+      if (win.isRecommended && !win.isCurrent) btn.classList.add("is-recommended");
+      btn.setAttribute("aria-pressed", String(Boolean(win.isCurrent)));
+
+      const top = document.createElement("div");
+      top.className = "departure-pill-top";
+      const labelSpan = document.createElement("span");
+      labelSpan.textContent = win.label || (win.offsetMinutes === 0 ? "现在" : `+${win.offsetMinutes}分`);
+      top.appendChild(labelSpan);
+      if (win.isRecommended && !win.isCurrent) {
+        const badge = document.createElement("span");
+        badge.className = "departure-pill-badge";
+        badge.textContent = "推荐";
+        top.appendChild(badge);
+      } else if (win.isCurrent) {
+        const badge = document.createElement("span");
+        badge.className = "departure-pill-badge current";
+        badge.textContent = "当前";
+        top.appendChild(badge);
+      }
+
+      const clock = document.createElement("div");
+      clock.className = "departure-pill-clock";
+      clock.textContent = win.departureClock || formatClock(win.departureMinutes);
+
+      const wait = document.createElement("div");
+      wait.className = "departure-pill-wait";
+      const p90 = Math.round(Number(win.p90Minutes ?? win.waitMinutes ?? 0));
+      wait.textContent = isUserDisplayMode() ? `排队 ${p90}分` : `P90 ${p90}分`;
+
+      const foot = document.createElement("div");
+      foot.className = "departure-pill-foot";
+      const touSpec = resolveTouBadgeSpec(win);
+      const touBadge = document.createElement("span");
+      touBadge.className = `tou-badge ${touSpec.cls}`;
+      touBadge.textContent = touSpec.label;
+      const cost = document.createElement("span");
+      cost.className = "departure-pill-cost";
+      cost.textContent = `¥${Math.round(Number(win.estimatedEnergyCost || 0))}`;
+      foot.append(touBadge, cost);
+
+      btn.append(top, clock, wait, foot);
+      if (!win.isCurrent) {
+        btn.addEventListener("click", () => { void applyDepartureWindow(win); });
+      }
+      return btn;
+    });
+    list.replaceChildren(...nodes);
+  }
+
+  async function applyDepartureWindow(win) {
+    if (!win || !Number.isFinite(Number(win.departureMinutes))) return;
+    state.departureApplyVersion = (state.departureApplyVersion || 0) + 1;
+    const applyVer = state.departureApplyVersion;
+    state.departureMinutes = ((Math.round(Number(win.departureMinutes)) % 1440) + 1440) % 1440;
+    state.stationForecastScenarioKey = null;
+    state.lastIntentSignature = null;
+    state.departureWindowKey = null;
+    state.departureWindowPendingKey = null;
+    syncManualControls();
+    showToast(`已切换至 ${win.departureClock || formatClock(state.departureMinutes)} 错峰出发`, 2600, "success");
+    if (state.hasPlannedRoute) {
+      const routeKey = state.selectedRoute || "reliable";
+      const base = state.baseRouteRecords[routeKey] || state.routeRecords[routeKey]
+        || state.baseRouteRecords.reliable || state.routeRecords.reliable;
+      if (base) {
+        await ensureStationForecasts(base, routeKey);
+        if (applyVer !== state.departureApplyVersion) return;
+      }
+      if (state.multiStopRouteRecords) {
+        recomputeMultiStopRecordsFromStations();
+      } else {
+        syncStationForecastsIntoRouteCandidates();
+      }
+      calculateRouteRecords();
+      renderRouteCards();
+    } else if (state.selectedStation) {
+      void requestDepartureWindows(state.selectedStation, state.routeRecords[state.selectedRoute]);
+    }
+  }
+
+  async function requestDepartureWindows(station, record) {
+    if (!station) {
+      hideDepartureWindows();
+      return;
+    }
+    const energyKind = activeEnergyKind();
+    const energyUnits = Math.max(5, Number(record?.energyAmount || station?.energyAmount || (energyKind === "fuel" ? 30 : 42)));
+    const arrivalOffsetMinutes = Math.max(0, Math.round(Number(station?.arrivalOffsetMinutes) || Number(record?.firstLegKm || 0) * 1.1 || 15));
+    const reqKey = `${station.id}|${state.departureMinutes}|${arrivalOffsetMinutes}|${energyKind}|${energyUnits.toFixed(1)}|${Number(station.p90 || 0)}`;
+    if (state.departureWindowKey === reqKey && state.departureWindowPayload) {
+      renderDepartureWindows(state.departureWindowPayload);
+      return;
+    }
+    if (state.departureWindowPendingKey === reqKey && state.departureWindowAbortController) {
+      return;
+    }
+    const requestId = ++state.departureWindowRequestVersion;
+    if (state.departureWindowAbortController) {
+      try { state.departureWindowAbortController.abort(); } catch { /* ignore */ }
+    }
+    const controller = new AbortController();
+    state.departureWindowAbortController = controller;
+    state.departureWindowPendingKey = reqKey;
+    const timeoutId = window.setTimeout(() => controller.abort(), 6000);
+    const card = byId("departureWindowCard");
+    if (card) card.hidden = false;
+    setText("departureWindowSummary", "正在对比未来 2 小时出发窗口的排队与峰谷电价…");
+    try {
+      const response = await fetch("/api/departure-windows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          stations: [buildStationForecastInput(station)],
+          stationId: String(station.id),
+          baseDepartureMinutes: state.departureMinutes,
+          arrivalOffsetMinutes,
+          energyType: energyKind,
+          energyUnits: Number(energyUnits.toFixed(1)),
+          offsets: [0, 30, 60, 90, 120],
+          scenario: {
+            demandFactor: 1,
+            trafficFactor: 1,
+            weatherFactor: Number(state.weather?.weatherFactor) || 1
+          }
+        }),
+        signal: controller.signal
+      });
+      const payload = await response.json().catch(() => null);
+      if (requestId !== state.departureWindowRequestVersion
+        || !state.selectedStation
+        || String(state.selectedStation.id) !== String(station.id)) return;
+      if (response.ok && payload && Array.isArray(payload.windows) && payload.windows.length) {
+        state.departureWindowPayload = payload;
+        state.departureWindowKey = reqKey;
+        renderDepartureWindows(payload);
+        renderTripCostBreakdown(station, record || state.routeRecords[state.selectedRoute]);
+        return;
+      }
+      throw new Error("DEPARTURE_WINDOW_FALLBACK");
+    } catch {
+      if (requestId !== state.departureWindowRequestVersion
+        || !state.selectedStation
+        || String(state.selectedStation.id) !== String(station.id)) return;
+      const fallback = buildLocalFallbackDepartureWindows(station, record);
+      state.departureWindowPayload = fallback;
+      state.departureWindowKey = reqKey;
+      renderDepartureWindows(fallback);
+      renderTripCostBreakdown(station, record || state.routeRecords[state.selectedRoute]);
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (state.departureWindowAbortController === controller) {
+        state.departureWindowAbortController = null;
+      }
+      if (state.departureWindowPendingKey === reqKey) {
+        state.departureWindowPendingKey = null;
+      }
+    }
+  }
+
+  // ---- F3: Trip Cost Breakdown & Cost Ledger ----
+  function computeCurrentTripBreakdown(station, record) {
+    const activeRecord = record || state.routeRecords[state.selectedRoute] || null;
+    if (!activeRecord && !station) return null;
+    const isFuel = isFuelActive();
+    const energyType = isFuel ? "fuel" : "electric";
+    const distanceKm = Math.max(0, Number(activeRecord?.distance || activeRecord?.baseDistance || 0));
+    const directTrip = Boolean(activeRecord?.directTrip);
+    const energyNeeded = directTrip
+      ? 0
+      : Math.max(0, Number(activeRecord?.energyAmount ?? station?.energyAmount ?? 0));
+    const baseUnitPrice = Number(station?.price || activeRecord?.energyUnitPrice || referenceEnergyPrice(isFuel));
+    const tou = resolveStationTouContext(station, activeRecord);
+    const touMultiplier = tou.touMultiplier;
+    const peakTouMultiplier = isFuel ? 1 : 1.38;
+    const tolls = Math.max(0, Number(activeRecord?.tolls ?? activeRecord?.roadTolls ?? 0));
+    const couponDiscount = station ? activeDiversionDiscount(station.id, station.name) : 0;
+    const api = getVehiclePresetsApi();
+    if (typeof api.computeTripCostBreakdown === "function") {
+      const res = api.computeTripCostBreakdown({
+        energyType,
+        energyNeeded,
+        unitPrice: baseUnitPrice,
+        touMultiplier,
+        peakTouMultiplier,
+        tolls,
+        couponDiscount,
+        distanceKm
+      });
+      if (res && typeof res === "object") {
+        const totalTripCost = Number(res.totalTripCost ?? res.totalCost ?? 0);
+        const touSavingsVsPeak = Number(res.touSavingsVsPeak ?? res.touSavings ?? 0);
+        return Object.assign({}, res, {
+          tariffTier: tou.tariffTier,
+          tariffCode: tou.tariffCode,
+          totalTripCost,
+          totalCost: totalTripCost,
+          touSavingsVsPeak,
+          touSavings: touSavingsVsPeak
+        });
+      }
+    }
+    const effectiveUnitPrice = Number((baseUnitPrice * touMultiplier).toFixed(2));
+    const grossEnergyCost = Number((energyNeeded * effectiveUnitPrice).toFixed(1));
+    const appliedDiscount = Math.min(grossEnergyCost, Math.max(0, couponDiscount));
+    const netEnergyCost = Number(Math.max(0, grossEnergyCost - appliedDiscount).toFixed(1));
+    const totalTripCost = Number((netEnergyCost + tolls).toFixed(1));
+    const peakCost = Number((energyNeeded * baseUnitPrice * peakTouMultiplier).toFixed(1));
+    const touSavingsVsPeak = Number(Math.max(0, peakCost - grossEnergyCost).toFixed(1));
+    const costPerKm = distanceKm > 0 ? Number((totalTripCost / distanceKm).toFixed(2)) : 0;
+    return {
+      energyNeeded,
+      unitPrice: effectiveUnitPrice,
+      tariffTier: tou.tariffTier,
+      tariffCode: tou.tariffCode,
+      grossEnergyCost,
+      couponDiscount: appliedDiscount,
+      netEnergyCost,
+      tolls,
+      totalTripCost,
+      touSavingsVsPeak,
+      costPerKm
+    };
+  }
+
+  function renderTripCostBreakdown(station, record) {
+    const card = byId("tripCostBreakdownCard");
+    if (!card) return;
+    const activeRecord = record || state.routeRecords[state.selectedRoute] || null;
+    if (!station && (!activeRecord || !activeRecord.directTrip)) {
+      card.hidden = true;
+      return;
+    }
+    const breakdown = computeCurrentTripBreakdown(station, activeRecord);
+    if (!breakdown) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    setText("tripCostEnergyValue", `¥${Number(breakdown.grossEnergyCost || 0).toFixed(1)}`);
+    setText("tripCostTollsValue", `¥${Number(breakdown.tolls || 0).toFixed(1)}`);
+    const couponRow = byId("tripCostCouponRow");
+    const couponDiscount = Number(breakdown.couponDiscount || 0);
+    if (couponRow) couponRow.hidden = couponDiscount <= 0;
+    setText("tripCostCouponValue", `−¥${couponDiscount.toFixed(1)}`);
+    setText("tripCostTouSavingValue", `¥${Number(breakdown.touSavingsVsPeak || 0).toFixed(1)}`);
+    setText("tripCostPerKmValue", `¥${Number(breakdown.costPerKm || 0).toFixed(2)}/km`);
+    setText("tripCostTotalValue", `合计预估 ¥${Number(breakdown.totalTripCost || 0).toFixed(1)}`);
+  }
+
+  function loadCostLedgerFromStorage() {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(COST_LEDGER_STORAGE_KEY) || "[]");
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((item) => item && typeof item === "object" && !Array.isArray(item));
+    } catch {
+      return [];
+    }
+  }
+
+  function saveCostLedgerToStorage() {
+    try {
+      window.localStorage.setItem(COST_LEDGER_STORAGE_KEY, JSON.stringify(state.costLedger || []));
+    } catch { /* ignore */ }
+  }
+
+  function recordTripToCostLedger(options = {}) {
+    if (options.dedupeKey && state.recordedPaymentLedgerKeys.has(options.dedupeKey)) {
+      return null;
+    }
+    const record = options.record || state.routeRecords[state.selectedRoute] || null;
+    const station = options.station || state.selectedStation || record?.station || null;
+    const breakdown = computeCurrentTripBreakdown(station, record) || {
+      energyNeeded: 0,
+      grossEnergyCost: 0,
+      couponDiscount: 0,
+      netEnergyCost: 0,
+      tolls: 0,
+      totalTripCost: 0,
+      touSavingsVsPeak: 0,
+      costPerKm: 0
+    };
+    const couponDiscount = options.couponDiscount != null ? Number(options.couponDiscount) : Number(breakdown.couponDiscount || 0);
+    const grossEnergyCost = options.grossAmount != null ? Number(options.grossAmount) : Number(breakdown.grossEnergyCost || 0);
+    const tolls = Number(breakdown.tolls || 0);
+    const netEnergyCost = options.netPaid != null
+      ? Number(options.netPaid)
+      : Math.max(0, Number((grossEnergyCost - couponDiscount).toFixed(1)));
+    const totalPaid = Number((netEnergyCost + tolls).toFixed(1));
+    const touSaving = Number(breakdown.touSavingsVsPeak || 0);
+    const totalSavings = Number((couponDiscount + touSaving).toFixed(1));
+    const distanceKm = Number((Number(record?.distance || record?.baseDistance || 0)).toFixed(1));
+    const presetName = state.activeVehiclePreset?.name || (isFuelActive() ? "燃油车" : "纯电车");
+    const recordedAt = new Date().toISOString();
+    const entry = {
+      id: `ledger-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: recordedAt,
+      recordedAt,
+      origin: state.originName || DEFAULT_ORIGIN.name,
+      destination: state.destinationName || "目的地",
+      stationName: station?.name || (record?.directTrip ? "直达无需补能" : "沿线补能站"),
+      presetId: state.activeVehiclePresetId || "ev-standard",
+      presetName,
+      vehicleName: presetName,
+      energyType: state.energyType,
+      distanceKm,
+      energyNeeded: Number(breakdown.energyNeeded || 0),
+      grossEnergyCost,
+      netEnergyCost,
+      tolls,
+      couponDiscount,
+      touSavings: touSaving,
+      touSavingsVsPeak: touSaving,
+      totalSavings,
+      totalCost: totalPaid,
+      totalPaid,
+      netPaid: totalPaid,
+      costPerKm: distanceKm > 0 ? Number((totalPaid / distanceKm).toFixed(2)) : 0,
+      waitSavedMinutes: Number(state.departureWindowPayload?.bestWindow?.waitSavingVsNow || 0),
+      source: options.source || "manual"
+    };
+    if (options.dedupeKey) state.recordedPaymentLedgerKeys.add(options.dedupeKey);
+    state.costLedger = [entry].concat(state.costLedger || []).slice(0, 100);
+    saveCostLedgerToStorage();
+    renderCostLedger();
+    return entry;
+  }
+
+  function summarizeCostLedgerEntries(entries) {
+    const cleanEntries = Array.isArray(entries)
+      ? entries.filter((item) => item && typeof item === "object" && !Array.isArray(item))
+      : [];
+    const api = getVehiclePresetsApi();
+    if (typeof api.summarizeLedger === "function") {
+      const res = api.summarizeLedger(cleanEntries);
+      if (res && typeof res === "object") {
+        return {
+          count: Number(res.count ?? res.tripCount ?? 0) || 0,
+          totalPaid: Number(res.totalPaid ?? res.totalCost ?? 0) || 0,
+          totalSavings: Number(res.totalSavings ?? 0) || 0,
+          totalDistanceKm: Number(res.totalDistanceKm ?? 0) || 0,
+          avgCostPerKm: Number(res.avgCostPerKm ?? res.averageCostPerKm ?? 0) || 0
+        };
+      }
+    }
+    const safeNum = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const count = cleanEntries.length;
+    const totalPaid = Number(cleanEntries.reduce((sum, e) => sum + safeNum(e.totalPaid ?? e.netPaid ?? e.totalCost), 0).toFixed(1));
+    const totalSavings = Number(cleanEntries.reduce((sum, e) => sum + safeNum(e.totalSavings ?? (safeNum(e.couponDiscount) + safeNum(e.touSavingsVsPeak ?? e.touSavings))), 0).toFixed(1));
+    const totalDistanceKm = Number(cleanEntries.reduce((sum, e) => sum + safeNum(e.distanceKm), 0).toFixed(1));
+    const avgCostPerKm = totalDistanceKm > 0 ? Number((totalPaid / totalDistanceKm).toFixed(2)) : 0;
+    return { count, totalPaid, totalSavings, totalDistanceKm, avgCostPerKm };
+  }
+
+  function renderCostLedger() {
+    const listEl = byId("costLedgerList");
+    const safeNum = (v, fallback = 0) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : fallback;
+    };
+    const safeStr = (v, fallback = "") => (v === null || v === undefined || typeof v === "object" ? fallback : String(v));
+    const entries = (Array.isArray(state.costLedger) ? state.costLedger : [])
+      .filter((item) => item && typeof item === "object" && !Array.isArray(item));
+    if (entries.length !== (Array.isArray(state.costLedger) ? state.costLedger.length : 0)) {
+      state.costLedger = entries;
+    }
+    const summary = summarizeCostLedgerEntries(entries);
+    setText("costLedgerCountMeta", `${summary.count} 笔记录`);
+    setText("ledgerKpiCount", `${summary.count} 次`);
+    setText("ledgerKpiPaid", `¥${safeNum(summary.totalPaid, 0).toFixed(1)}`);
+    setText("ledgerKpiSavings", `¥${safeNum(summary.totalSavings, 0).toFixed(1)}`);
+    setText("ledgerKpiAvgPerKm", `¥${safeNum(summary.avgCostPerKm, 0).toFixed(2)}`);
+    if (!listEl) return;
+    if (!entries.length) {
+      const empty = document.createElement("div");
+      empty.className = "ledger-empty";
+      empty.textContent = "暂无行程费用记录；在站点详情点击“记入费用账本”或完成模拟结算后自动记录。";
+      listEl.replaceChildren(empty);
+      return;
+    }
+    const rowNodes = entries.map((entry) => {
+      const row = document.createElement("div");
+      row.className = "ledger-entry";
+      const main = document.createElement("div");
+      main.className = "ledger-entry-main";
+      const routeLine = document.createElement("div");
+      routeLine.className = "ledger-entry-route";
+      routeLine.textContent = `${safeStr(entry.origin, "起点") || "起点"} → ${safeStr(entry.destination, "目的地") || "目的地"}`;
+      const metaLine = document.createElement("div");
+      metaLine.className = "ledger-entry-meta";
+      metaLine.textContent = `${safeStr(entry.presetName || entry.vehicleName, "默认车型") || "默认车型"} · ${safeNum(entry.distanceKm, 0).toFixed(1)} km · ${safeStr(entry.stationName, "")}`;
+      main.append(routeLine, metaLine);
+
+      const side = document.createElement("div");
+      side.className = "ledger-entry-side";
+      const costBox = document.createElement("div");
+      costBox.className = "ledger-entry-cost";
+      const paidStrong = document.createElement("strong");
+      paidStrong.textContent = `¥${safeNum(entry.totalPaid ?? entry.netPaid ?? entry.totalCost, 0).toFixed(1)}`;
+      costBox.appendChild(paidStrong);
+      const saved = safeNum(entry.totalSavings, 0);
+      if (saved > 0.05) {
+        const saveBadge = document.createElement("span");
+        saveBadge.className = "ledger-saving-badge";
+        saveBadge.textContent = `省 ¥${saved.toFixed(1)}`;
+        costBox.appendChild(saveBadge);
+      }
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "ledger-delete-btn";
+      delBtn.setAttribute("aria-label", "删除此条费用记录");
+      delBtn.title = "删除记录";
+      const icon = document.createElement("i");
+      icon.setAttribute("data-lucide", "trash-2");
+      delBtn.appendChild(icon);
+      delBtn.addEventListener("click", () => {
+        state.costLedger = state.costLedger.filter((item) => (entry.id !== undefined ? item?.id !== entry.id : item !== entry));
+        saveCostLedgerToStorage();
+        renderCostLedger();
+        showToast("已删除费用记录", 2000, "info");
+      });
+      side.append(costBox, delBtn);
+      row.append(main, side);
+      return row;
+    });
+    listEl.replaceChildren(...rowNodes);
+    refreshIcons(listEl);
+  }
+
+  function exportCostLedgerCsv() {
+    const entries = (Array.isArray(state.costLedger) ? state.costLedger : [])
+      .filter((item) => item && typeof item === "object" && !Array.isArray(item));
+    if (!entries.length) {
+      showToast("账本暂无记录可导出", 2200, "warning");
+      return;
+    }
+    const api = getVehiclePresetsApi();
+    let csv = "";
+    if (typeof api.exportLedgerToCsv === "function") {
+      csv = api.exportLedgerToCsv(entries);
+    } else {
+      const esc = (v) => {
+        let str = String(v ?? "");
+        if (/^[\s\uFEFF\u00A0]*[=+\-@]|^[\t\r\n]/.test(str)) str = "'" + str;
+        return `"${str.replace(/"/g, '""')}"`;
+      };
+      const header = ["时间", "起点", "目的地", "站点", "车型", "里程(km)", "实付(元)", "累计省费(元)", "单公里(元/km)"];
+      const rows = entries.map((e) => [
+        e.recordedAt || "",
+        e.origin || "",
+        e.destination || "",
+        e.stationName || "",
+        e.presetName || "",
+        Number(e.distanceKm || 0).toFixed(1),
+        Number(e.totalPaid ?? e.netPaid ?? 0).toFixed(1),
+        Number(e.totalSavings || 0).toFixed(1),
+        Number(e.costPerKm || 0).toFixed(2)
+      ].map(esc).join(","));
+      csv = [header.map(esc).join(",")].concat(rows).join("\n");
+    }
+    const csvContent = csv.startsWith("\uFEFF") ? csv : "\uFEFF" + csv;
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `flowtwin-cost-ledger-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast(`已导出 ${entries.length} 条账本记录为 CSV`, 2600, "success");
+  }
+
+  // ---- F4: Operator Pareto ROI Curve + Coupon Loop ----
+  function formatParetoPointReadout(point) {
+    if (!point) return "点击下方券档或曲线节点可快速切换券额并重新试算。";
+    const tags = [];
+    if (point.isParetoOptimal) tags.push("Pareto 前沿");
+    if (point.isRecommended) tags.push("推荐档位");
+    if (point.isCurrent) tags.push("当前试算");
+    const prefix = tags.length ? `【${tags.join(" · ")}】` : "";
+    const isBaselineZero = Boolean(point.isBaseline) || Number(point.couponAmount || 0) <= 0;
+    const roiPart = isBaselineZero
+      ? "零补贴基线"
+      : `场景 ROI ${Number(point.scenarioRoi || 0).toFixed(2)}x`;
+    return `${prefix}券额 ¥${Number(point.couponAmount || 0).toFixed(0)} · 预计分流 ${Math.round(Number(point.divertedVehicles || 0))} 辆 · 平台成本 ¥${Number(point.platformCouponCost || 0).toFixed(1)} · ${roiPart} · 策略后 P90 ${Number(point.p90WaitAfter || 0).toFixed(1)} 分`;
+  }
+
+  function applyParetoCouponTier(couponAmount) {
+    const slider = byId("discountSlider");
+    if (!slider) return;
+    slider.value = String(Math.round(Number(couponAmount || 0)));
+    setText("discountValue", `¥${slider.value}`);
+    void simulateOperatorStrategy();
+  }
+
+  function renderOperatorParetoCurve(paretoCurve) {
+    const card = byId("operatorParetoCard");
+    const svg = byId("operatorParetoChart");
+    const tiersEl = byId("operatorParetoTiers");
+    const readoutEl = byId("operatorParetoReadout");
+    if (!card || !svg || !tiersEl) return;
+    const points = Array.isArray(paretoCurve) ? paretoCurve : [];
+    if (!points.length) {
+      card.hidden = true;
+      svg.replaceChildren();
+      tiersEl.replaceChildren();
+      return;
+    }
+    card.hidden = false;
+    const svgNs = "http://www.w3.org/2000/svg";
+    const createSvg = (tag, attrs = {}) => {
+      const node = document.createElementNS(svgNs, tag);
+      Object.entries(attrs).forEach(([k, v]) => node.setAttribute(k, String(v)));
+      return node;
+    };
+
+    const width = 520;
+    const height = 170;
+    const padL = 40;
+    const padR = 48;
+    const padT = 18;
+    const padB = 28;
+    const plotW = width - padL - padR;
+    const plotH = height - padT - padB;
+    const isBaselineZero = (pt) => Boolean(pt?.isBaseline) || Number(pt?.couponAmount || 0) <= 0;
+    const nonZeroPoints = points.filter((p) => !isBaselineZero(p));
+    const scaleSource = nonZeroPoints.length ? nonZeroPoints : points;
+    const roiVals = scaleSource.map((p) => Number(p.scenarioRoi)).filter(Number.isFinite);
+    const actualMinRoi = roiVals.length ? Math.min(...roiVals) : 0;
+    const actualMaxRoi = roiVals.length ? Math.max(...roiVals) : 1.2;
+    const minRoi = actualMinRoi < 0 ? Math.min(-0.5, actualMinRoi * 1.15) : 0;
+    const maxRoi = Math.max(1.2, actualMaxRoi * 1.12);
+    const roiSpan = Math.max(0.5, maxRoi - minRoi);
+
+    const maxDiverted = Math.max(6, ...points.map((p) => Number(p.divertedVehicles || 0))) * 1.15;
+    const stepX = points.length > 1 ? plotW / (points.length - 1) : plotW / 2;
+    const xAt = (idx) => (points.length > 1 ? padL + idx * stepX : padL + plotW / 2);
+    const yDiverted = (val) => padT + plotH - (Math.max(0, Number(val || 0)) / maxDiverted) * plotH;
+    const yRoi = (val) => {
+      const num = Number.isFinite(Number(val)) ? Number(val) : 0;
+      const clamped = Math.max(minRoi, Math.min(maxRoi, num));
+      return padT + plotH - ((clamped - minRoi) / roiSpan) * plotH;
+    };
+
+    svg.replaceChildren();
+    // Horizontal grid lines + left axis ticks (diverted vehicles)
+    for (let i = 0; i <= 3; i += 1) {
+      const ratio = i / 3;
+      const y = padT + plotH * (1 - ratio);
+      svg.appendChild(createSvg("line", { x1: padL, y1: y.toFixed(1), x2: width - padR, y2: y.toFixed(1), stroke: "#e5e9e6", "stroke-width": "1" }));
+      const leftLabel = createSvg("text", { x: padL - 6, y: (y + 3).toFixed(1), "text-anchor": "end", fill: "#5f78b3", "font-size": "9" });
+      leftLabel.textContent = `${Math.round(maxDiverted * ratio)}辆`;
+      svg.appendChild(leftLabel);
+    }
+
+    // Subtle 0.0x baseline axis when negative ROI is present
+    const zeroY = yRoi(0);
+    if (minRoi < 0) {
+      svg.appendChild(createSvg("line", {
+        x1: padL,
+        y1: zeroY.toFixed(1),
+        x2: width - padR,
+        y2: zeroY.toFixed(1),
+        stroke: "#94a3b8",
+        "stroke-width": "1",
+        "stroke-dasharray": "3 3"
+      }));
+    }
+
+    // ROI = 1.0x green dashed breakeven line
+    const breakevenY = yRoi(1.0);
+    svg.appendChild(createSvg("line", {
+      x1: padL,
+      y1: breakevenY.toFixed(1),
+      x2: width - padR,
+      y2: breakevenY.toFixed(1),
+      stroke: "#15803d",
+      "stroke-width": "1.3",
+      "stroke-dasharray": "4 3"
+    }));
+    const beLabel = createSvg("text", { x: width - padR - 4, y: (breakevenY - 4).toFixed(1), "text-anchor": "end", fill: "#15803d", "font-size": "9", "font-weight": "700" });
+    beLabel.textContent = "ROI=1.0x 盈亏线";
+    svg.appendChild(beLabel);
+
+    // Right Y-axis ROI labels (+maxRoi, 1.0x, 0.0x if minRoi < 0, minRoi)
+    const rightTicks = [
+      { y: padT, text: `+${maxRoi.toFixed(1)}x`, fill: "#168f7e", weight: "600" },
+      { y: breakevenY, text: "1.0x", fill: "#15803d", weight: "700" },
+      ...(minRoi < 0 ? [{ y: zeroY, text: "0.0x", fill: "#64748b", weight: "600" }] : []),
+      { y: padT + plotH, text: `${minRoi.toFixed(1)}x`, fill: minRoi < 0 ? "#b45309" : "#168f7e", weight: "600" }
+    ];
+    const placedYs = [];
+    rightTicks.forEach((tick) => {
+      if (placedYs.some((py) => Math.abs(py - tick.y) < 11)) return;
+      placedYs.push(tick.y);
+      const label = createSvg("text", {
+        x: width - padR + 6,
+        y: (tick.y + 3).toFixed(1),
+        "text-anchor": "start",
+        fill: tick.fill,
+        "font-size": "9",
+        "font-weight": tick.weight
+      });
+      label.textContent = tick.text;
+      svg.appendChild(label);
+    });
+
+    // Bars for diverted vehicles
+    const barW = Math.min(26, Math.max(12, stepX * 0.44));
+    points.forEach((pt, idx) => {
+      const cx = xAt(idx);
+      const barTop = yDiverted(pt.divertedVehicles);
+      const barH = Math.max(1, padT + plotH - barTop);
+      svg.appendChild(createSvg("rect", {
+        x: (cx - barW / 2).toFixed(1),
+        y: barTop.toFixed(1),
+        width: barW.toFixed(1),
+        height: barH.toFixed(1),
+        rx: "3",
+        fill: pt.isCurrent ? "rgba(74, 125, 240, 0.52)" : "rgba(74, 125, 240, 0.2)"
+      }));
+      const xLabel = createSvg("text", { x: cx.toFixed(1), y: height - 9, "text-anchor": "middle", fill: pt.isCurrent ? "#2c52a3" : "#687074", "font-size": "10", "font-weight": pt.isCurrent ? "700" : "500" });
+      xLabel.textContent = `¥${Number(pt.couponAmount || 0).toFixed(0)}`;
+      svg.appendChild(xLabel);
+    });
+
+    // Green polyline for non-zero coupon tiers (never distorted by ¥0 baseline)
+    const roiLinePoints = points
+      .map((pt, idx) => (isBaselineZero(pt) ? null : `${xAt(idx).toFixed(1)},${yRoi(pt.scenarioRoi).toFixed(1)}`))
+      .filter(Boolean)
+      .join(" ");
+    if (roiLinePoints) {
+      svg.appendChild(createSvg("polyline", {
+        points: roiLinePoints,
+        fill: "none",
+        stroke: "#168f7e",
+        "stroke-width": "2.2",
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round"
+      }));
+    }
+
+    // Interactive SVG nodes with Pareto stars
+    points.forEach((pt, idx) => {
+      const zeroTier = isBaselineZero(pt);
+      const cx = xAt(idx);
+      const cy = zeroTier ? yRoi(0) : yRoi(pt.scenarioRoi);
+      const group = createSvg("g", { class: "pareto-node", tabindex: "0", role: "button", "aria-label": `切换平台券至 ¥${pt.couponAmount}` });
+      if (pt.isRecommended || pt.isCurrent) {
+        group.appendChild(createSvg("circle", {
+          cx: cx.toFixed(1),
+          cy: cy.toFixed(1),
+          r: "8",
+          fill: pt.isCurrent ? "rgba(74, 125, 240, 0.22)" : "rgba(22, 143, 126, 0.2)"
+        }));
+      }
+      const dotFill = zeroTier
+        ? "#94a3b8"
+        : pt.isParetoOptimal
+          ? "#f59e0b"
+          : Number(pt.scenarioRoi) < 0
+            ? "#d97706"
+            : "#168f7e";
+      group.appendChild(createSvg("circle", {
+        cx: cx.toFixed(1),
+        cy: cy.toFixed(1),
+        r: pt.isCurrent ? "5" : "4",
+        fill: dotFill,
+        stroke: "#ffffff",
+        "stroke-width": "1.6"
+      }));
+      if (pt.isParetoOptimal && !zeroTier) {
+        const star = createSvg("text", { x: cx.toFixed(1), y: (cy - 9).toFixed(1), "text-anchor": "middle", fill: "#d97706", "font-size": "10", "font-weight": "700" });
+        star.textContent = "★";
+        group.appendChild(star);
+      }
+      const focusHandler = () => { if (readoutEl) readoutEl.textContent = formatParetoPointReadout(pt); };
+      group.addEventListener("mouseenter", focusHandler);
+      group.addEventListener("focus", focusHandler);
+      group.addEventListener("click", () => applyParetoCouponTier(pt.couponAmount));
+      group.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          applyParetoCouponTier(pt.couponAmount);
+        }
+      });
+      svg.appendChild(group);
+    });
+
+    const activePoint = points.find((p) => p.isCurrent) || points.find((p) => p.isRecommended) || points[0];
+    if (readoutEl) readoutEl.textContent = formatParetoPointReadout(activePoint);
+
+    // Quick-select tier buttons
+    const tierButtons = points.map((pt) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "pareto-tier-btn";
+      if (pt.isCurrent) btn.classList.add("is-current");
+      if (pt.isRecommended) btn.classList.add("is-recommended");
+      btn.appendChild(document.createTextNode(`¥${Number(pt.couponAmount || 0).toFixed(0)}`));
+      if (pt.isParetoOptimal && !isBaselineZero(pt)) {
+        const starSpan = document.createElement("span");
+        starSpan.className = "pareto-tier-star";
+        starSpan.textContent = "★";
+        starSpan.title = "Pareto 前沿档位";
+        btn.appendChild(starSpan);
+      }
+      btn.addEventListener("mouseenter", () => { if (readoutEl) readoutEl.textContent = formatParetoPointReadout(pt); });
+      btn.addEventListener("click", () => applyParetoCouponTier(pt.couponAmount));
+      return btn;
+    });
+    tiersEl.replaceChildren(...tierButtons);
+  }
+
+  function loadSessionCouponMap(storageKey) {
+    try {
+      const parsed = JSON.parse(window.sessionStorage.getItem(storageKey) || "[]");
+      if (Array.isArray(parsed)) return new Map(parsed);
+    } catch { /* ignore */ }
+    return new Map();
+  }
+
+  function saveSessionCouponMap(storageKey, map) {
+    try {
+      window.sessionStorage.setItem(storageKey, JSON.stringify(Array.from(map.entries())));
+    } catch { /* ignore */ }
+  }
+
+  function couponStationMatch(campaignOrClaim, station) {
+    if (!campaignOrClaim || !station) return false;
+    if (campaignOrClaim.stationId && station.id && String(campaignOrClaim.stationId) === String(station.id)) return true;
+    const cName = String(campaignOrClaim.stationName || "").trim();
+    const sName = String(station.name || "").trim();
+    return Boolean(cName && sName && cName === sName);
+  }
+
+  function findActiveCampaignForStation(station) {
+    if (!station) return null;
+    const campaigns = Array.isArray(state.activeCoupons) ? state.activeCoupons : [];
+    return campaigns.find((c) => c && c.status === "active" && couponStationMatch(c, station)) || null;
+  }
+
+  function getClaimedCouponForStation(station) {
+    if (!station) return null;
+    if (station.id && state.claimedCouponsByStation.has(String(station.id))) {
+      return state.claimedCouponsByStation.get(String(station.id));
+    }
+    for (const claim of state.claimedCouponsByStation.values()) {
+      if (couponStationMatch(claim, station)) return claim;
+    }
+    return null;
+  }
+
+  function getRedeemedCouponForStation(station) {
+    if (!station) return null;
+    if (station.id && state.redeemedCouponsByStation.has(String(station.id))) {
+      return state.redeemedCouponsByStation.get(String(station.id));
+    }
+    for (const item of state.redeemedCouponsByStation.values()) {
+      if (couponStationMatch(item, station)) return item;
+    }
+    return null;
+  }
+
+  function clearLocalCouponClaimForStation(station) {
+    if (!station) return;
+    let changed = false;
+    if (station.id && state.claimedCouponsByStation.delete(String(station.id))) {
+      changed = true;
+    }
+    for (const [key, claim] of Array.from(state.claimedCouponsByStation.entries())) {
+      if (couponStationMatch(claim, station)) {
+        state.claimedCouponsByStation.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) saveSessionCouponMap(CLAIMED_COUPONS_STORAGE_KEY, state.claimedCouponsByStation);
+  }
+
+  function resolveActiveVoucherForStation(station) {
+    const campaign = findActiveCampaignForStation(station);
+    const claimed = getClaimedCouponForStation(station);
+    if (claimed && campaign && String(claimed.couponId) === String(campaign.couponId)) return claimed;
+    const redeemed = getRedeemedCouponForStation(station);
+    if (redeemed && campaign && String(redeemed.couponId) === String(campaign.couponId)) {
+      return Object.assign({ discountAmount: redeemed.discountApplied }, redeemed);
+    }
+    return null;
+  }
+
+  function renderRouteCardCouponBadge(button, record) {
+    if (!button) return;
+    const top = button.querySelector(".option-top");
+    if (!top) return;
+    top.querySelectorAll(".route-coupon-badge").forEach((el) => el.remove());
+    if (!record || record.directTrip || record.serviceOnly || record.planningFailure) return;
+    const stops = record.multiStop && Array.isArray(record.stops)
+      ? record.stops
+      : (record.station ? [record.station] : []);
+    const matchedCampaign = stops.map((s) => findActiveCampaignForStation(s)).find(Boolean);
+    if (!matchedCampaign || Number(matchedCampaign.discountAmount || 0) <= 0) return;
+    const badge = document.createElement("span");
+    badge.className = "route-coupon-badge";
+    badge.textContent = `立减 ¥${Number(matchedCampaign.discountAmount).toFixed(0)} 券`;
+    const tag = top.querySelector(".option-tag");
+    if (tag) top.insertBefore(badge, tag);
+    else top.appendChild(badge);
+  }
+
+  function refreshRouteCardCouponBadges() {
+    $$(".route-option").forEach((button) => {
+      const record = state.routeRecords[button.dataset.route];
+      if (record) renderRouteCardCouponBadge(button, record);
+    });
+  }
+
+  function renderStationCouponBanner(station) {
+    const banner = byId("stationCouponBanner");
+    if (!banner) return;
+    if (!station) {
+      banner.hidden = true;
+      return;
+    }
+    const campaign = findActiveCampaignForStation(station);
+    const campaigns = Array.isArray(state.activeCoupons) ? state.activeCoupons : [];
+    const rawRedeemed = getRedeemedCouponForStation(station);
+    const rawClaimed = getClaimedCouponForStation(station);
+    const claimed = rawClaimed && campaign && String(rawClaimed.couponId) === String(campaign.couponId)
+      ? rawClaimed
+      : null;
+    const redeemed = rawRedeemed
+      ? (campaign
+          ? (String(rawRedeemed.couponId) === String(campaign.couponId) ? rawRedeemed : null)
+          : (campaigns.some((c) => c && String(c.couponId) === String(rawRedeemed.couponId)) ? rawRedeemed : null))
+      : null;
+    if (!campaign && !claimed && !redeemed) {
+      banner.hidden = true;
+      return;
+    }
+    banner.hidden = false;
+    const claimBtn = byId("claimStationCouponButton");
+    const redeemBtn = byId("redeemStationCouponButton");
+    const viewOpBtn = byId("viewOperatorRedemptionButton");
+
+    if (redeemed) {
+      banner.dataset.couponState = "redeemed";
+      setText("stationCouponKicker", "分流券已核销回流");
+      setText("stationCouponTitle", `已核销 ¥${Number(redeemed.discountApplied || 0).toFixed(0)}（码 ${redeemed.voucherCode || ""}）· 已回流运营端`);
+      setText("stationCouponMeta", `实付 ¥${Number(redeemed.netPaid || 0).toFixed(1)} · 账本与运营核销流水已同步`);
+      if (claimBtn) claimBtn.hidden = true;
+      if (redeemBtn) redeemBtn.hidden = true;
+      if (viewOpBtn) viewOpBtn.hidden = isUserDisplayMode();
+      return;
+    }
+    if (claimed) {
+      banner.dataset.couponState = "claimed";
+      setText("stationCouponKicker", "已领取运营分流券");
+      setText("stationCouponTitle", `已领取分流券 ${claimed.voucherCode || ""} · 立减 ¥${Number(claimed.discountAmount || 0).toFixed(0)}`);
+      setText("stationCouponMeta", "到站扣款将自动抵扣，或点击下方立即体验模拟结算核销。");
+      if (claimBtn) claimBtn.hidden = true;
+      if (redeemBtn) { redeemBtn.hidden = false; redeemBtn.disabled = false; }
+      if (viewOpBtn) viewOpBtn.hidden = true;
+      return;
+    }
+    banner.dataset.couponState = "available";
+    setText("stationCouponKicker", "运营分流激励");
+    setText("stationCouponTitle", `运营分流激励 · 本站立减 ¥${Number(campaign.discountAmount || 0).toFixed(0)}（剩 ${Number(campaign.remainingCount ?? 0)} 张）`);
+    setText("stationCouponMeta", `活动码 ${campaign.code || ""} · 领券后本程费用拆解与电子收据自动抵扣`);
+    if (claimBtn) {
+      claimBtn.hidden = false;
+      claimBtn.disabled = Number(campaign.remainingCount ?? 1) <= 0;
+    }
+    if (redeemBtn) redeemBtn.hidden = true;
+    if (viewOpBtn) viewOpBtn.hidden = true;
+  }
+
+  function renderOperatorCouponLoop() {
+    const summary = state.couponSummary || {};
+    const campaigns = Array.isArray(state.activeCoupons) ? state.activeCoupons : [];
+    const activeCampaigns = campaigns.filter((c) => c && c.status === "active");
+    setText("couponKpiActive", String(Number(summary.activeCampaigns ?? activeCampaigns.length)));
+    setText("couponKpiClaimed", String(Number(summary.claimedCount || 0)));
+    setText("couponKpiRedeemed", String(Number(summary.redeemedCount || 0)));
+    const rate = Number(summary.redemptionRate || 0);
+    setText("couponKpiRate", `${(rate <= 1 ? rate * 100 : rate).toFixed(0)}%`);
+    setText("couponKpiDiscount", `¥${Number(summary.totalDiscountRedeemed || 0).toFixed(0)}`);
+
+    const listEl = byId("operatorCouponList");
+    if (listEl) {
+      if (!activeCampaigns.length) {
+        const empty = document.createElement("div");
+        empty.className = "operator-coupon-empty";
+        empty.textContent = "尚未下发分流券；点击上方“下发分流券至车主端”发起首场活动。";
+        listEl.replaceChildren(empty);
+      } else {
+        const nodes = activeCampaigns.slice(0, 8).map((c) => {
+          const row = document.createElement("div");
+          row.className = "operator-coupon-row";
+          const main = document.createElement("div");
+          main.className = "operator-coupon-row-main";
+          const strong = document.createElement("strong");
+          strong.textContent = `${c.stationName || "承接站"} · 码 ${c.code || ""}`;
+          const small = document.createElement("small");
+          small.textContent = `已领 ${Number(c.claimedCount || 0)} · 已核销 ${Number(c.redeemedCount || 0)} · 剩 ${Number(c.remainingCount || 0)}/${Number(c.maxRedemptions || 30)}`;
+          main.append(strong, small);
+          const pill = document.createElement("span");
+          pill.className = "operator-coupon-pill";
+          pill.textContent = `立减 ¥${Number(c.discountAmount || 0).toFixed(0)}`;
+          row.append(main, pill);
+          return row;
+        });
+        listEl.replaceChildren(...nodes);
+      }
+    }
+
+    const logEl = byId("operatorRedemptionLog");
+    if (logEl) {
+      const redemptions = campaigns
+        .flatMap((c) => (Array.isArray(c.recentRedemptions) ? c.recentRedemptions.map((r) => Object.assign({ stationName: c.stationName }, r)) : []))
+        .sort((a, b) => Number(b.redeemedAt || 0) - Number(a.redeemedAt || 0))
+        .slice(0, 10);
+      if (!redemptions.length) {
+        const empty = document.createElement("div");
+        empty.className = "operator-coupon-empty";
+        empty.textContent = "暂无核销记录；车主领券并完成结算后将实时回流至此。";
+        logEl.replaceChildren(empty);
+      } else {
+        const nodes = redemptions.map((r) => {
+          const row = document.createElement("div");
+          row.className = "operator-coupon-row";
+          const main = document.createElement("div");
+          main.className = "operator-coupon-row-main";
+          const strong = document.createElement("strong");
+          strong.textContent = `${r.stationName || "承接站"} · ${r.driverPlate || "车主"}`;
+          const small = document.createElement("small");
+          small.textContent = `码 ${r.voucherCode || ""} · 原价 ¥${Number(r.grossAmount || 0).toFixed(1)} → 实付 ¥${Number(r.netPaid || 0).toFixed(1)}`;
+          main.append(strong, small);
+          const pill = document.createElement("span");
+          pill.className = "operator-coupon-pill redeemed";
+          pill.textContent = `已核 −¥${Number(r.discountApplied || 0).toFixed(0)}`;
+          row.append(main, pill);
+          return row;
+        });
+        logEl.replaceChildren(...nodes);
+      }
+    }
+  }
+
+  async function loadCoupons() {
+    const requestId = ++state.couponRequestVersion;
+    try {
+      const payload = await getJson("/api/coupons", 8000);
+      if (requestId !== state.couponRequestVersion) return;
+      const campaigns = Array.isArray(payload?.campaigns) ? payload.campaigns : [];
+      state.activeCoupons = campaigns;
+      state.couponSummary = payload?.summary || null;
+
+      // Reconcile sessionStorage claim/redemption maps against live server campaigns
+      const campaignById = new Map();
+      const activeByStationId = new Map();
+      const activeList = [];
+      campaigns.forEach((c) => {
+        if (!c || !c.couponId) return;
+        campaignById.set(String(c.couponId), c);
+        if (c.status === "active") {
+          activeList.push(c);
+          if (c.stationId) activeByStationId.set(String(c.stationId), c);
+        }
+      });
+
+      const findActiveForRecord = (stationKey, item) => {
+        if (stationKey && activeByStationId.has(String(stationKey))) {
+          return activeByStationId.get(String(stationKey));
+        }
+        if (item?.stationId && activeByStationId.has(String(item.stationId))) {
+          return activeByStationId.get(String(item.stationId));
+        }
+        return activeList.find((c) => couponStationMatch(c, { id: item?.stationId || stationKey, name: item?.stationName })) || null;
+      };
+
+      let claimsDirty = false;
+      for (const [stationKey, claim] of Array.from(state.claimedCouponsByStation.entries())) {
+        const cid = claim?.couponId ? String(claim.couponId) : "";
+        const serverCampaign = cid ? campaignById.get(cid) : null;
+        if (!serverCampaign || serverCampaign.status !== "active") {
+          state.claimedCouponsByStation.delete(stationKey);
+          claimsDirty = true;
+        }
+      }
+      if (claimsDirty) saveSessionCouponMap(CLAIMED_COUPONS_STORAGE_KEY, state.claimedCouponsByStation);
+
+      let redemptionsDirty = false;
+      for (const [stationKey, redeemed] of Array.from(state.redeemedCouponsByStation.entries())) {
+        const cid = redeemed?.couponId ? String(redeemed.couponId) : "";
+        const serverCampaign = cid ? campaignById.get(cid) : null;
+        const newerActive = findActiveForRecord(stationKey, redeemed);
+        if (!serverCampaign || (newerActive && String(newerActive.couponId) !== cid)) {
+          state.redeemedCouponsByStation.delete(stationKey);
+          redemptionsDirty = true;
+        }
+      }
+      if (redemptionsDirty) saveSessionCouponMap(REDEEMED_COUPONS_STORAGE_KEY, state.redeemedCouponsByStation);
+
+      renderOperatorCouponLoop();
+      refreshRouteCardCouponBadges();
+      if (state.selectedStation) {
+        renderStationCouponBanner(state.selectedStation);
+        renderTripCostBreakdown(state.selectedStation, state.routeRecords[state.selectedRoute]);
+      }
+    } catch {
+      // Offline or unavailable endpoint must degrade silently with zero console crash
+    }
+  }
+
+  async function resetOperatorCoupons() {
+    const button = byId("operatorResetCouponsButton");
+    if (button) button.disabled = true;
+    try {
+      await postJson("/api/coupons/reset", {}, 8000);
+      state.claimedCouponsByStation.clear();
+      state.redeemedCouponsByStation.clear();
+      saveSessionCouponMap(CLAIMED_COUPONS_STORAGE_KEY, state.claimedCouponsByStation);
+      saveSessionCouponMap(REDEEMED_COUPONS_STORAGE_KEY, state.redeemedCouponsByStation);
+      await loadCoupons();
+      renderRouteCards();
+      if (state.selectedStation) {
+        renderStationCouponBanner(state.selectedStation);
+        renderTripCostBreakdown(state.selectedStation, state.routeRecords[state.selectedRoute]);
+      }
+      showToast("已清空本轮分流券演示活动", 2600, "info");
+    } catch (error) {
+      showToast(`清空分流券活动失败：${error?.message || "请稍后重试"}`, 3000, "error");
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  async function issueOperatorCoupon() {
+    if (!state.stations.length) initializeBaselineOfflinePlan();
+    const pool = operatorStations();
+    const executable = operatorExecutableStations(pool);
+    const selectedId = byId("targetStationSelect")?.value;
+    const target = (selectedId ? executable.find((s) => String(s.id) === String(selectedId)) : null)
+      || (state.pendingOperatorPayload?.targetStation?.id
+        ? executable.find((s) => String(s.id) === String(state.pendingOperatorPayload.targetStation.id))
+        : null)
+      || executable[0]
+      || null;
+    if (!target) {
+      showToast("当前沿线没有可承接发券的合作站点，无法下发激励券", 3000, "warning");
+      return;
+    }
+    const rawSlider = Number(byId("discountSlider")?.value);
+    if (!Number.isFinite(rawSlider) || rawSlider < 1) {
+      showToast("平台券金额需至少 ¥1 才可下发", 2800, "warning");
+      return;
+    }
+    const discountAmount = Math.min(100, Math.round(rawSlider));
+    const targetSegment = byId("targetSegment")?.value || "all";
+    const rawRoi = state.pendingOperatorPayload?.scenarioRoi ?? state.pendingOperatorPayload?.impact?.scenarioRoi ?? null;
+    const sourceScenarioRoi = rawRoi !== null && rawRoi !== undefined && Number.isFinite(Number(rawRoi))
+      ? Number(rawRoi)
+      : null;
+    const rawDiverted = state.pendingOperatorPayload?.impact?.divertedVehicles ?? null;
+    const sourceDivertedVehicles = rawDiverted !== null && rawDiverted !== undefined && Number.isFinite(Number(rawDiverted))
+      ? Number(rawDiverted)
+      : null;
+    const button = byId("operatorIssueCouponButton");
+    if (button) button.disabled = true;
+    try {
+      const response = await postJson("/api/coupons/issue", {
+        stationId: String(target.id),
+        stationName: target.name || "沿线承接站",
+        discountAmount,
+        targetSegment,
+        maxRedemptions: 30,
+        sourceScenarioRoi,
+        sourceDivertedVehicles
+      }, 10000);
+      const campaign = response?.campaign;
+      await loadCoupons();
+      showToast(
+        `已向「${campaign?.stationName || target.name}」下发 ¥${Number(campaign?.discountAmount ?? discountAmount)} 分流券（码 ${campaign?.code || "FT-COUPON"}），车主端已同步可见`,
+        4200,
+        "success"
+      );
+    } catch (error) {
+      showToast(`下发分流券失败：${error?.message || "请稍后重试"}`, 3200, "error");
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  async function claimActiveStationCoupon() {
+    const station = state.selectedStation;
+    const campaign = findActiveCampaignForStation(station);
+    if (!station || !campaign) {
+      showToast("当前站点暂无可领取的分流激励券", 2400, "warning");
+      return;
+    }
+    const button = byId("claimStationCouponButton");
+    if (button) button.disabled = true;
+    try {
+      const response = await postJson("/api/coupons/claim", {
+        couponId: campaign.couponId,
+        stationId: String(station.id),
+        driverPlate: state.vehiclePlate || "京A·FT2026"
+      }, 10000);
+      const claim = response?.claim;
+      if (claim) {
+        state.claimedCouponsByStation.set(String(station.id), claim);
+        saveSessionCouponMap(CLAIMED_COUPONS_STORAGE_KEY, state.claimedCouponsByStation);
+        const existingRedeemed = getRedeemedCouponForStation(station);
+        if (existingRedeemed && String(existingRedeemed.couponId) !== String(claim.couponId)) {
+          state.redeemedCouponsByStation.delete(String(station.id));
+          saveSessionCouponMap(REDEEMED_COUPONS_STORAGE_KEY, state.redeemedCouponsByStation);
+        }
+      }
+      await loadCoupons();
+      renderStationCouponBanner(station);
+      renderTripCostBreakdown(station, state.routeRecords[state.selectedRoute]);
+      showToast(`已领取分流券 ${claim?.voucherCode || campaign.code} · 本站立减 ¥${Number(claim?.discountAmount ?? campaign.discountAmount)}`, 3600, "success");
+    } catch (error) {
+      showToast(`领券失败：${error?.message || "请稍后重试"}`, 3200, "error");
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  async function finalizeStationPaymentWithCoupon({ station, record, dedupeKey, openReceipt = true }) {
+    const activeRecord = record || state.routeRecords[state.selectedRoute] || {};
+    const pricing = resolveStationPaymentPricing(station, activeRecord);
+    const grossAmount = pricing.grossAmount;
+    const campaign = findActiveCampaignForStation(station);
+    const rawClaimed = getClaimedCouponForStation(station);
+    const rawRedeemed = getRedeemedCouponForStation(station);
+    const claimed = rawClaimed && (!campaign || String(rawClaimed.couponId) === String(campaign.couponId))
+      ? rawClaimed
+      : null;
+    const alreadyRedeemed = rawRedeemed && campaign && String(rawRedeemed.couponId) === String(campaign.couponId)
+      ? rawRedeemed
+      : null;
+    let couponContext = alreadyRedeemed || null;
+    let redeemFailed = false;
+
+    if (claimed && !alreadyRedeemed) {
+      try {
+        const res = await postJson("/api/coupons/redeem", {
+          couponId: claimed.couponId,
+          claimId: claimed.claimId,
+          stationId: String(station.id),
+          grossAmount,
+          driverPlate: state.vehiclePlate || "京A·FT2026"
+        }, 10000);
+        if (res?.ok && res?.redemption) {
+          couponContext = res.redemption;
+          state.redeemedCouponsByStation.set(String(station.id), res.redemption);
+          saveSessionCouponMap(REDEEMED_COUPONS_STORAGE_KEY, state.redeemedCouponsByStation);
+          void loadCoupons();
+        } else {
+          throw new Error("COUPON_REDEEM_REJECTED");
+        }
+      } catch {
+        redeemFailed = true;
+        couponContext = null;
+        clearLocalCouponClaimForStation(station);
+        void loadCoupons();
+        showToast("分流券已失效或已重置，按原价结算", 3600, "warning");
+      }
+    }
+
+    const discountApplied = redeemFailed
+      ? 0
+      : (couponContext && Number.isFinite(Number(couponContext.discountApplied))
+          ? Number(couponContext.discountApplied)
+          : activeDiversionDiscount(station.id, station.name));
+    const netPaid = Math.max(0, Number((grossAmount - discountApplied).toFixed(1)));
+    const breakdown = openReceipt
+      ? renderPaymentReceipt(
+          { station, record: activeRecord },
+          redeemFailed ? { discountApplied: 0, forceNoDiscount: true } : couponContext
+        )
+      : { energyFee: grossAmount, discount: discountApplied, paid: netPaid, voucherCode: couponContext?.voucherCode || "" };
+
+    recordTripToCostLedger({
+      source: "payment",
+      dedupeKey,
+      station,
+      record: activeRecord,
+      grossAmount: breakdown.energyFee,
+      couponDiscount: breakdown.discount,
+      netPaid: breakdown.paid
+    });
+    renderStationCouponBanner(station);
+    renderTripCostBreakdown(station, activeRecord);
+    return { breakdown, couponContext, redeemFailed };
+  }
+
+  async function redeemActiveStationCoupon() {
+    const station = state.selectedStation;
+    if (!station) return;
+    const button = byId("redeemStationCouponButton");
+    if (button) button.disabled = true;
+    try {
+      const record = state.routeRecords[state.selectedRoute];
+      const { breakdown, redeemFailed } = await finalizeStationPaymentWithCoupon({
+        station,
+        record,
+        dedupeKey: `instant-redeem:${station.id}:${state.departureMinutes}`,
+        openReceipt: true
+      });
+      if (!redeemFailed) {
+        showToast(`已核销分流券 −¥${breakdown.discount.toFixed(1)} · 实付 ¥${breakdown.paid.toFixed(1)}（已回流运营端）`, 4000, "success");
+      }
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  function jumpToDriverCouponStation() {
+    if (!state.hasPlannedRoute) initializeBaselineOfflinePlan();
+    const latest = (state.activeCoupons || []).find((c) => c && c.status === "active") || null;
+    setMode("driver");
+    if (!latest) return;
+    const matchedStation = state.stations.find((s) => couponStationMatch(latest, s)) || null;
+    if (matchedStation) {
+      const routeEntry = Object.entries(state.routeRecords || {}).find(([, r]) => (
+        couponStationMatch(latest, r?.station)
+        || (Array.isArray(r?.stops) && r.stops.some((stop) => couponStationMatch(latest, stop)))
+      ));
+      if (routeEntry) selectRoute(routeEntry[0]);
+      selectStation(matchedStation, true);
+      showToast(`已定位分流激励站「${matchedStation.name}」，可立即领券核销`, 3200, "info");
+    }
+  }
+
+  // ---- F5: Vision Browser Canvas Queue Annotator ----
+  const VISION_BOX_COLORS = Object.freeze({
+    charging: { stroke: "#2563eb", fill: "rgba(37, 99, 235, 0.18)", label: "占桩" },
+    idle: { stroke: "#16a34a", fill: "rgba(22, 163, 74, 0.18)", label: "空闲" },
+    queue: { stroke: "#d97706", fill: "rgba(217, 119, 6, 0.2)", label: "排队" },
+    fault: { stroke: "#dc2626", fill: "rgba(220, 38, 38, 0.2)", label: "故障" }
+  });
+
+  function populateVisionTargetStations(preferredId = null) {
+    const select = byId("visionTargetStationSelect");
+    if (!select) return;
+    const pool = state.stations.length ? state.stations : FALLBACK.stations;
+    const previous = preferredId || select.value || state.selectedStation?.id;
+    const options = pool.map((station) => {
+      const opt = document.createElement("option");
+      opt.value = String(station.id);
+      opt.textContent = `${station.name}（${station.type || "充电站"}）`;
+      return opt;
+    });
+    select.replaceChildren(...options);
+    if (previous && pool.some((s) => String(s.id) === String(previous))) {
+      select.value = String(previous);
+    }
+  }
+
+  function showVisionImageInStage(src, options = {}) {
+    const preview = byId("visionPreviewImage");
+    const previewVideo = byId("visionPreviewVideo");
+    const stageFrame = byId("visionStageFrame");
+    const canvas = byId("visionAnnotatorCanvas");
+    const empty = byId("visionPreviewEmpty");
+    if (!preview || !isSafeImageSrc(src)) return;
+    const prevSrc = preview.getAttribute("src") || "";
+    const nextKind = options.sceneKind
+      || (src.endsWith(DEFAULT_VISION_QUEUE_SAMPLE_URL)
+        ? "queue-overview"
+        : src.endsWith(DEFAULT_VISION_SAMPLE_URL)
+          ? "sample-single"
+          : "upload");
+    const changed = prevSrc !== src || state.visionSceneKind !== nextKind;
+    state.visionSceneKind = nextKind;
+    if (previewVideo) {
+      previewVideo.pause();
+      previewVideo.hidden = true;
+      previewVideo.removeAttribute("src");
+    }
+    if (changed && !options.preserveAnnotations) {
+      state.visionAnnotations = [];
+      state.visionDrawingBox = null;
+      updateVisionAnnotatorStats();
+      const banner = byId("visionFeedbackBanner");
+      if (banner) banner.hidden = true;
+    }
+    preview.src = src;
+    preview.hidden = false;
+    if (stageFrame) stageFrame.hidden = false;
+    if (canvas) canvas.hidden = false;
+    if (empty) empty.hidden = true;
+    window.requestAnimationFrame(syncVisionCanvasSize);
+  }
+
+  function ensureVisionSampleLoadedForAnnotation(force = false) {
+    const preview = byId("visionPreviewImage");
+    const previewVideo = byId("visionPreviewVideo");
+    const hasImage = preview && !preview.hidden && preview.getAttribute("src");
+    const hasVideo = previewVideo && !previewVideo.hidden && previewVideo.getAttribute("src");
+    if (!force && (hasImage || hasVideo)) {
+      window.requestAnimationFrame(syncVisionCanvasSize);
+      return;
+    }
+    showVisionImageInStage(DEFAULT_VISION_QUEUE_SAMPLE_URL);
+  }
+
+  function syncVisionCanvasSize() {
+    const img = byId("visionPreviewImage");
+    const canvas = byId("visionAnnotatorCanvas");
+    if (!img || !canvas || img.hidden) return;
+    const rect = img.getBoundingClientRect();
+    const cssW = Math.max(1, Math.round(rect.width || img.clientWidth || 0));
+    const cssH = Math.max(1, Math.round(rect.height || img.clientHeight || 0));
+    if (cssW <= 1 || cssH <= 1) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const targetW = Math.round(cssW * dpr);
+    const targetH = Math.round(cssH * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+    drawVisionAnnotations();
+  }
+
+  function countVisionAnnotations() {
+    const counts = { charging: 0, idle: 0, queue: 0, fault: 0 };
+    (state.visionAnnotations || []).forEach((box) => {
+      if (Object.prototype.hasOwnProperty.call(counts, box.kind)) counts[box.kind] += 1;
+    });
+    return counts;
+  }
+
+  function updateVisionAnnotatorStats() {
+    const counts = countVisionAnnotations();
+    setText("visionCountCharging", String(counts.charging));
+    setText("visionCountIdle", String(counts.idle));
+    setText("visionCountQueue", String(counts.queue));
+    setText("visionCountFault", String(counts.fault));
+    const totalSlots = counts.charging + counts.idle + counts.fault;
+    const occPct = totalSlots > 0 ? Math.round(((counts.charging + counts.fault) / totalSlots) * 100) : 0;
+    const summary = byId("visionAnnotatorSummary");
+    if (summary) {
+      summary.textContent = (counts.charging + counts.idle + counts.queue + counts.fault) > 0
+        ? `已标：占桩 ${counts.charging} · 空闲 ${counts.idle} · 排队 ${counts.queue} · 故障 ${counts.fault} → 预估占用率 ${occPct}%`
+        : "已标：占桩 0 · 空闲 0 · 排队 0 · 故障 0（在画面上拖拽框选或单击标注）";
+    }
+  }
+
+  function drawVisionAnnotations() {
+    const canvas = byId("visionAnnotatorCanvas");
+    if (!canvas || canvas.hidden) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    ctx.clearRect(0, 0, w, h);
+
+    const drawBox = (box, idxLabel, isDraft = false) => {
+      const style = VISION_BOX_COLORS[box.kind] || VISION_BOX_COLORS.charging;
+      const rx = box.x * w;
+      const ry = box.y * h;
+      const rw = box.w * w;
+      const rh = box.h * h;
+      ctx.save();
+      ctx.fillStyle = style.fill;
+      ctx.strokeStyle = style.stroke;
+      ctx.lineWidth = Math.max(2, 2 * dpr);
+      if (isDraft) ctx.setLineDash([6 * dpr, 4 * dpr]);
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.setLineDash([]);
+
+      const tagText = `${style.label}${idxLabel ? ` #${idxLabel}` : ""}`;
+      ctx.font = `600 ${Math.round(11 * dpr)}px Inter, "Noto Sans SC", sans-serif`;
+      const textW = ctx.measureText(tagText).width;
+      const padX = 5 * dpr;
+      const pillH = 17 * dpr;
+      const pillW = textW + padX * 2;
+      const pillX = Math.min(Math.max(0, rx), Math.max(0, w - pillW));
+      const pillY = box.kind === "queue"
+        ? Math.min(Math.max(0, h - pillH), ry + rh)
+        : Math.max(0, ry - pillH);
+      ctx.fillStyle = style.stroke;
+      ctx.fillRect(pillX, pillY, pillW, pillH);
+      ctx.fillStyle = "#ffffff";
+      ctx.textBaseline = "middle";
+      ctx.fillText(tagText, pillX + padX, pillY + pillH / 2);
+      ctx.restore();
+    };
+
+    const perKindCounter = { charging: 0, idle: 0, queue: 0, fault: 0 };
+    (state.visionAnnotations || []).forEach((box) => {
+      perKindCounter[box.kind] = (perKindCounter[box.kind] || 0) + 1;
+      drawBox(box, perKindCounter[box.kind], false);
+    });
+    if (state.visionDrawingBox) {
+      const d = state.visionDrawingBox;
+      drawBox({
+        kind: d.kind,
+        x: Math.min(d.x1, d.x2),
+        y: Math.min(d.y1, d.y2),
+        w: Math.abs(d.x2 - d.x1),
+        h: Math.abs(d.y2 - d.y1)
+      }, "", true);
+    }
+  }
+
+  function fillVisionDemoBoxes() {
+    const preview = byId("visionPreviewImage");
+    const currentSrc = preview && !preview.hidden ? String(preview.getAttribute("src") || "") : "";
+    const sceneKind = state.visionSceneKind
+      || (currentSrc.endsWith(DEFAULT_VISION_QUEUE_SAMPLE_URL)
+        ? "queue-overview"
+        : currentSrc.endsWith(DEFAULT_VISION_SAMPLE_URL)
+          ? "sample-single"
+          : currentSrc.startsWith("data:image/")
+            ? "upload"
+            : null);
+    if (sceneKind === "upload") {
+      showToast("当前为自定义上传照片，请直接在画面上拖拽或单击标注真实目标", 3200, "info");
+      return;
+    }
+    if (sceneKind === "sample-single") {
+      // Single-bay refueling scene: only box the actual white sedan at the pump.
+      state.visionAnnotations = [
+        { id: "demo-single-c1", kind: "charging", x: 0.29, y: 0.36, w: 0.38, h: 0.32 }
+      ];
+      updateVisionAnnotatorStats();
+      window.requestAnimationFrame(syncVisionCanvasSize);
+      showToast("已按单车车牌样例标注 1 辆在站车辆；如需多车位队列演示请点击「载入多车位样例」", 3400, "info");
+      return;
+    }
+    if (!currentSrc.endsWith(DEFAULT_VISION_QUEUE_SAMPLE_URL)) {
+      showVisionImageInStage(DEFAULT_VISION_QUEUE_SAMPLE_URL, { sceneKind: "queue-overview" });
+    }
+    // Calibrated pixel-accurate boxes matching assets/vision/station-queue-overview.jpg:
+    // 4 occupied EV charging bays (stalls 1-4), 2 empty blue stalls (5-6), 2 waiting EVs in lane.
+    state.visionAnnotations = [
+      { id: "demo-c1", kind: "charging", x: 0.122, y: 0.352, w: 0.134, h: 0.208 },
+      { id: "demo-c2", kind: "charging", x: 0.258, y: 0.340, w: 0.118, h: 0.220 },
+      { id: "demo-c3", kind: "charging", x: 0.402, y: 0.356, w: 0.096, h: 0.204 },
+      { id: "demo-c4", kind: "charging", x: 0.538, y: 0.330, w: 0.104, h: 0.230 },
+      { id: "demo-i1", kind: "idle", x: 0.648, y: 0.405, w: 0.128, h: 0.148 },
+      { id: "demo-i2", kind: "idle", x: 0.788, y: 0.405, w: 0.132, h: 0.148 },
+      { id: "demo-q1", kind: "queue", x: 0.342, y: 0.558, w: 0.220, h: 0.168 },
+      { id: "demo-q2", kind: "queue", x: 0.600, y: 0.558, w: 0.234, h: 0.168 }
+    ];
+    updateVisionAnnotatorStats();
+    window.requestAnimationFrame(syncVisionCanvasSize);
+    showToast("已按多车位全景样例精准填入 8 处标注（4占桩 · 2空闲 · 2排队）", 2800, "info");
+  }
+
+  async function applyVisionQueueFeedback() {
+    if (state.visionFeedbackBusy) return;
+    if (!state.visionAnnotations.length) {
+      showToast("请先在画面上标注车位或点击“填入示例标注”", 2600, "warning");
+      return;
+    }
+    if (!state.hasPlannedRoute || !state.stations.length) {
+      initializeBaselineOfflinePlan();
+    }
+    populateVisionTargetStations();
+    const selectedId = byId("visionTargetStationSelect")?.value;
+    const targetStation = state.stations.find((s) => String(s.id) === String(selectedId))
+      || state.selectedStation
+      || state.stations[0];
+    if (!targetStation) {
+      showToast("未找到可回流的目标站点", 2600, "warning");
+      return;
+    }
+    const button = byId("visionApplyFeedbackButton");
+    state.visionFeedbackBusy = true;
+    if (button) button.disabled = true;
+    // Invalidate any background ensureStationForecasts launched by baseline boot
+    ++state.stationForecastRequestVersion;
+    try {
+      const result = await postJson("/api/vision/queue-feedback", {
+        station: buildStationForecastInput(targetStation),
+        annotations: state.visionAnnotations.map((box) => ({
+          id: box.id,
+          kind: box.kind,
+          x: Number(box.x.toFixed(4)),
+          y: Number(box.y.toFixed(4)),
+          w: Number(box.w.toFixed(4)),
+          h: Number(box.h.toFixed(4))
+        })),
+        scenario: {
+          departureMinutes: state.departureMinutes,
+          arrivalOffsetMinutes: Math.max(0, Number(targetStation.arrivalOffsetMinutes) || 15),
+          demandFactor: 1,
+          trafficFactor: 1,
+          weatherFactor: Number(state.weather?.weatherFactor) || 1
+        }
+      }, 15000);
+
+      const counts = result?.counts || countVisionAnnotations();
+      const sf = result?.stationForecast || {};
+      const after = result?.after || {};
+      const before = result?.before || { wait: targetStation.wait, p90: targetStation.p90, occupancy: targetStation.occupancy };
+      const afterP90 = Number(after.p90 ?? targetStation.p90 ?? 0);
+      const afterP50 = Number(after.p50 ?? after.wait ?? targetStation.p50 ?? 0);
+      const afterWait = Number(after.wait ?? afterP50);
+      const afterOccupancy = Number(after.occupancy ?? targetStation.occupancy ?? 0.6);
+      const nextRisk = afterP90 >= 20 ? "forecast-risk" : "forecast-ready";
+      const rawSnap = Object.assign({}, result?.snapshot || {}, sf.inputSnapshot || {});
+      const totalPorts = counts.totalPorts ?? rawSnap.totalPorts ?? targetStation.totalPorts;
+      const idlePorts = counts.idle ?? rawSnap.idlePorts ?? 0;
+      const availablePorts = rawSnap.availablePorts ?? idlePorts;
+      const chargingPorts = counts.charging ?? rawSnap.chargingPorts ?? 0;
+      const faultPorts = counts.fault ?? rawSnap.faultPorts ?? 0;
+      const waitingVehicles = counts.queue ?? rawSnap.waitingVehicles ?? rawSnap.queueVehicles ?? 0;
+      const queueVehicles = counts.queue ?? rawSnap.queueVehicles ?? waitingVehicles;
+      const dataSource = result?.sourceLabel || "视觉页人工标注回流（演示）";
+      const method = sf.method || "port-discrete-event";
+      const asOf = sf.asOf || rawSnap.asOf || "vision-annotation";
+      const dataAsOf = sf.dataAsOf || "视觉标注实时输入";
+      const explanation = sf.explanation || result?.summary || "";
+      const inputSnapshot = Object.assign({}, rawSnap, {
+        totalPorts,
+        idlePorts,
+        availablePorts,
+        chargingPorts,
+        faultPorts,
+        reservedPorts: rawSnap.reservedPorts ?? 0,
+        reservationQueueAhead: rawSnap.reservationQueueAhead ?? 0,
+        waitingVehicles,
+        queueVehicles,
+        freshnessSeconds: 0,
+        dataSource,
+        queueSource: rawSnap.queueSource || dataSource
+      });
+      const patch = {
+        totalPorts,
+        capacity: totalPorts ?? targetStation.capacity,
+        idlePorts,
+        availablePorts,
+        chargingPorts,
+        faultPorts,
+        waitingVehicles,
+        queueVehicles,
+        freshnessSeconds: 0,
+        occupancy: afterOccupancy,
+        wait: afterWait,
+        p50: afterP50,
+        p90: afterP90,
+        forecast: sf.forecast || targetStation.forecast,
+        prediction: sf.prediction || sf.arrivalForecast || targetStation.prediction,
+        arrivalForecast: sf.arrivalForecast || sf.prediction || targetStation.arrivalForecast,
+        method,
+        forecastMethod: method,
+        inputSnapshot,
+        forecastInputSnapshot: inputSnapshot,
+        explanation,
+        asOf,
+        forecastAsOf: asOf,
+        dataAsOf,
+        forecastDataAsOf: dataAsOf,
+        dataSource,
+        forecastSource: result?.source || "vision-queue-annotation",
+        confidence: sf.confidence ?? targetStation.confidence,
+        confidenceScore: sf.confidenceScore ?? targetStation.confidenceScore,
+        confidenceLevel: sf.confidenceLevel ?? targetStation.confidenceLevel,
+        confidenceLabel: sf.confidenceLabel ?? targetStation.confidenceLabel,
+        confidenceReasons: Array.isArray(sf.confidenceReasons) ? sf.confidenceReasons.slice(0, 8) : (targetStation.confidenceReasons || []),
+        horizonMinutes: sf.horizonMinutes ?? targetStation.horizonMinutes ?? 60,
+        simulation: true,
+        forecastSimulation: true,
+        status: nextRisk,
+        riskLabel: nextRisk === "forecast-risk" ? "预测风险" : "预测可用",
+        visionAnnotated: true,
+        visionAnnotationSummary: result?.summary || ""
+      };
+
+      const mergeStation = (s) => (s && String(s.id) === String(targetStation.id) ? Object.assign({}, s, patch) : s);
+      state.stations = state.stations.map(mergeStation);
+      if (state.operatorOriginalStations.length) {
+        state.operatorOriginalStations = state.operatorOriginalStations.map(mergeStation);
+      }
+      // Bump again after patching state.stations so any in-flight forecast cannot overwrite
+      ++state.stationForecastRequestVersion;
+      [state.routeCandidates, state.routeRecords].forEach((collection) => {
+        if (!collection || typeof collection !== "object") return;
+        Object.values(collection).forEach((rec) => {
+          if (!rec) return;
+          if (rec.station && String(rec.station.id) === String(targetStation.id)) {
+            rec.station = Object.assign({}, rec.station, patch, { detour: rec.station.detour });
+          }
+          if (Array.isArray(rec.stops)) {
+            rec.stops = rec.stops.map((stop) => (
+              String(stop.id) === String(targetStation.id)
+                ? Object.assign({}, stop, patch, { plannedP50: afterP50, plannedP90: afterP90 })
+                : stop
+            ));
+          }
+        });
+      });
+      if (state.multiStopRouteRecords) {
+        recomputeMultiStopRecordsFromStations();
+      }
+
+      const updatedStation = state.stations.find((s) => String(s.id) === String(targetStation.id)) || Object.assign({}, targetStation, patch);
+      state.visionLastFeedbackStationId = String(updatedStation.id);
+      state.departureWindowKey = null;
+      state.departureWindowPendingKey = null;
+      if (state.selectedStation && String(state.selectedStation.id) === String(updatedStation.id)) {
+        state.selectedStation = updatedStation;
+      }
+      calculateRouteRecords();
+      renderRouteCards();
+      state.operatorBefore = computeOperatorSnapshot(state.stations);
+      renderOperatorMetrics(state.operatorBefore, false);
+      populateOperatorTargetSelect();
+      if (state.live) renderLiveStationMarkers();
+
+      // Reflect manual annotation telemetry on the Vision detail panel truthfully
+      setText("visionVehicleCount", `${Number(counts.charging || 0) + Number(counts.queue || 0)} 辆（人工标注）`);
+      setText("visionIdleSlots", `${Number(counts.idle || 0)} 个（人工标注）`);
+      setText("visionQueueCount", `${Number(counts.queue || 0)} 辆（人工标注）`);
+      if (result?.dataBoundary) setText("visionBoundary", result.dataBoundary);
+
+      const banner = byId("visionFeedbackBanner");
+      const bannerText = byId("visionFeedbackText");
+      if (banner && bannerText) {
+        bannerText.textContent = `已回流至「${updatedStation.name}」：排队 ${Math.round(Number(before.wait ?? before.p50 ?? 0))} 分 → ${Math.round(afterWait)} 分（P90 ${Math.round(afterP90)} 分），已同步更新车主端预测与运营端供需池`;
+        banner.hidden = false;
+      }
+      showToast(`视觉标注已回流至「${updatedStation.name}」，排队预测与运营看板已更新`, 3800, "success");
+    } catch (error) {
+      showToast(`视觉标注回流失败：${error?.message || "请稍后重试"}`, 3400, "error");
+    } finally {
+      state.visionFeedbackBusy = false;
+      if (button) button.disabled = false;
+    }
+  }
+
+  function bindVisionAnnotatorCanvasEvents() {
+    const canvas = byId("visionAnnotatorCanvas");
+    const img = byId("visionPreviewImage");
+    if (!canvas || canvas.dataset.annotatorBound === "true") return;
+    canvas.dataset.annotatorBound = "true";
+
+    const toNorm = (event) => {
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.max(1, rect.width);
+      const h = Math.max(1, rect.height);
+      return {
+        x: Math.max(0, Math.min(1, (event.clientX - rect.left) / w)),
+        y: Math.max(0, Math.min(1, (event.clientY - rect.top) / h))
+      };
+    };
+
+    canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== undefined && event.button !== 0 && event.pointerType === "mouse") return;
+      event.preventDefault();
+      if (canvas.setPointerCapture) {
+        try { canvas.setPointerCapture(event.pointerId); } catch { /* ignore */ }
+      }
+      const pt = toNorm(event);
+      state.visionDrawingBox = {
+        kind: state.visionActiveBoxKind || "charging",
+        x1: pt.x,
+        y1: pt.y,
+        x2: pt.x,
+        y2: pt.y,
+        startClientX: event.clientX,
+        startClientY: event.clientY
+      };
+      drawVisionAnnotations();
+    });
+
+    canvas.addEventListener("pointermove", (event) => {
+      if (!state.visionDrawingBox) return;
+      event.preventDefault();
+      const pt = toNorm(event);
+      state.visionDrawingBox.x2 = pt.x;
+      state.visionDrawingBox.y2 = pt.y;
+      drawVisionAnnotations();
+    });
+
+    const finishDraw = (event) => {
+      const draft = state.visionDrawingBox;
+      if (!draft) return;
+      state.visionDrawingBox = null;
+      if (state.visionAnnotations.length >= 100) {
+        showToast("最多支持标注 100 个目标框", 2600, "warning");
+        drawVisionAnnotations();
+        return;
+      }
+      const dist = Math.hypot(event.clientX - draft.startClientX, event.clientY - draft.startClientY);
+      let box;
+      if (dist < 8) {
+        const w = 0.12;
+        const h = 0.14;
+        box = {
+          id: `box-${Date.now()}-${++state.visionBoxSeq}`,
+          kind: draft.kind,
+          x: Math.max(0, Math.min(1 - w, draft.x1 - w / 2)),
+          y: Math.max(0, Math.min(1 - h, draft.y1 - h / 2)),
+          w,
+          h
+        };
+      } else {
+        const x = Math.min(draft.x1, draft.x2);
+        const y = Math.min(draft.y1, draft.y2);
+        const w = Math.max(0.03, Math.abs(draft.x2 - draft.x1));
+        const h = Math.max(0.03, Math.abs(draft.y2 - draft.y1));
+        box = {
+          id: `box-${Date.now()}-${++state.visionBoxSeq}`,
+          kind: draft.kind,
+          x: Math.min(1 - w, x),
+          y: Math.min(1 - h, y),
+          w,
+          h
+        };
+      }
+      state.visionAnnotations.push(box);
+      updateVisionAnnotatorStats();
+      drawVisionAnnotations();
+    };
+
+    canvas.addEventListener("pointerup", finishDraw);
+    canvas.addEventListener("pointercancel", () => {
+      state.visionDrawingBox = null;
+      drawVisionAnnotations();
+    });
+
+    if (img) {
+      img.addEventListener("load", syncVisionCanvasSize);
+      if (typeof window.ResizeObserver === "function" && !state.visionResizeObserver) {
+        state.visionResizeObserver = new window.ResizeObserver(() => syncVisionCanvasSize());
+        state.visionResizeObserver.observe(img);
+      }
+    }
+    window.addEventListener("resize", syncVisionCanvasSize);
+  }
+
+  function initWave3Features() {
+    // 1. Load persisted vehicle presets & cost ledger
+    state.customVehiclePresets = loadCustomVehiclePresetsFromStorage();
+    state.costLedger = loadCostLedgerFromStorage();
+    state.claimedCouponsByStation = loadSessionCouponMap(CLAIMED_COUPONS_STORAGE_KEY);
+    state.redeemedCouponsByStation = loadSessionCouponMap(REDEEMED_COUPONS_STORAGE_KEY);
+    state.activeVehiclePresetByEnergy = loadActiveVehiclePresetMap();
+    state.activeVehiclePresetId = state.activeVehiclePresetByEnergy[state.energyType] || getDefaultPresetIdForEnergy(state.energyType);
+    syncVehiclePresetForEnergyType(state.energyType);
+    renderCostLedger();
+
+    // 2. Bind Vehicle Preset & Cost Ledger controls
+    byId("vehiclePresetSelect")?.addEventListener("change", (event) => {
+      applyVehiclePresetById(event.target.value, { announce: true });
+    });
+    byId("saveCustomVehicleButton")?.addEventListener("click", handleSaveCustomVehicle);
+    byId("deleteCustomVehicleButton")?.addEventListener("click", handleDeleteCustomVehicle);
+    byId("openVehiclePresetButton")?.addEventListener("click", () => openSettings("settingsVehicleTitle"));
+    byId("saveCostLedgerButton")?.addEventListener("click", () => {
+      const entry = recordTripToCostLedger({ source: "manual" });
+      if (entry) showToast(`已记入费用账本（实付 ¥${entry.totalPaid.toFixed(1)}）`, 2600, "success");
+    });
+    byId("openCostLedgerButton")?.addEventListener("click", () => openSettings("costLedgerSection"));
+    byId("exportLedgerCsvButton")?.addEventListener("click", exportCostLedgerCsv);
+    byId("clearLedgerButton")?.addEventListener("click", () => {
+      state.costLedger = [];
+      state.recordedPaymentLedgerKeys.clear();
+      saveCostLedgerToStorage();
+      renderCostLedger();
+      showToast("行程费用账本已清空", 2200, "info");
+    });
+
+    // 3. Bind Operator & Driver Coupon Loop controls
+    byId("operatorIssueCouponButton")?.addEventListener("click", () => { void issueOperatorCoupon(); });
+    byId("operatorRefreshCouponsButton")?.addEventListener("click", () => {
+      void loadCoupons().then(() => showToast("已刷新分流券核销回流数据", 2000, "info"));
+    });
+    byId("operatorResetCouponsButton")?.addEventListener("click", () => { void resetOperatorCoupons(); });
+    byId("goDriverCouponButton")?.addEventListener("click", jumpToDriverCouponStation);
+    byId("claimStationCouponButton")?.addEventListener("click", () => { void claimActiveStationCoupon(); });
+    byId("redeemStationCouponButton")?.addEventListener("click", () => { void redeemActiveStationCoupon(); });
+    byId("viewOperatorRedemptionButton")?.addEventListener("click", () => {
+      setMode("operator");
+      byId("operatorCouponLoopCard")?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+    });
+
+    // 4. Bind Vision Canvas Queue Annotator controls
+    bindVisionAnnotatorCanvasEvents();
+    byId("visionLoadSampleAnnotateButton")?.addEventListener("click", () => {
+      ensureVisionSampleLoadedForAnnotation(true);
+      populateVisionTargetStations();
+      showToast("已载入多车位超充站样例图，可拖拽标注或点击「填入示例标注」", 2800, "info");
+    });
+    $$("[data-box-kind]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        state.visionActiveBoxKind = chip.dataset.boxKind || "charging";
+        $$("[data-box-kind]").forEach((btn) => btn.classList.toggle("active", btn === chip));
+      });
+    });
+    byId("visionDemoBoxesButton")?.addEventListener("click", fillVisionDemoBoxes);
+    byId("visionUndoBoxButton")?.addEventListener("click", () => {
+      if (!state.visionAnnotations.length) return;
+      state.visionAnnotations.pop();
+      updateVisionAnnotatorStats();
+      drawVisionAnnotations();
+    });
+    byId("visionClearBoxesButton")?.addEventListener("click", () => {
+      state.visionAnnotations = [];
+      updateVisionAnnotatorStats();
+      drawVisionAnnotations();
+      const banner = byId("visionFeedbackBanner");
+      if (banner) banner.hidden = true;
+    });
+    byId("visionApplyFeedbackButton")?.addEventListener("click", () => { void applyVisionQueueFeedback(); });
+    byId("visionJumpDriverButton")?.addEventListener("click", () => {
+      setMode("driver");
+      const target = state.stations.find((s) => String(s.id) === String(state.visionLastFeedbackStationId)) || state.selectedStation || state.stations[0];
+      if (target) selectStation(target, true);
+    });
+    byId("visionJumpOperatorButton")?.addEventListener("click", () => {
+      setMode("operator");
+      void simulateOperatorStrategy();
+    });
+    populateVisionTargetStations();
+    updateVisionAnnotatorStats();
+
+    // 5. Initial background coupon sync
+    void loadCoupons();
+  }
+
   function begin() {
     syncDefaultOriginFromConfig();
     refreshIcons();
     initDemoNotice();
     initSettings();
+    initWave3Features();
     setDisplayMode(readDisplayMode(), { persist: false });
     initFallback();
     renderParseAnalysis(null);
@@ -12058,6 +14749,13 @@
           pill.textContent = state.visionFile.name;
           pill.title = state.visionFile.name;
           pill.hidden = false;
+        }
+        if (/^image\/(png|jpeg|webp)$/i.test(state.visionFile.type)) {
+          void readVisionBlob(state.visionFile, state.visionFile.name)
+            .then((dataUrl) => {
+              if (dataUrl && isSafeImageSrc(dataUrl)) showVisionImageInStage(dataUrl);
+            })
+            .catch(() => {});
         }
       } else {
         if (label) label.textContent = "选择照片或短视频";
@@ -12303,6 +15001,11 @@
     energyType: state.energyType,
     energyPercent: state.energyPercent,
     energyProfile: getEnergyProfile(isFuelActive()),
+    activeVehiclePresetId: state.activeVehiclePresetId,
+    costLedgerCount: state.costLedger.length,
+    activeCouponCount: state.activeCoupons.length,
+    visionAnnotationCount: state.visionAnnotations.length,
+    departureWindowCount: state.departureWindowPayload?.windows?.length || 0,
     executionState: state.executionState,
       routeErrors: state.routeErrors,
       lastPlanTimings: state.lastPlanTimings,
