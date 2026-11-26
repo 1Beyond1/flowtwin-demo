@@ -39,7 +39,7 @@ test("rate-limit defaults and environment overrides stay bounded", () => {
     stt: 10,
     map: 180,
     cv: 6,
-    operator: 12,
+    operator: 60,
     validate: 4,
     "feishu-sync": 10,
     "feishu-status": 60,

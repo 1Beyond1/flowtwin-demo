@@ -24,7 +24,7 @@ test("static serving keeps internal code, runtime data, and configuration privat
     "../config.local.js"
   ]) assert.equal(isBlockedStaticRequest(path), true, path);
 
-  for (const path of ["index.html", "app.js", "service-intent.js", "assets/vision/default-camera-scene.jpg", "assets/simulation/ev-front-day.jpg"]) {
+  for (const path of ["index.html", "app.js", "service-intent.js", "vehicle-presets.js", "assets/vision/default-camera-scene.jpg", "assets/simulation/ev-front-day.jpg"]) {
     assert.equal(isBlockedStaticRequest(path), false, path);
   }
 });

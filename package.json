@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --input-type=module -e \"import { readdirSync } from 'node:fs'; import { execFileSync } from 'node:child_process'; const files = ['app.js', 'service-intent.js', 'server.mjs', ...readdirSync('lib').filter((f) => f.endsWith('.mjs')).map((f) => 'lib/' + f), ...readdirSync('test').filter((f) => f.endsWith('.test.mjs')).map((f) => 'test/' + f)]; for (const file of files) execFileSync(process.execPath, ['--check', file], { stdio: 'inherit' });\"",
+    "check": "node --input-type=module -e \"import { readdirSync } from 'node:fs'; import { execFileSync } from 'node:child_process'; const files = ['app.js', 'service-intent.js', 'vehicle-presets.js', 'server.mjs', ...readdirSync('lib').filter((f) => f.endsWith('.mjs')).map((f) => 'lib/' + f), ...readdirSync('test').filter((f) => f.endsWith('.test.mjs')).map((f) => 'test/' + f)]; for (const file of files) execFileSync(process.execPath, ['--check', file], { stdio: 'inherit' });\"",
     "test": "node --test"
   },
   "engines": {

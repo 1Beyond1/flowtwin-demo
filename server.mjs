@@ -25,6 +25,9 @@ import { createRateLimiter, readRateLimitConfig } from "./lib/rate-limit.mjs";
 import { localVisionFallback, validateVisionResult, visionHealthSummary } from "./lib/cv.mjs";
 import { enterprisePriorHealth, enrichStationsWithEnterprisePrior, loadEnterpriseDemandPrior } from "./lib/enterprise-prior.mjs";
 import { parseOptionalNumber } from "./lib/number.mjs";
+import { optimizeDepartureWindows } from "./lib/departure-optimizer.mjs";
+import { createCouponStore } from "./lib/coupons.mjs";
+import { evaluateVisionQueueFeedback } from "./lib/vision-queue.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 let config = null;
@@ -38,6 +41,7 @@ const EXECUTION_CACHE_MAX = 1_000;
 let cvInFlight = 0;
 const MAX_CV_IN_FLIGHT = 1;
 const longTripPlanCache = createLongTripPlanCache();
+const defaultCouponStore = createCouponStore();
 let rateLimiter = createRateLimiter({
   ...readRateLimitConfig(),
   trustProxy: process.env.FLOWTWIN_TRUST_PROXY
@@ -73,7 +77,17 @@ const SAFE_BAD_REQUEST_CODES = new Set([
   "INVALID_JSON",
   "INVALID_REQUEST_URL",
   "INVALID_URI_ENCODING",
-  "BAD_REQUEST"
+  "BAD_REQUEST",
+  "STATIONS_REQUIRED",
+  "INVALID_COUPON_INPUT",
+  "INVALID_REDEEM_INPUT",
+  "INVALID_VISION_ANNOTATIONS"
+]);
+const SAFE_CLIENT_ERROR_CODES = new Set([
+  ...SAFE_BAD_REQUEST_CODES,
+  "COUPON_NOT_FOUND",
+  "COUPON_EXHAUSTED",
+  "CLAIM_NOT_FOUND"
 ]);
 
 export function parseRequestUrl(request) {
@@ -173,7 +187,16 @@ export function rateLimitScopeForRequest(method, pathname) {
   if (normalizedMethod === "POST") {
     if (normalizedPath === "/api/plan") return "plan";
     if (normalizedPath === "/api/stt") return "stt";
-    if (normalizedPath === "/api/forecast" || normalizedPath === "/api/longtrip") return "map";
+    if (
+      normalizedPath === "/api/forecast"
+      || normalizedPath === "/api/longtrip"
+      || normalizedPath === "/api/departure-windows"
+      || normalizedPath === "/api/coupons/issue"
+      || normalizedPath === "/api/coupons/claim"
+      || normalizedPath === "/api/coupons/redeem"
+      || normalizedPath === "/api/coupons/reset"
+      || normalizedPath === "/api/vision/queue-feedback"
+    ) return "map";
     if (normalizedPath === "/api/cv/analyze") return "cv";
     if (normalizedPath === "/api/operator/simulate") return "operator";
     if (normalizedPath === "/api/validate") return "validate";
@@ -182,7 +205,7 @@ export function rateLimitScopeForRequest(method, pathname) {
     if (normalizedPath === "/api/execution") return "execution";
     return null;
   }
-  if (normalizedMethod === "GET" && ["/api/route", "/api/poi", "/api/weather"].includes(normalizedPath)) return "map";
+  if (normalizedMethod === "GET" && ["/api/route", "/api/poi", "/api/weather", "/api/coupons"].includes(normalizedPath)) return "map";
   if (normalizedMethod === "GET" && normalizedPath === "/api/version/check") return "version-check";
   if (normalizedMethod === "GET" && normalizedPath.startsWith("/api/feishu/sync/")) return "feishu-status";
   return null;
@@ -985,6 +1008,90 @@ async function operatorApi(request, response) {
   }
 }
 
+async function departureWindowsApi(request, response) {
+  const body = await readJsonBody(request, 128000);
+  if (!Array.isArray(body.stations) || !body.stations.length) return json(response, 400, { error: "STATIONS_REQUIRED" });
+  const scenario = buildForecastApiScenario(body.scenario);
+  try {
+    return json(response, 200, optimizeDepartureWindows({
+      stations: body.stations.slice(0, MAX_FORECAST_STATIONS),
+      stationId: body.stationId,
+      baseDepartureMinutes: body.baseDepartureMinutes ?? body.departureMinutes,
+      arrivalOffsetMinutes: body.arrivalOffsetMinutes,
+      energyType: body.energyType,
+      energyUnits: body.energyUnits,
+      offsets: body.offsets,
+      scenario
+    }));
+  } catch (error) {
+    return json(response, 400, { error: error.message === "STATIONS_REQUIRED" ? error.message : "BAD_REQUEST" });
+  }
+}
+
+function couponDomainErrorResponse(error, response, fallbackCode = "INVALID_COUPON_INPUT") {
+  const status = Number(error?.statusCode);
+  if ([400, 404, 409].includes(status) && SAFE_CLIENT_ERROR_CODES.has(error?.message)) {
+    return json(response, status, { error: error.message });
+  }
+  return json(response, 400, { error: fallbackCode });
+}
+
+function couponsListApi(requestUrl, response, runtime) {
+  const stationId = requestUrl.searchParams.get("stationId") || undefined;
+  const status = requestUrl.searchParams.get("status") || undefined;
+  return json(response, 200, runtime.couponStore.list({ stationId, status }));
+}
+
+async function couponsIssueApi(request, response, runtime) {
+  const body = await readJsonBody(request, 16384);
+  try {
+    return json(response, 200, runtime.couponStore.issue(body));
+  } catch (error) {
+    return couponDomainErrorResponse(error, response, "INVALID_COUPON_INPUT");
+  }
+}
+
+async function couponsClaimApi(request, response, runtime) {
+  const body = await readJsonBody(request, 16384);
+  try {
+    return json(response, 200, runtime.couponStore.claim(body));
+  } catch (error) {
+    return couponDomainErrorResponse(error, response, "COUPON_NOT_FOUND");
+  }
+}
+
+async function couponsRedeemApi(request, response, runtime) {
+  const body = await readJsonBody(request, 16384);
+  try {
+    return json(response, 200, runtime.couponStore.redeem(body));
+  } catch (error) {
+    return couponDomainErrorResponse(error, response, "INVALID_REDEEM_INPUT");
+  }
+}
+
+async function couponsResetApi(request, response, runtime) {
+  await readJsonBody(request, 8192);
+  return json(response, 200, runtime.couponStore.reset());
+}
+
+async function visionQueueFeedbackApi(request, response) {
+  const body = await readJsonBody(request, 65536);
+  const scenario = buildForecastApiScenario(body.scenario);
+  try {
+    return json(response, 200, evaluateVisionQueueFeedback({
+      station: body.station,
+      annotations: body.annotations,
+      arrivalOffsetMinutes: body.arrivalOffsetMinutes,
+      scenario
+    }));
+  } catch (error) {
+    if (error?.message === "INVALID_VISION_ANNOTATIONS") {
+      return json(response, 400, { error: "INVALID_VISION_ANNOTATIONS" });
+    }
+    throw error;
+  }
+}
+
 async function validateApi(request, response) {
   // Current-route samples can contain dozens of stations. Keep this comfortably
   // above the compact front-end validation input while retaining a finite cap.
@@ -1246,7 +1353,7 @@ export function isBlockedStaticRequest(requestedPath) {
   const basename = requested.split("/").at(-1) || "";
   const protectedNames = new Set(["server.mjs", "package.json", "package-lock.json"]);
   const protectedDirectories = [".git", "runtime", "data", "cv-service", "lib", "test", "docs", "node_modules"];
-  const publicRootFiles = new Set(["index.html", "app.js", "service-intent.js", "favicon.ico", "manifest.webmanifest"]);
+  const publicRootFiles = new Set(["index.html", "app.js", "service-intent.js", "vehicle-presets.js", "favicon.ico", "manifest.webmanifest"]);
   return !requested
     || requested.includes("..")
     || protectedNames.has(requested)
@@ -1311,6 +1418,7 @@ export function createRequestHandler(overrides = {}) {
       versionChecker: overrides.versionChecker ?? versionChecker,
       rateLimiter: overrides.rateLimiter ?? rateLimiter,
       longTripPlanCache: overrides.longTripPlanCache ?? longTripPlanCache,
+      couponStore: overrides.couponStore ?? defaultCouponStore,
       fetchImpl: overrides.fetchImpl ?? fetch
     };
     try {
@@ -1357,11 +1465,21 @@ export function createRequestHandler(overrides = {}) {
         if (requestUrl.pathname === "/api/poi") return await poiApi(requestUrl, response, runtime);
         return await weatherApi(requestUrl, response, runtime);
       }
+      if (requestUrl.pathname === "/api/coupons") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        return couponsListApi(requestUrl, response, runtime);
+      }
       const postOnlyPaths = new Set([
         "/api/plan",
         "/api/forecast",
         "/api/longtrip",
+        "/api/departure-windows",
         "/api/operator/simulate",
+        "/api/coupons/issue",
+        "/api/coupons/claim",
+        "/api/coupons/redeem",
+        "/api/coupons/reset",
+        "/api/vision/queue-feedback",
         "/api/validate",
         "/api/cv/analyze",
         "/api/execution",
@@ -1387,7 +1505,13 @@ export function createRequestHandler(overrides = {}) {
       if (request.method === "POST" && requestUrl.pathname === "/api/plan") return await planApi(request, response, runtime);
       if (request.method === "POST" && requestUrl.pathname === "/api/forecast") return await forecastApi(request, response, runtime);
       if (request.method === "POST" && requestUrl.pathname === "/api/longtrip") return await longTripApi(request, response, runtime);
+      if (request.method === "POST" && requestUrl.pathname === "/api/departure-windows") return await departureWindowsApi(request, response);
       if (request.method === "POST" && requestUrl.pathname === "/api/operator/simulate") return await operatorApi(request, response);
+      if (request.method === "POST" && requestUrl.pathname === "/api/coupons/issue") return await couponsIssueApi(request, response, runtime);
+      if (request.method === "POST" && requestUrl.pathname === "/api/coupons/claim") return await couponsClaimApi(request, response, runtime);
+      if (request.method === "POST" && requestUrl.pathname === "/api/coupons/redeem") return await couponsRedeemApi(request, response, runtime);
+      if (request.method === "POST" && requestUrl.pathname === "/api/coupons/reset") return await couponsResetApi(request, response, runtime);
+      if (request.method === "POST" && requestUrl.pathname === "/api/vision/queue-feedback") return await visionQueueFeedbackApi(request, response);
       if (request.method === "POST" && requestUrl.pathname === "/api/validate") return await validateApi(request, response);
       if (requestUrl.pathname === "/api/cv/health") {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
@@ -1424,7 +1548,9 @@ export function createRequestHandler(overrides = {}) {
         ? "REQUEST_TOO_LARGE"
         : status === 400
           ? (SAFE_BAD_REQUEST_CODES.has(error?.message) ? error.message : "INVALID_JSON")
-          : "INTERNAL_SERVER_ERROR";
+          : (status === 404 || status === 409) && SAFE_CLIENT_ERROR_CODES.has(error?.message)
+            ? error.message
+            : "INTERNAL_SERVER_ERROR";
       return json(response, status, { error: code });
     }
   };
